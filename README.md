@@ -1,4 +1,5 @@
 # zack.projects
+
 ## Digikala MCP
 
 `.mcp.json` wires Claude Code to the hosted, read-only [mmdju/digikala-mcp](https://github.com/mmdju/digikala-mcp) server
