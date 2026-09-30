@@ -1,0 +1,236 @@
+:root {
+  --bg: #faf9f5;
+  --card: #ffffff;
+  --bg2: #f3f1ec;
+  --fg: #1f2328;
+  --muted: #6b6f76;
+  --line: rgba(0, 0, 0, 0.1);
+  --hover: rgba(0, 0, 0, 0.04);
+  --accent: #d97757;
+  --accent-soft: rgba(217, 119, 87, 0.14);
+  --danger: #e03131;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f21;
+    --card: #2a2a2d;
+    --bg2: #323236;
+    --fg: #ececec;
+    --muted: #a1a1aa;
+    --line: rgba(255, 255, 255, 0.12);
+    --hover: rgba(255, 255, 255, 0.05);
+    --accent-soft: rgba(217, 119, 87, 0.22);
+  }
+}
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.8 "CSR Fa vazirmatn", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+}
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+a {
+  color: var(--accent);
+}
+
+.top {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 28px 20px 8px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.actions {
+  margin-inline-start: auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 7px 14px;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+.btn.ghost {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+}
+.btn.small {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.btn.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.toolbar {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 10px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 2;
+}
+input[type="search"] {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  outline: none;
+}
+input[type="search"]:focus {
+  border-color: var(--accent);
+}
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c);
+}
+
+main {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 6px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.conv {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+.conv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.conv-title {
+  font-weight: 800;
+  font-size: 16px;
+  text-decoration: none;
+  color: var(--fg);
+}
+.conv-title:hover {
+  color: var(--accent);
+}
+.conv-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+.conv-actions {
+  margin-inline-start: auto;
+  display: flex;
+  gap: 6px;
+}
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.item {
+  border-inline-start: 4px solid var(--c, var(--line));
+  background: var(--bg2);
+  border-radius: 10px;
+  padding: 7px 12px;
+}
+.item-text {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+.item-tags {
+  color: var(--muted);
+  font-size: 12px;
+}
+.item-note {
+  margin-top: 4px;
+  background: rgba(245, 159, 0, 0.14);
+  border-radius: 8px;
+  padding: 4px 10px;
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+.notebook {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+.notebook b {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+mark {
+  background: #ffe066;
+  color: #1a1a1a;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 60px 20px;
+}

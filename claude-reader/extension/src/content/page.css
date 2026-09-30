@@ -1,0 +1,282 @@
+/* Page-level styles injected into claude.ai. Everything is scoped by
+ * attributes the extension sets, so nothing changes until a feature is on. */
+
+/* ---------- typography ---------- */
+
+html[data-csr-font] :is(.font-claude-response, .font-claude-message) {
+  font-family: var(--csr-font-assistant) !important;
+}
+html[data-csr-font][data-csr-user] [data-testid="user-message"] {
+  font-family: var(--csr-font-user) !important;
+}
+html[data-csr-font] :is(.font-claude-response, .font-claude-message) :not(pre, code, kbd, samp, pre *, code *, .katex, .katex *, svg, svg *, [data-csr-ui], [data-csr-ui] *),
+html[data-csr-font][data-csr-user] [data-testid="user-message"] :not(pre, code, kbd, samp, pre *, code *, svg, svg *) {
+  font-family: inherit !important;
+}
+
+html[data-csr-size] :is(.font-claude-response, .font-claude-message),
+html[data-csr-size][data-csr-user] [data-testid="user-message"] {
+  font-size: var(--csr-size) !important;
+}
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(p, li, span, a, strong, b, em, i, u, s, del, blockquote, td, th, dd, dt, div):not(pre *, code *, .katex *, [data-csr-ui] *) {
+  font-size: inherit !important;
+}
+html[data-csr-size] :is(.font-claude-response, .font-claude-message) h1 { font-size: 1.55em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message) h2 { font-size: 1.35em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message) h3 { font-size: 1.18em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message) h4 { font-size: 1.08em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message) :is(h5, h6) { font-size: 1em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(code:not(pre code), pre) { font-size: 0.86em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) pre code { font-size: inherit !important; }
+
+html[data-csr-lh] :is(.font-claude-response, .font-claude-message),
+html[data-csr-lh] :is(.font-claude-response, .font-claude-message) :is(p, li, blockquote, td, th, dd, dt),
+html[data-csr-lh][data-csr-user] [data-testid="user-message"],
+html[data-csr-lh][data-csr-user] [data-testid="user-message"] :is(p, li, div) {
+  line-height: var(--csr-lh) !important;
+}
+html[data-csr-lh] :is(.font-claude-response, .font-claude-message) :is(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.4 !important;
+}
+
+html[data-csr-weight] :is(.font-claude-response, .font-claude-message),
+html[data-csr-weight][data-csr-user] [data-testid="user-message"] {
+  font-weight: var(--csr-weight) !important;
+}
+html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(p, li, span, td, blockquote, div, a, em, i, dd, dt) {
+  font-weight: inherit !important;
+}
+
+html[data-csr-wspace] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+  word-spacing: var(--csr-wspace) !important;
+}
+html[data-csr-wspace] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(pre, code) {
+  word-spacing: normal !important;
+}
+
+html[data-csr-pspace] :is(.standard-markdown, .progressive-markdown) {
+  row-gap: var(--csr-pspace) !important;
+}
+html[data-csr-pspace] :is(.font-claude-response, .font-claude-message) li + li {
+  margin-top: calc(var(--csr-pspace) / 2.5) !important;
+}
+
+html[data-csr-width] [data-csr-column] {
+  max-width: var(--csr-width) !important;
+}
+
+/* ---------- RTL ---------- */
+
+html[data-csr-rtl] [data-csr-dir] {
+  text-align: start !important;
+}
+html[data-csr-rtl] [data-csr-dir="rtl"] :is(td, th) {
+  text-align: right;
+}
+html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(code, kbd, samp, .katex) {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) pre {
+  direction: ltr;
+  text-align: left !important;
+  unicode-bidi: isolate;
+}
+html[data-csr-rtl] .katex-display {
+  direction: ltr;
+}
+html[data-csr-fa-num] ol[data-csr-dir="rtl"] {
+  list-style-type: persian !important;
+}
+html[data-csr-rtl-input] div.ProseMirror :is(p, li, h1, h2, h3, blockquote),
+html[data-csr-rtl-input] form textarea {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+/* ---------- marks: highlights and inline formats ---------- */
+
+.csr-m {
+  border-radius: 0.2em;
+  transition: background-color 0.15s, box-shadow 0.15s;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.csr-m[class*="csr-hl-"] {
+  padding: 0.05em 0.1em;
+  margin: 0 -0.1em;
+  color: inherit;
+}
+.csr-hl-yellow { background-color: var(--csr-hl-yellow, #fff176) !important; }
+.csr-hl-green { background-color: var(--csr-hl-green, #b9f6b0) !important; }
+.csr-hl-blue { background-color: var(--csr-hl-blue, #b3e0ff) !important; }
+.csr-hl-pink { background-color: var(--csr-hl-pink, #ffc4d8) !important; }
+.csr-hl-orange { background-color: var(--csr-hl-orange, #ffd6a5) !important; }
+.csr-hl-purple { background-color: var(--csr-hl-purple, #dcd0ff) !important; }
+
+.csr-m.csr-b { font-weight: 700 !important; }
+.csr-m.csr-i { font-style: italic !important; }
+.csr-m.csr-u { text-decoration-line: underline; text-decoration-thickness: 2px; text-underline-offset: 0.22em; }
+.csr-m.csr-s { text-decoration-line: line-through; text-decoration-thickness: 1.5px; }
+.csr-m.csr-u.csr-s { text-decoration-line: underline line-through; }
+.csr-m.csr-code {
+  font-family: var(--font-mono, ui-monospace, monospace) !important;
+  font-size: 0.9em;
+  background: rgba(127, 127, 127, 0.16);
+  padding: 0.05em 0.25em;
+  border-radius: 0.25em;
+}
+.csr-m.csr-box {
+  outline: 1.5px solid currentColor;
+  outline-offset: 1px;
+  border-radius: 0.2em;
+}
+.csr-tc-red { color: var(--csr-tc-red, #d6336c) !important; }
+.csr-tc-blue { color: var(--csr-tc-blue, #1c7ed6) !important; }
+.csr-tc-green { color: var(--csr-tc-green, #2b8a3e) !important; }
+.csr-tc-purple { color: var(--csr-tc-purple, #7048e8) !important; }
+
+.csr-m.csr-note {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #f59f00;
+  text-underline-offset: 0.25em;
+  cursor: pointer;
+}
+.csr-m.csr-note-end::after {
+  content: "✎";
+  display: inline-block;
+  font-size: 0.72em;
+  line-height: 1;
+  vertical-align: super;
+  margin-inline-start: 0.15em;
+  padding: 0.12em 0.25em;
+  border-radius: 0.6em;
+  background: #f59f00;
+  color: #fff;
+  font-style: normal;
+  font-weight: 700;
+  text-decoration: none;
+}
+.csr-m { cursor: pointer; }
+.csr-m.csr-flash {
+  box-shadow: 0 0 0 3px rgba(245, 159, 0, 0.75);
+}
+
+/* ---------- block formats ---------- */
+
+html:not([data-csr-hide-ann]) [data-csr-block="quote"] {
+  border-inline-start: 4px solid var(--csr-t-accent, #d97757) !important;
+  background: rgba(217, 119, 87, 0.08) !important;
+  padding-inline-start: 1em !important;
+  padding-block: 0.35em !important;
+  border-radius: 0.35em;
+  font-style: italic;
+}
+html:not([data-csr-hide-ann]) [data-csr-block="important"] {
+  border: 1.5px solid #f59f00 !important;
+  background: rgba(245, 159, 0, 0.1) !important;
+  padding: 0.5em 0.8em !important;
+  border-radius: 0.5em;
+}
+html:not([data-csr-hide-ann]) [data-csr-block="important"]::before {
+  content: "★ مهم";
+  display: block;
+  font-size: 0.78em;
+  font-weight: 700;
+  color: #e67700;
+  margin-bottom: 0.2em;
+  font-style: normal;
+}
+
+/* ---------- dividers ---------- */
+
+.csr-divider {
+  --csr-dv-color: var(--csr-t-accent, #d97757);
+  display: flex !important;
+  align-items: center;
+  gap: 0.75em;
+  margin: 1.1em 0 !important;
+  padding: 0 !important;
+  list-style: none !important;
+  min-height: 0.8em;
+  cursor: pointer;
+  user-select: none;
+}
+.csr-divider::marker { content: none; }
+.csr-divider::before,
+.csr-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 2px var(--csr-dv-style, solid) var(--csr-dv-color);
+}
+.csr-divider[data-style="dashed"] { --csr-dv-style: dashed; }
+.csr-divider[data-style="dotted"] { --csr-dv-style: dotted; }
+.csr-divider[data-style="double"]::before,
+.csr-divider[data-style="double"]::after {
+  border-top: 5px double var(--csr-dv-color);
+}
+.csr-divider[data-style="fade"]::before,
+.csr-divider[data-style="fade"]::after {
+  border: 0;
+  height: 2px;
+  background: linear-gradient(to var(--csr-dv-fade-dir, right), transparent, var(--csr-dv-color));
+}
+.csr-divider[data-style="fade"]::after { --csr-dv-fade-dir: left; }
+.csr-divider:not(:has(.csr-divider-label))::after { display: none; }
+.csr-divider-label {
+  font-size: 0.85em;
+  font-weight: 700;
+  color: var(--csr-dv-color);
+  white-space: nowrap;
+}
+.csr-divider:hover { opacity: 0.8; }
+
+/* guide shown in divider mode */
+html[data-csr-mode="divider"] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+  cursor: row-resize;
+}
+
+/* ---------- drawing layer ---------- */
+
+[data-csr-has-drawing] {
+  position: relative !important;
+}
+.csr-draw-layer {
+  position: absolute !important;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* ---------- highlighter mode cursor ---------- */
+
+html[data-csr-mode="highlighter"] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+  cursor: text;
+}
+
+/* ---------- "hide my annotations" toggle ---------- */
+
+html[data-csr-hide-ann] .csr-m {
+  background: none !important;
+  font-weight: inherit !important;
+  font-style: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  text-decoration: none !important;
+  color: inherit !important;
+  outline: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  cursor: inherit !important;
+}
+html[data-csr-hide-ann] .csr-m.csr-note-end::after,
+html[data-csr-hide-ann] .csr-draw-layer,
+html[data-csr-hide-ann] .csr-divider {
+  display: none !important;
+}

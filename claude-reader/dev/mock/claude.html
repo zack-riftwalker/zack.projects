@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en" data-theme="claude" data-mode="light" data-color-version="v2">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock chat - Claude</title>
+    <!-- A small stand-in for claude.ai: same class names / data attributes the
+         extension relies on, rendered with React so re-renders are realistic. -->
+    <style>
+      :root, [data-theme=claude][data-mode=light] {
+        --bg-000: 0 0% 100%; --bg-100: 48 33.3% 97.1%; --bg-200: 53 28.6% 94.5%; --bg-300: 48 25% 92.2%;
+        --text-000: 60 2.6% 7.6%; --text-100: 60 2.6% 7.6%; --text-300: 60 2.5% 23.3%; --text-500: 51 3.1% 43.7%;
+        --border-300: 51 16.5% 84.5%;
+        --font-claude-response: Georgia, "Times New Roman", serif;
+        --font-user-message: system-ui, sans-serif;
+      }
+      [data-theme=claude][data-mode=dark] {
+        --bg-000: 60 2.1% 18.4%; --bg-100: 60 2.7% 14.5%; --bg-200: 30 3.3% 11.8%; --bg-300: 60 2.6% 7.6%;
+        --text-000: 48 33.3% 97.1%; --text-100: 48 33.3% 97.1%; --text-300: 50 9% 73.7%; --text-500: 48 4.8% 59.2%;
+        --border-300: 30 3.3% 11.8%;
+      }
+      body { margin: 0; background: hsl(var(--bg-100)); color: hsl(var(--text-100)); font-family: system-ui, sans-serif; }
+      .app { display: flex; height: 100vh; }
+      nav { width: 230px; background: hsl(var(--bg-200)); padding: 16px; border-right: 1px solid hsl(var(--border-300)); }
+      nav a { display: block; color: hsl(var(--text-300)); padding: 6px 0; }
+      .scroller { flex: 1; overflow-y: auto; }
+      .column { max-width: 768px; margin: 0 auto; padding: 24px 16px 160px; display: flex; flex-direction: column; gap: 22px; }
+      [data-testid=user-message] { background: hsl(var(--bg-300)); border-radius: 12px; padding: 10px 14px; align-self: flex-end; max-width: 80%; font-family: var(--font-user-message); }
+      .font-claude-response { font-family: var(--font-claude-response); font-weight: 360; line-height: 1.65; }
+      .standard-markdown { display: grid; gap: .625rem; }
+      .standard-markdown :is(p, blockquote, h1, h2, h3) { padding-left: .5rem; }
+      .standard-markdown :is(p, blockquote, ul, ol, h1, h2, h3) { padding-right: 2rem; margin: 0; }
+      .standard-markdown ul { list-style: disc; padding-left: 1.75rem; }
+      .standard-markdown ol { list-style: decimal; padding-left: 1.75rem; }
+      .standard-markdown blockquote { border-left: 4px solid hsl(var(--border-300)); padding-left: 1rem; }
+      pre { background: hsl(var(--bg-300)); padding: 12px; border-radius: 8px; overflow-x: auto; }
+      code { font-family: ui-monospace, monospace; font-size: .9em; }
+      table { border-collapse: collapse; } td, th { border: 1px solid hsl(var(--border-300)); padding: 4px 8px; }
+      .actions button { font-size: 12px; }
+      .composer { position: sticky; bottom: 0; max-width: 768px; margin: 0 auto; padding: 12px 16px; }
+      .ProseMirror { background: hsl(var(--bg-000)); border: 1px solid hsl(var(--border-300)); border-radius: 14px; padding: 12px; min-height: 40px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/__mock/react.js"></script>
+    <script src="/__mock/react-dom.js"></script>
+    <script>
+      const e = React.createElement;
+      const CONVS = {
+        '11111111-2222-3333-4444-555555555555': {
+          title: 'آموزش React Hooks',
+          messages: [
+            { role: 'user', text: 'useEffect در React دقیقاً چه کاری انجام می‌دهد؟ لطفاً ساده توضیح بده.' },
+            {
+              role: 'assistant',
+              blocks: [
+                ['h2', 'useEffect چیست؟'],
+                ['p', 'هوک useEffect به شما اجازه می‌دهد بعد از رندر شدن کامپوننت، کارهای جانبی (side effects) انجام دهید؛ مثلاً گرفتن داده از API یا تنظیم یک تایمر.'],
+                ['p', 'این هوک دو ورودی می‌گیرد: یک تابع و یک آرایه‌ی وابستگی (dependency array). React هر بار که یکی از وابستگی‌ها تغییر کند، تابع را دوباره اجرا می‌کند.'],
+                ['ul', ['اگر آرایه خالی باشد، فقط یک بار بعد از mount اجرا می‌شود.', 'اگر آرایه را ندهید، بعد از هر render اجرا می‌شود.', 'تابع برگشتی (cleanup) قبل از اجرای بعدی صدا زده می‌شود.']],
+                ['pre', "useEffect(() => {\n  const id = setInterval(tick, 1000);\n  return () => clearInterval(id);\n}, []);"],
+                ['blockquote', 'نکته: هیچ‌وقت state را بدون شرط داخل useEffect تغییر ندهید، وگرنه حلقه‌ی بی‌نهایت می‌سازید.'],
+                ['p', 'In English: useEffect lets you synchronize a component with an external system, such as a network request or a browser API.'],
+                ['table', [['حالت', 'زمان اجرا'], ['[]', 'فقط یک بار'], ['[a, b]', 'وقتی a یا b عوض شود']]],
+                ['ol', ['کامپوننت رندر می‌شود.', 'DOM به‌روزرسانی می‌شود.', 'useEffect اجرا می‌شود.']],
+              ],
+            },
+            { role: 'user', text: 'مرسی! یک مثال واقعی هم بزن.' },
+            {
+              role: 'assistant',
+              blocks: [
+                ['p', 'حتماً. فرض کنید می‌خواهیم لیست کاربران را از سرور بگیریم و نمایش دهیم. ابتدا یک state به نام users می‌سازیم.'],
+                ['p', 'سپس در useEffect با fetch درخواست می‌فرستیم و نتیجه را با setUsers ذخیره می‌کنیم. این الگو در بیشتر پروژه‌های واقعی دیده می‌شود.'],
+              ],
+            },
+          ],
+        },
+        '99999999-8888-7777-6666-555555555555': {
+          title: 'Other chat',
+          messages: [
+            { role: 'user', text: 'What is photosynthesis?' },
+            { role: 'assistant', blocks: [['p', 'Photosynthesis is the process plants use to turn light into chemical energy.']] },
+          ],
+        },
+      };
+
+      function Inline({ text }) {
+        // `code` spans like markdown inline code
+        const parts = text.split(/(\b(?:useEffect|useState|setUsers|users|fetch|React|API|side effects|dependency array|cleanup|mount|render)\b)/g);
+        return parts.map((p, i) => (i % 2 ? (/^(useEffect|useState|setUsers|users|fetch)$/.test(p) ? e('code', { key: i }, p) : p) : p));
+      }
+
+      function Block({ b }) {
+        const [tag, content] = b;
+        if (tag === 'ul' || tag === 'ol') return e(tag, null, content.map((t, i) => e('li', { key: i }, e(Inline, { text: t }))));
+        if (tag === 'pre') return e('div', null, e('div', { className: 'code-head' }, e('span', null, 'javascript'), e('button', null, 'Copy')), e('pre', null, e('code', null, content)));
+        if (tag === 'table') return e('div', null, e('table', null, e('tbody', null, content.map((r, i) => e('tr', { key: i }, r.map((c, j) => e(i ? 'td' : 'th', { key: j }, c)))))));
+        if (tag === 'blockquote') return e('blockquote', null, e('p', null, content));
+        return e(tag, null, e(Inline, { text: content }));
+      }
+
+      function Message({ m, streaming }) {
+        if (m.role === 'user')
+          return e('div', { 'data-testid': 'user-message', className: 'font-user-message' }, e('p', { className: 'whitespace-pre-wrap' }, m.text));
+        return e(
+          'div',
+          { 'data-is-streaming': String(!!streaming), className: 'group relative' },
+          e('div', { className: 'font-claude-response' }, e('div', { className: 'standard-markdown grid-cols-1 grid gap-2.5' }, m.blocks.map((b, i) => e(Block, { key: i, b })))),
+          e('div', { className: 'actions' }, e('button', null, 'Copy'), e('button', null, 'Retry'))
+        );
+      }
+
+      function App() {
+        const [path, setPath] = React.useState(location.pathname);
+        const [tick, setTick] = React.useState(0);
+        const [gen, setGen] = React.useState(0);
+        const [stream, setStream] = React.useState(null);
+        React.useEffect(() => {
+          window.__nav = (p) => { history.pushState({}, '', p); setPath(p); };
+          window.__rerender = () => setTick((t) => t + 1);
+          window.__remount = () => setGen((g) => g + 1);
+          window.__stream = (words, done) => setStream(words == null ? null : { words, done });
+          const onPop = () => setPath(location.pathname);
+          addEventListener('popstate', onPop);
+          return () => removeEventListener('popstate', onPop);
+        }, []);
+        const id = (path.match(/\/chat\/([\w-]+)/) || [])[1];
+        const conv = CONVS[id];
+        React.useEffect(() => { document.title = (conv ? conv.title : 'New chat') + ' - Claude'; }, [conv]);
+        const messages = conv ? conv.messages : [];
+        return e(
+          'div',
+          { className: 'app' },
+          e('nav', null, e('b', null, 'Claude'), Object.entries(CONVS).map(([k, c]) =>
+            e('a', { key: k, href: '/chat/' + k, onClick: (ev) => { ev.preventDefault(); window.__nav('/chat/' + k); } }, c.title))),
+          e(
+            'main',
+            { className: 'scroller' },
+            e(
+              'div',
+              { className: 'column', key: gen, 'data-tick': tick },
+              messages.map((m, i) => e(Message, { key: id + i, m })),
+              stream && e(Message, { key: 'stream', m: { role: 'assistant', blocks: [['p', stream.words]] }, streaming: !stream.done })
+            ),
+            e('div', { className: 'composer' }, e('div', { className: 'ProseMirror', contentEditable: true, suppressContentEditableWarning: true }, e('p', null)))
+          )
+        );
+      }
+      ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+    </script>
+  </body>
+</html>

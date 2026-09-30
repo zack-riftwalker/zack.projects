@@ -1,0 +1,15 @@
+{
+  "name": "khana-claude-reader-dev",
+  "private": true,
+  "type": "module",
+  "description": "Dev tools for the Khana Claude Reader extension (icons + end-to-end test).",
+  "scripts": {
+    "icons": "node make-icons.mjs",
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

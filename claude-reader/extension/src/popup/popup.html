@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>خوانا</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <img src="../../icons/icon48.png" alt="" width="30" height="30" />
+      <div class="brand">
+        <strong>خوانا</strong>
+        <span>دستیار مطالعه برای Claude</span>
+      </div>
+      <label class="switch" title="روشن / خاموش">
+        <input type="checkbox" id="enabled" />
+        <span></span>
+      </label>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab on" data-tab="type">فونت</button>
+      <button class="tab" data-tab="theme">تم</button>
+      <button class="tab" data-tab="dir">راست‌چین</button>
+      <button class="tab" data-tab="tools">ابزارها</button>
+    </nav>
+
+    <main id="main">
+      <!-- typography -->
+      <section data-panel="type">
+        <div class="preview" id="preview">
+          <p dir="rtl">یادگیری با Claude لذت‌بخش‌تر است وقتی متن خوانا باشد. مثلاً <code>useState</code> در React برای نگه‌داشتن state است.</p>
+          <p dir="ltr">Reading should feel calm — 1234567890.</p>
+        </div>
+
+        <div class="field">
+          <label for="persianFont">فونت فارسی</label>
+          <select id="persianFont"></select>
+        </div>
+        <input class="text" id="customPersianFont" placeholder="نام فونت نصب‌شده، مثلاً: B Nazanin" hidden />
+
+        <div class="field">
+          <label for="latinFont">فونت انگلیسی</label>
+          <select id="latinFont"></select>
+        </div>
+        <input class="text" id="customLatinFont" placeholder="نام فونت نصب‌شده، مثلاً: Roboto" hidden />
+
+        <div id="ranges"></div>
+
+        <label class="check"><input type="checkbox" id="applyToUser" /> روی پیام‌های خودم هم اعمال شود</label>
+      </section>
+
+      <!-- theme -->
+      <section data-panel="theme" hidden>
+        <div class="themes" id="themes"></div>
+        <div class="custom" id="custom" hidden>
+          <div class="colors">
+            <label>پس‌زمینه <input type="color" data-c="bg" /></label>
+            <label>متن <input type="color" data-c="text" /></label>
+            <label>تیترها <input type="color" data-c="heading" /></label>
+            <label>لینک <input type="color" data-c="link" /></label>
+            <label>رنگ تأکید <input type="color" data-c="accent" /></label>
+          </div>
+          <p class="note">حالت روشن/تیره‌ی Claude خودکار از روی رنگ پس‌زمینه انتخاب می‌شود.</p>
+        </div>
+      </section>
+
+      <!-- direction -->
+      <section data-panel="dir" hidden>
+        <div class="segmented" id="rtlMode">
+          <button data-v="off">خاموش</button>
+          <button data-v="auto">خودکار</button>
+          <button data-v="force">همیشه راست‌چین</button>
+        </div>
+        <p class="note" id="rtlNote"></p>
+        <label class="check"><input type="checkbox" id="rtlInput" /> جعبه‌ی تایپ پیام هم خودش راست‌چین شود</label>
+        <label class="check"><input type="checkbox" id="persianListNumbers" /> شماره‌ی لیست‌های فارسی با اعداد فارسی (۱، ۲، ۳)</label>
+      </section>
+
+      <!-- tools -->
+      <section data-panel="tools" hidden>
+        <label class="check"><input type="checkbox" id="showDock" /> نوار ابزار کناری نمایش داده شود</label>
+        <div class="field">
+          <label>جای نوار ابزار</label>
+          <div class="segmented small" id="dockSide">
+            <button data-v="right">راست</button>
+            <button data-v="left">چپ</button>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="selectionToolbar" /> با انتخاب متن، نوار قالب‌بندی باز شود</label>
+        <label class="check"><input type="checkbox" id="highlighterMode" /> حالت ماژیک: انتخاب متن = هایلایت فوری</label>
+        <div class="field">
+          <label>رنگ ماژیک</label>
+          <div class="swatches" id="activeHighlight"></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn" id="openPanel">پنل یادداشت‌های این گفتگو</button>
+          <button class="btn ghost" id="openLibrary">کتابخانه‌ی همه‌ی یادداشت‌ها</button>
+        </div>
+
+        <details class="keys">
+          <summary>میان‌برهای صفحه‌کلید</summary>
+          <table>
+            <tr><td><kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>6</kbd></td><td>هایلایت با رنگ‌ها</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> / <kbd>S</kbd></td><td>بولد، ایتالیک، زیرخط، خط‌خورده</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>Q</kbd></td><td>نقل‌قول (کوت)</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>N</kbd></td><td>یادداشت روی متن انتخاب‌شده</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>0</kbd></td><td>حذف قالب‌ها از متن انتخاب‌شده</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>P</kbd></td><td>مداد</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>L</kbd></td><td>خط جداکننده</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>H</kbd></td><td>حالت ماژیک</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>M</kbd></td><td>پنل یادداشت‌ها</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>R</kbd></td><td>تغییر حالت راست‌چین</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>خروج از ابزار</td></tr>
+          </table>
+        </details>
+      </section>
+    </main>
+
+    <script src="../shared/defaults.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="../shared/fonts-page.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

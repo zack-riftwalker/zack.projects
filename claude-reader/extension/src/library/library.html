@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>کتابخانه‌ی یادداشت‌ها — خوانا</title>
+    <link rel="icon" href="../../icons/icon32.png" />
+    <link rel="stylesheet" href="library.css" />
+  </head>
+  <body>
+    <header class="top">
+      <img src="../../icons/icon48.png" alt="" width="36" height="36" />
+      <div>
+        <h1>کتابخانه‌ی یادداشت‌ها</h1>
+        <p class="sub" id="stats"></p>
+      </div>
+      <div class="actions">
+        <button class="btn" id="exportMd">دانلود همه (Markdown)</button>
+        <button class="btn ghost" id="exportJson">پشتیبان‌گیری (JSON)</button>
+        <label class="btn ghost">
+          بازگردانی پشتیبان
+          <input type="file" id="importJson" accept="application/json,.json" hidden />
+        </label>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="جستجو در هایلایت‌ها، یادداشت‌ها و دفترچه‌ها…" dir="auto" />
+      <div class="chips" id="filters"></div>
+    </div>
+
+    <main id="list"></main>
+
+    <template id="empty">
+      <div class="empty">
+        <p>هنوز یادداشتی ذخیره نشده.</p>
+        <p>یک گفتگو در <a href="https://claude.ai" target="_blank" rel="noopener">claude.ai</a> باز کن، متنی را انتخاب کن و هایلایت یا یادداشت بزن.</p>
+      </div>
+    </template>
+
+    <script src="../shared/defaults.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="../shared/export.js"></script>
+    <script src="../shared/fonts-page.js"></script>
+    <script src="library.js"></script>
+  </body>
+</html>

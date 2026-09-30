@@ -1,0 +1,70 @@
+{
+  "manifest_version": 3,
+  "name": "خوانا — Claude Reader",
+  "short_name": "خوانا",
+  "version": "0.1.0",
+  "description": "خواندن و مطالعه‌ی پاسخ‌های Claude را راحت‌تر کن: فونت فارسی، تم، راست‌چین اصولی، هایلایت، یادداشت، مداد و خط جداکننده.",
+  "minimum_chrome_version": "111",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "خوانا",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "options_page": "src/library/library.html",
+  "permissions": [
+    "storage",
+    "unlimitedStorage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "src/content/main-world-guard.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "css": [
+        "src/content/page.css"
+      ],
+      "js": [
+        "src/shared/defaults.js",
+        "src/shared/storage.js",
+        "src/shared/export.js",
+        "src/content/dom.js",
+        "src/content/appearance.js",
+        "src/content/annotations.js",
+        "src/content/drawing.js",
+        "src/content/ui.js",
+        "src/content/main.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "fonts/*",
+        "src/content/ui.css"
+      ],
+      "matches": [
+        "https://claude.ai/*"
+      ]
+    }
+  ]
+}
