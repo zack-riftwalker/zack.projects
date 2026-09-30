@@ -154,6 +154,35 @@
     }
   }
 
+  function makeBookmark(a, asListItem, anchorEl) {
+    const el = document.createElement(asListItem ? 'li' : 'div');
+    el.className = 'csr-bookmark';
+    el.setAttribute('data-csr-ui', '');
+    el.setAttribute('data-csr-bookmark-id', a.id);
+    el.setAttribute('contenteditable', 'false');
+    el.setAttribute('role', 'note');
+    const rtl = anchorEl && getComputedStyle(anchorEl).direction === 'rtl';
+    el.setAttribute('data-side', rtl ? 'right' : 'left');
+    decorateBookmark(a, el);
+    return el;
+  }
+
+  function decorateBookmark(a, el) {
+    const p = CSR.patternById(a.pattern);
+    el.setAttribute('data-pattern', a.pattern || 'termeh');
+    el.style.setProperty('--csr-bm-fg', p.colors.fg);
+    el.style.setProperty('--csr-bm-bg', p.colors.bg);
+    el.style.setProperty('--csr-bm-soft', p.colors.soft);
+    el.textContent = '';
+    const ribbon = document.createElement('div');
+    ribbon.className = 'csr-bm-ribbon';
+    ribbon.innerHTML = CSR.patternFill(a.pattern, 26); // generated SVG, no user text
+    const label = document.createElement('span');
+    label.className = 'csr-bm-label';
+    label.textContent = a.label && a.label.trim() ? a.label.trim() : 'نشانک';
+    el.append(ribbon, label);
+  }
+
   // ---------------------------------------------------------------------------
   // Placement
 
@@ -163,7 +192,7 @@
     if (p.els) return p.els.length > 0 && p.els.every((el) => el.isConnected);
     if (!p.el || !p.el.isConnected) return false;
     if (a.kind === 'block') return p.el.getAttribute('data-csr-block-id') === a.id;
-    if (a.kind === 'divider') return !!p.anchor && p.anchor.isConnected && p.anchor.contains(p.el) === false;
+    if (a.kind === 'divider' || a.kind === 'bookmark') return !!p.anchor && p.anchor.isConnected && p.anchor.contains(p.el) === false;
     return true;
   }
 
@@ -218,7 +247,7 @@
       return 'missing';
     }
 
-    if (a.kind === 'block' || a.kind === 'divider') {
+    if (a.kind === 'block' || a.kind === 'divider' || a.kind === 'bookmark') {
       for (const msg of list) {
         if (!isStable(msg)) continue;
         const el = dom.locateBlock(msg, a.anchor);
@@ -228,7 +257,7 @@
           el.setAttribute('data-csr-block-id', a.id);
           placed.set(a.id, { el });
         } else {
-          const d = makeDivider(a, el.tagName === 'LI');
+          const d = a.kind === 'bookmark' ? makeBookmark(a, el.tagName === 'LI', el) : makeDivider(a, el.tagName === 'LI');
           if (a.anchor.pos === 'before') el.before(d);
           else el.after(d);
           placed.set(a.id, { el: d, anchor: el });
@@ -270,7 +299,7 @@
     let anyOrphan = false;
     // blocks before dividers so that divider insertion doesn't shift nothing important;
     // marks last since wrapping changes text nodes.
-    const order = { block: 0, divider: 1, drawing: 2, mark: 3 };
+    const order = { block: 0, divider: 1, bookmark: 1, drawing: 2, mark: 3 };
     const list = AN.all().slice().sort((x, y) => order[x.kind] - order[y.kind]);
     for (const a of list) {
       if (isPlacedOk(a)) continue;
@@ -384,8 +413,9 @@
 
   function isEmptyMark(a) {
     const st = a.style || {};
-    return !Object.values(st).some(Boolean) && !(a.note && a.note.trim());
+    return !Object.values(st).some(Boolean) && !(a.note && a.note.trim()) && !(a.tags && a.tags.length);
   }
+  AN.isEmptyMark = isEmptyMark;
 
   AN.updateStyle = function (id, patch) {
     const a = AN.get(id);
@@ -415,6 +445,7 @@
     Object.assign(a, patch, { updated: Date.now() });
     const p = placed.get(id);
     if (a.kind === 'divider' && p && p.el) decorateDivider(a, p.el);
+    if (a.kind === 'bookmark' && p && p.el) decorateBookmark(a, p.el);
     AN.save();
   };
 
@@ -493,6 +524,40 @@
     placed.set(a.id, { el: d, anchor: block });
     AN.save();
     return a;
+  };
+
+  AN.addBookmark = function (msg, block, pos, opts) {
+    if (!conv) return null;
+    const a = {
+      id: CSR.uid('k'),
+      kind: 'bookmark',
+      pattern: opts.pattern || 'termeh',
+      label: opts.label || '',
+      anchor: { ...baseAnchor(msg), ...dom.makeBlockAnchor(msg, block), pos },
+    };
+    push(a);
+    const b = makeBookmark(a, block.tagName === 'LI', block);
+    if (pos === 'before') block.before(b);
+    else block.after(b);
+    placed.set(a.id, { el: b, anchor: block });
+    AN.save();
+    return a;
+  };
+
+  AN.setTags = function (id, tags) {
+    const a = AN.get(id);
+    if (!a) return;
+    a.tags = Array.from(new Set(tags.map((t) => t.trim()).filter(Boolean)));
+    if (!a.tags.length) delete a.tags;
+    a.updated = Date.now();
+    AN.save();
+  };
+
+  /** All tags used in this conversation, most used first. */
+  AN.allTags = function () {
+    const n = new Map();
+    for (const a of AN.all()) for (const t of a.tags || []) n.set(t, (n.get(t) || 0) + 1);
+    return [...n.entries()].sort((x, y) => y[1] - x[1]).map(([t]) => t);
   };
 
   // ---------------------------------------------------------------------------

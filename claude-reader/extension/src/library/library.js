@@ -38,7 +38,14 @@
 
   const swatch = (id) => (CSR.HIGHLIGHTS.find((x) => x.id === id) || {}).swatch;
 
-  function matches(a) {
+  const hasContent = (c) =>
+    c.annotations.length || (c.notebook || '').trim() || (c.tags && c.tags.length) || (c.progress && c.progress.read && Object.keys(c.progress.read).length);
+
+  function matches(a, conv) {
+    if (filter.startsWith('#')) {
+      const t = filter.slice(1);
+      if (!((a.tags || []).includes(t) || (conv.tags || []).includes(t))) return false;
+    }
     if (filter === 'notes' && !(a.note && a.note.trim())) return false;
     if (CSR.HIGHLIGHTS.some((c) => c.id === filter) && !(a.kind === 'mark' && a.style && a.style.hl === filter)) return false;
     if (!query) return true;
@@ -50,7 +57,7 @@
     const list = $('list');
     list.textContent = '';
     const total = convs.reduce((n, c) => n + c.annotations.length, 0);
-    $('stats').textContent = `${fa(convs.length)} گفتگو · ${fa(total)} هایلایت، یادداشت و طراحی`;
+    $('stats').textContent = `${fa(convs.length)} گفتگو، ${fa(total)} هایلایت، یادداشت و طراحی`;
     if (!convs.length) {
       list.append($('empty').content.cloneNode(true));
       return;
@@ -59,13 +66,16 @@
     for (const conv of convs) {
       const items = conv.annotations
         .filter((a) => a.kind !== 'drawing' || filter === 'all')
-        .filter(matches)
+        .filter((a) => matches(a, conv))
         .sort((x, y) => (x.anchor.msg || 0) - (y.anchor.msg || 0) || (x.anchor.start ?? 0) - (y.anchor.start ?? 0));
       const nb = (conv.notebook || '').trim();
       const nbMatch = nb && (!query || nb.toLowerCase().includes(query.toLowerCase())) && filter === 'all';
       if (!items.length && !nbMatch) continue;
       shown++;
       const date = conv.updated ? new Date(conv.updated).toLocaleDateString('fa-IR', { dateStyle: 'medium' }) : '';
+      const pr = conv.progress || {};
+      const readN = pr.read ? Object.keys(pr.read).length : 0;
+      const pct = pr.total ? Math.min(100, Math.round((readN / pr.total) * 100)) : 0;
       list.append(
         h(
           'article',
@@ -74,7 +84,10 @@
             'div',
             { class: 'conv-head' },
             h('a', { class: 'conv-title', href: conv.url || `https://claude.ai/chat/${conv.id}`, target: '_blank', rel: 'noopener', dir: 'auto' }, conv.title || 'گفتگوی بی‌نام'),
-            h('span', { class: 'conv-meta' }, `${fa(conv.annotations.length)} مورد · ${date}`),
+            h('span', { class: 'conv-meta' }, `${fa(conv.annotations.length)} مورد، ${date}`),
+            pr.total
+              ? h('span', { class: 'progress', title: `${fa(readN)} از ${fa(pr.total)} بخش خوانده شده` }, h('span', { class: 'bar' }, h('span', { style: `width:${pct}%` })), `${fa(pct)}٪`)
+              : null,
             h(
               'div',
               { class: 'conv-actions' },
@@ -93,6 +106,7 @@
               )
             )
           ),
+          convTags(conv),
           h(
             'div',
             { class: 'items' },
@@ -103,7 +117,7 @@
                 'div',
                 { class: 'item', style: color ? `--c:${color}` : '' },
                 h('div', { class: 'item-text', dir: 'auto' }, d.icon + ' ', highlighted(d.text)),
-                d.tags.length ? h('div', { class: 'item-tags' }, d.tags.join(' · ')) : null,
+                d.tags.length ? h('div', { class: 'item-tags' }, d.tags.join('، ')) : null,
                 a.note && a.note.trim() ? h('div', { class: 'item-note', dir: 'auto' }, '📝 ', highlighted(a.note.trim())) : null
               );
             })
@@ -115,28 +129,227 @@
     if (!shown) list.append(h('div', { class: 'empty' }, 'چیزی پیدا نشد.'));
   }
 
-  async function load() {
-    convs = await CSR.store.listConvs();
-    render();
+  function convTags(conv) {
+    const box = h('div', { class: 'conv-tags' });
+    for (const t of conv.tags || []) {
+      box.append(
+        h(
+          'span',
+          { class: 'ctag' },
+          '#' + t,
+          h(
+            'button',
+            {
+              title: 'حذف برچسب',
+              onclick: async () => {
+                conv.tags = conv.tags.filter((x) => x !== t);
+                await CSR.store.saveConv(conv);
+              },
+            },
+            '×'
+          )
+        )
+      );
+    }
+    box.append(
+      h('input', {
+        class: 'ctag-input',
+        placeholder: '+ برچسب گفتگو',
+        dir: 'auto',
+        onkeydown: async (e) => {
+          const v = e.target.value.replace(/^#/, '').trim();
+          if (e.key !== 'Enter' || !v) return;
+          conv.tags = Array.from(new Set([...(conv.tags || []), v]));
+          await CSR.store.saveConv(conv);
+        },
+      })
+    );
+    return box;
   }
 
-  // filters
-  const filters = [['all', 'همه'], ['notes', 'یادداشت‌دار'], ...CSR.HIGHLIGHTS.map((c) => [c.id, c.label])];
-  for (const [id, label] of filters) {
-    const chip = h(
-      'button',
-      {
-        class: 'chip' + (id === filter ? ' on' : ''),
-        onclick: () => {
-          filter = id;
-          document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === chip));
-          render();
-        },
-      },
-      swatch(id) ? h('span', { class: 'dot', style: `--c:${swatch(id)}` }) : null,
-      label
+  function renderFilters() {
+    const box = $('filters');
+    box.textContent = '';
+    const tags = new Map();
+    for (const c of convs) {
+      for (const t of c.tags || []) tags.set(t, (tags.get(t) || 0) + 1);
+      for (const a of c.annotations) for (const t of a.tags || []) tags.set(t, (tags.get(t) || 0) + 1);
+    }
+    const all = [['all', 'همه'], ['notes', 'یادداشت‌دار'], ...CSR.HIGHLIGHTS.map((c) => [c.id, c.label]), ...[...tags.keys()].map((t) => ['#' + t, '#' + t])];
+    for (const [id, label] of all) {
+      box.append(
+        h(
+          'button',
+          {
+            class: 'chip' + (id === filter ? ' on' : ''),
+            onclick: () => {
+              filter = filter === id && id !== 'all' ? 'all' : id;
+              renderFilters();
+              render();
+            },
+          },
+          swatch(id) ? h('span', { class: 'dot', style: `--c:${swatch(id)}` }) : null,
+          label
+        )
+      );
+    }
+  }
+
+  async function load() {
+    convs = (await CSR.store.listConvs()).filter(hasContent);
+    renderFilters();
+    render();
+    renderVocab();
+    renderStats();
+  }
+
+  // ---------------------------------------------------------------------------
+  // tabs
+
+  document.querySelectorAll('.tab').forEach((t) =>
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === t));
+      for (const id of ['convs', 'vocab', 'stats']) $('tab-' + id).hidden = id !== t.dataset.tab;
+    })
+  );
+
+  // ---------------------------------------------------------------------------
+  // vocabulary
+
+  let vocab = [];
+  let vq = '';
+
+  async function renderVocab() {
+    vocab = (await chrome.storage.local.get('vocab')).vocab || [];
+    const box = $('vocabList');
+    box.textContent = '';
+    $('vocabCount').textContent = `${fa(vocab.length)} لغت`;
+    const list = vocab.filter((v) => !vq || (v.word + ' ' + v.fa.join(' ') + ' ' + v.def).toLowerCase().includes(vq.toLowerCase()));
+    if (!vocab.length) {
+      box.append(h('div', { class: 'empty' }, 'روی هر کلمه‌ی انگلیسی در پاسخ‌های Claude دوبار کلیک کن و «افزودن به لغت‌نامه» را بزن.'));
+      return;
+    }
+    for (const v of list) {
+      box.append(
+        h(
+          'div',
+          { class: 'vocab' },
+          h('div', { class: 'vocab-word' }, highlighted(v.word), v.phonetic ? h('small', null, v.phonetic) : null),
+          h(
+            'div',
+            { class: 'vocab-actions' },
+            h(
+              'button',
+              {
+                class: 'btn ghost small',
+                title: 'تلفظ',
+                onclick: () => {
+                  const u = new SpeechSynthesisUtterance(v.word);
+                  u.lang = 'en-US';
+                  speechSynthesis.speak(u);
+                },
+              },
+              '🔊'
+            ),
+            h(
+              'button',
+              {
+                class: 'btn ghost small danger',
+                onclick: async () => {
+                  const cur = ((await chrome.storage.local.get('vocab')).vocab || []).filter((x) => x.word !== v.word);
+                  await chrome.storage.local.set({ vocab: cur });
+                  renderVocab();
+                },
+              },
+              'حذف'
+            )
+          ),
+          h('div', { class: 'vocab-fa' }, highlighted(v.fa.join('، '))),
+          v.def ? h('div', { class: 'vocab-def' }, v.def) : null,
+          v.context ? h('div', { class: 'vocab-ctx' }, '«' + v.context + '»') : null
+        )
+      );
+    }
+  }
+
+  $('vq').addEventListener('input', (e) => {
+    vq = e.target.value.trim();
+    query = vq;
+    renderVocab().then(() => (query = $('q').value.trim()));
+  });
+
+  $('vocabCsv').addEventListener('click', () => {
+    const esc = (x) => '"' + String(x || '').replace(/"/g, '""') + '"';
+    const rows = vocab.map((v) => [v.word, v.fa.join('، '), v.phonetic, v.def, v.context].map(esc).join(','));
+    CSR.downloadText('khana-vocab.csv', '\ufeff' + ['word,persian,phonetic,definition,context', ...rows].join('\n'), 'text/csv');
+  });
+
+  // ---------------------------------------------------------------------------
+  // stats
+
+  async function renderStats() {
+    const st = (await chrome.storage.local.get('stats')).stats || { days: {} };
+    const days = st.days || {};
+    const box = $('statsBox');
+    box.textContent = '';
+    const keyOf = (d) => CSR.dayKey(d);
+    const today = new Date();
+    const series = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      series.push({ d, secs: days[keyOf(d)] || 0 });
+    }
+    const week = series.slice(-7).reduce((n, x) => n + x.secs, 0);
+    const total = Object.values(days).reduce((n, x) => n + x, 0);
+    let streak = 0;
+    for (let i = 0; ; i++) {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      if ((days[keyOf(d)] || 0) >= 60) streak++;
+      else if (i > 0 || (days[keyOf(d)] || 0) > 0) break;
+      if (i > 3650) break;
+    }
+    const tile = (value, label) => h('div', { class: 'tile' }, h('b', null, value), h('span', null, label));
+    box.append(
+      h(
+        'div',
+        { class: 'tiles' },
+        tile(CSR.faDuration(series[13].secs), 'امروز'),
+        tile(CSR.faDuration(week), '۷ روز اخیر'),
+        tile(`${fa(streak)} روز`, 'روزهای پشت‌سرهم'),
+        tile(CSR.faDuration(total), 'کل زمان مطالعه')
+      )
     );
-    $('filters').append(chip);
+    const max = Math.max(60, ...series.map((x) => x.secs));
+    const dayName = (d) => d.toLocaleDateString('fa-IR', { weekday: 'short' });
+    const bars = h(
+      'div',
+      { class: 'bars', role: 'img', 'aria-label': 'نمودار دقیقه‌های مطالعه در ۱۴ روز اخیر' },
+      series.map((x, i) => {
+        const min = Math.round(x.secs / 60);
+        return h(
+          'div',
+          { class: 'bar-col' + (i === 13 ? ' today' : '') },
+          h('span', { class: 'tip' }, `${x.d.toLocaleDateString('fa-IR', { weekday: 'long', day: 'numeric', month: 'long' })}: ${CSR.faDuration(x.secs)}`),
+          i === 13 && min ? h('span', { class: 'val' }, fa(min)) : null,
+          h('i', { style: `height:${(x.secs / max) * 100}%` })
+        );
+      })
+    );
+    const table = h(
+      'table',
+      { class: 'sr-only' },
+      h('tbody', null, series.map((x) => h('tr', null, h('td', null, keyOf(x.d)), h('td', null, CSR.faDuration(x.secs)))))
+    );
+    box.append(
+      h(
+        'div',
+        { class: 'chart' },
+        h('h2', null, 'دقیقه‌های مطالعه در ۱۴ روز اخیر'),
+        bars,
+        h('div', { class: 'labels' }, series.map((x) => h('span', null, dayName(x.d)))),
+        table
+      )
+    );
   }
 
   $('q').addEventListener('input', (e) => {
@@ -185,7 +398,7 @@
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && Object.keys(changes).some((k) => k.startsWith(CSR.store.CONV_PREFIX))) load();
+    if (area === 'local' && Object.keys(changes).some((k) => k.startsWith(CSR.store.CONV_PREFIX) || k === 'vocab' || k === 'stats')) load();
   });
 
   load();

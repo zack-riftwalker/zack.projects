@@ -24,12 +24,35 @@
       </div>
     </header>
 
+    <nav class="tabs">
+      <button class="tab on" data-tab="convs">گفتگوها</button>
+      <button class="tab" data-tab="vocab">لغت‌نامه‌ی من</button>
+      <button class="tab" data-tab="stats">آمار مطالعه</button>
+    </nav>
+
+    <section id="tab-vocab" hidden>
+      <div class="toolbar">
+        <input type="search" id="vq" placeholder="جستجو در لغت‌ها…" dir="auto" />
+        <div class="row">
+          <button class="btn ghost small" id="vocabCsv">خروجی CSV (برای Anki)</button>
+          <span class="sub" id="vocabCount"></span>
+        </div>
+      </div>
+      <main id="vocabList"></main>
+    </section>
+
+    <section id="tab-stats" hidden>
+      <main id="statsBox"></main>
+    </section>
+
+    <section id="tab-convs">
     <div class="toolbar">
       <input type="search" id="q" placeholder="جستجو در هایلایت‌ها، یادداشت‌ها و دفترچه‌ها…" dir="auto" />
       <div class="chips" id="filters"></div>
     </div>
 
     <main id="list"></main>
+    </section>
 
     <template id="empty">
       <div class="empty">

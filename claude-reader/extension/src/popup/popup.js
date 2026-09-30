@@ -219,6 +219,129 @@
   }
   paintSw();
 
+  // ---------- study tab ----------
+  for (const key of ['showTimer', 'pomoAutoBreak', 'pomoAutoFocus', 'pomoSound', 'pomoNotify', 'autoProgress', 'resumePrompt', 'focusHideUser', 'dictDblclick']) {
+    $(key).checked = !!s[key];
+    $(key).addEventListener('change', (e) => {
+      s[key] = e.target.checked;
+      save(true);
+    });
+  }
+  for (const key of ['pomoFocus', 'pomoShort', 'pomoLong', 'pomoCycles']) {
+    const inp = $(key);
+    inp.value = s[key];
+    inp.addEventListener('change', () => {
+      const v = Math.max(+inp.min, Math.min(+inp.max, Math.round(+inp.value || CSR.DEFAULT_SETTINGS[key])));
+      inp.value = v;
+      s[key] = v;
+      save(true);
+    });
+  }
+
+  function patternPicker(id, key, after) {
+    const box = $(id);
+    const paint = () => box.querySelectorAll('.pattern').forEach((b) => b.classList.toggle('on', b.dataset.id === s[key]));
+    for (const p of CSR.PATTERNS) {
+      const b = document.createElement('button');
+      b.className = 'pattern';
+      b.dataset.id = p.id;
+      const band = document.createElement('i');
+      band.style.backgroundImage = CSR.patternUrl(p.id);
+      const name = document.createElement('span');
+      name.textContent = p.label;
+      b.append(band, name);
+      b.addEventListener('click', () => {
+        s[key] = p.id;
+        paint();
+        after && after();
+        save(true);
+      });
+      box.append(b);
+    }
+    paint();
+    after && after();
+  }
+
+  function paintFrame() {
+    const f = $('framePreview');
+    const c = CSR.patternById(s.pomoPattern).colors;
+    f.style.backgroundImage = CSR.patternUrl(s.pomoPattern);
+    f.style.border = `2px solid ${c.fg}`;
+    f.textContent = '';
+    const inner = document.createElement('div');
+    inner.className = 'inner';
+    inner.style.cssText = `background:${c.soft};color:${c.ink};border:2px solid ${c.fg};box-shadow:0 0 0 3px ${c.bg}`;
+    const medal = document.createElement('span');
+    medal.innerHTML = CSR.shamsehSvg(s.pomoPattern, 44); // generated SVG
+    const text = document.createElement('span');
+    text.textContent = 'وقت استراحت است! ☕';
+    inner.append(medal, text);
+    f.append(inner);
+  }
+  patternPicker('pomoPattern', 'pomoPattern', paintFrame);
+  patternPicker('rulerPattern', 'rulerPattern');
+  patternPicker('bookmarkPattern', 'bookmarkPattern');
+
+  function simpleRange(boxId, key, label, min, max, step, fmt) {
+    const row = document.createElement('div');
+    row.className = 'range';
+    const l = document.createElement('label');
+    l.textContent = label;
+    const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step, value: s[key] });
+    const out = document.createElement('output');
+    out.textContent = fmt(+s[key]);
+    input.addEventListener('input', () => {
+      s[key] = +input.value;
+      out.textContent = fmt(+input.value);
+      save();
+    });
+    row.append(l, input, out, document.createElement('span'));
+    $(boxId).append(row);
+  }
+  simpleRange('rulerRanges', 'rulerLines', 'ارتفاع (خط)', 1, 5, 1, (v) => fa(v));
+  simpleRange('rulerRanges', 'rulerDim', 'تیرگی اطراف', 0, 0.7, 0.05, (v) => fa(Math.round(v * 100)) + '٪');
+  simpleRange('ttsRanges', 'ttsRate', 'سرعت خواندن', 0.5, 2, 0.05, (v) => '×' + fa(v.toFixed(2)));
+
+  // ---------- voices ----------
+  function fillVoices() {
+    const voices = speechSynthesis.getVoices();
+    for (const [id, lang, key] of [
+      ['ttsFaVoice', 'fa', 'ttsFaVoice'],
+      ['ttsEnVoice', 'en', 'ttsEnVoice'],
+    ]) {
+      const sel = $(id);
+      sel.textContent = '';
+      sel.append(new Option('خودکار', '', false, !s[key]));
+      for (const v of voices.filter((x) => x.lang && x.lang.toLowerCase().startsWith(lang))) {
+        sel.append(new Option(`${v.name} (${v.lang})`, v.voiceURI, false, v.voiceURI === s[key]));
+      }
+    }
+    const hasFa = voices.some((v) => v.lang && v.lang.toLowerCase().startsWith('fa'));
+    $('voiceNote').textContent = hasFa
+      ? 'صدای فارسی پیدا شد. 🎉'
+      : 'روی این مرورگر صدای فارسی نیست؛ فقط بخش‌های انگلیسی خوانده می‌شوند. در مرورگر Microsoft Edge صداهای فارسی رایگان «فرید» و «دلارا» هست و همین افزونه آنجا هم نصب می‌شود.';
+  }
+  for (const id of ['ttsFaVoice', 'ttsEnVoice']) {
+    $(id).addEventListener('change', (e) => {
+      s[id] = e.target.value;
+      save(true);
+    });
+  }
+  fillVoices();
+  speechSynthesis.addEventListener('voiceschanged', fillVoices);
+  function testVoice(lang, text) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang === 'fa' ? 'fa-IR' : 'en-US';
+    const pref = lang === 'fa' ? s.ttsFaVoice : s.ttsEnVoice;
+    const v = speechSynthesis.getVoices().find((x) => (pref ? x.voiceURI === pref : x.lang.toLowerCase().startsWith(lang)));
+    if (v) u.voice = v;
+    u.rate = s.ttsRate;
+    speechSynthesis.speak(u);
+  }
+  $('testFa').addEventListener('click', () => testVoice('fa', 'سلام! این صدای فارسی برای خواندن پاسخ‌های Claude است.'));
+  $('testEn').addEventListener('click', () => testVoice('en', 'Hello! This is how Claude’s answers will sound.'));
+
   // ---------- actions ----------
   $('openLibrary').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openPanel').addEventListener('click', async () => {

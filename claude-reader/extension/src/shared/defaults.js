@@ -140,6 +140,59 @@
     penColor: '#e03131',
     penWidth: 3,
     dividerStyle: 'solid',
+    // reading ruler & bookmarks
+    rulerPattern: 'termeh',
+    rulerLines: 2,
+    rulerDim: 0.35,
+    bookmarkPattern: 'termeh',
+    // focus mode
+    focusHideUser: false,
+    // text to speech
+    ttsRate: 1,
+    ttsFaVoice: '',
+    ttsEnVoice: '',
+    // dictionary
+    dictDblclick: true,
+    // progress
+    autoProgress: true,
+    resumePrompt: true,
+    // study timer & pomodoro (minutes)
+    showTimer: true,
+    pomoFocus: 25,
+    pomoShort: 5,
+    pomoLong: 15,
+    pomoCycles: 4,
+    pomoAutoBreak: true,
+    pomoAutoFocus: false,
+    pomoSound: true,
+    pomoNotify: true,
+    pomoPattern: 'termeh',
+  };
+
+  CSR.DEFAULT_TAGS = ['امتحان', 'مهم', 'مرور', 'سؤال', 'تعریف', 'فرمول', 'مثال'];
+
+  /** Local date key (YYYY-MM-DD) for study statistics. */
+  CSR.dayKey = function (d = new Date()) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  /** "۲ ساعت و ۵ دقیقه" / "۱۲ دقیقه" / "کمتر از یک دقیقه" */
+  CSR.faDuration = function (secs) {
+    const m = Math.floor(secs / 60);
+    if (m < 1) return 'کمتر از یک دقیقه';
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    const fa = (n) => n.toLocaleString('fa-IR');
+    if (!h) return `${fa(mm)} دقیقه`;
+    return mm ? `${fa(h)} ساعت و ${fa(mm)} دقیقه` : `${fa(h)} ساعت`;
+  };
+
+  /** "۲۴:۵۹" */
+  CSR.faClock = function (ms) {
+    const t = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(t / 60);
+    const s = t % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`.replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
   };
 
   // ---------- helpers ----------

@@ -59,7 +59,9 @@
 
     async saveConv(conv) {
       const key = CONV_PREFIX + conv.id;
-      if (!conv.annotations.length && !String(conv.notebook || '').trim()) {
+      const p = conv.progress || {};
+      const hasProgress = (p.read && Object.keys(p.read).length) || p.lastPos;
+      if (!conv.annotations.length && !String(conv.notebook || '').trim() && !hasProgress && !(conv.tags && conv.tags.length)) {
         await chrome.storage.local.remove(key);
         return;
       }

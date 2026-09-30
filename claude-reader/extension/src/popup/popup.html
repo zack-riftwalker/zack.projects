@@ -24,6 +24,8 @@
       <button class="tab" data-tab="theme">تم</button>
       <button class="tab" data-tab="dir">راست‌چین</button>
       <button class="tab" data-tab="tools">ابزارها</button>
+      <button class="tab" data-tab="study">مطالعه</button>
+      <button class="tab" data-tab="read">خواندن</button>
     </nav>
 
     <main id="main">
@@ -113,15 +115,74 @@
             <tr><td><kbd>Alt</kbd>+<kbd>H</kbd></td><td>حالت ماژیک</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>M</kbd></td><td>پنل یادداشت‌ها</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>R</kbd></td><td>تغییر حالت راست‌چین</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>G</kbd></td><td>نشانک</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>T</kbd></td><td>فهرست و پیشرفت</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>V</kbd></td><td>خواندن با صدا</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>K</kbd></td><td>خط‌کش خواندن (<kbd>Alt</kbd>+<kbd>↓</kbd> یک خط پایین)</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>Z</kbd></td><td>حالت تمرکز</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>خروج از ابزار</td></tr>
           </table>
         </details>
+      </section>
+      <!-- study: timer, pomodoro, progress -->
+      <section data-panel="study" hidden>
+        <h3>زمان مطالعه و پومودورو</h3>
+        <label class="check"><input type="checkbox" id="showTimer" /> نمایش زمان مطالعه پایین صفحه</label>
+        <div class="grid4">
+          <label>مطالعه<input type="number" id="pomoFocus" min="1" max="180" /></label>
+          <label>استراحت<input type="number" id="pomoShort" min="1" max="60" /></label>
+          <label>استراحت بلند<input type="number" id="pomoLong" min="1" max="90" /></label>
+          <label>دور تا استراحت بلند<input type="number" id="pomoCycles" min="1" max="12" /></label>
+        </div>
+        <p class="note">همه به دقیقه. مثلاً ۲۵ دقیقه مطالعه، ۵ دقیقه استراحت و بعد از ۴ دور، ۱۵ دقیقه استراحت بلند.</p>
+        <label class="check"><input type="checkbox" id="pomoAutoBreak" /> استراحت خودش شروع شود</label>
+        <label class="check"><input type="checkbox" id="pomoAutoFocus" /> بعد از استراحت، مطالعه خودش شروع شود</label>
+        <label class="check"><input type="checkbox" id="pomoSound" /> صدای زنگ (نغمه‌ی کوتاه سنتوری)</label>
+        <label class="check"><input type="checkbox" id="pomoNotify" /> اعلان ویندوز/مک وقتی تب دیگری باز است</label>
+        <div class="field-col">
+          <label>طرح پنجره‌ی استراحت</label>
+          <div class="patterns" id="pomoPattern"></div>
+          <div class="frame-preview" id="framePreview"></div>
+        </div>
+        <h3>پیشرفت</h3>
+        <label class="check"><input type="checkbox" id="autoProgress" /> بخش‌هایی که خواندی خودکار علامت بخورند</label>
+        <label class="check"><input type="checkbox" id="resumePrompt" /> وقتی برمی‌گردم، «ادامه از آخرین جا» را نشان بده</label>
+        <h3>حالت تمرکز</h3>
+        <label class="check"><input type="checkbox" id="focusHideUser" /> در حالت تمرکز پیام‌های خودم هم پنهان شوند</label>
+      </section>
+
+      <!-- reading tools: ruler, bookmarks, tts, dictionary -->
+      <section data-panel="read" hidden>
+        <h3>خط‌کش خواندن</h3>
+        <div class="patterns" id="rulerPattern"></div>
+        <div id="rulerRanges"></div>
+        <h3>نشانک</h3>
+        <div class="patterns" id="bookmarkPattern"></div>
+        <h3>خواندن با صدا</h3>
+        <div class="field">
+          <label for="ttsFaVoice">صدای فارسی</label>
+          <select id="ttsFaVoice"></select>
+        </div>
+        <div class="field">
+          <label for="ttsEnVoice">صدای انگلیسی</label>
+          <select id="ttsEnVoice"></select>
+        </div>
+        <div id="ttsRanges"></div>
+        <div class="row-btns">
+          <button class="btn ghost small" id="testFa">امتحان صدای فارسی</button>
+          <button class="btn ghost small" id="testEn">Test English voice</button>
+        </div>
+        <p class="note" id="voiceNote"></p>
+        <h3>دیکشنری</h3>
+        <label class="check"><input type="checkbox" id="dictDblclick" /> با دوبار کلیک روی کلمه‌ی انگلیسی، معنی‌اش را نشان بده</label>
+        <p class="note">معنی فارسی از MyMemory و تعریف انگلیسی از Free Dictionary API گرفته می‌شود (هر دو رایگان). فقط همان کلمه فرستاده می‌شود.</p>
       </section>
     </main>
 
     <script src="../shared/defaults.js"></script>
     <script src="../shared/storage.js"></script>
     <script src="../shared/fonts-page.js"></script>
+    <script src="../shared/patterns.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

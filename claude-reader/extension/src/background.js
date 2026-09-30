@@ -1,0 +1,196 @@
+/* Background service worker: the pomodoro clock (so it keeps running when
+ * tabs are closed or asleep), system notifications, and dictionary lookups
+ * (claude.ai's CSP doesn't let the page itself call other sites). */
+importScripts('shared/defaults.js', 'shared/storage.js');
+
+const CSR = globalThis.CSR;
+const KEY = 'pomo';
+const IDLE = { phase: 'idle', running: false, endsAt: 0, left: 0, total: 0, cycle: 0, event: null };
+
+// ---------------------------------------------------------------------------
+// pomodoro
+
+async function getState() {
+  return { ...IDLE, ...((await chrome.storage.local.get(KEY))[KEY] || {}) };
+}
+
+async function setState(st) {
+  await chrome.storage.local.set({ [KEY]: st });
+  if (st.running) await chrome.alarms.create('pomo', { when: Math.max(Date.now() + 500, st.endsAt) });
+  else await chrome.alarms.clear('pomo');
+  return st;
+}
+
+function durationOf(s, phase) {
+  const min = { focus: s.pomoFocus, short: s.pomoShort, long: s.pomoLong }[phase] || 25;
+  return Math.max(1, min) * 60000;
+}
+
+const TEXT = {
+  focus: (s) => ({
+    title: `${CSR.faDuration(s.pomoFocus * 60)} مطالعه تمام شد 🌿`,
+    message: `وقت استراحت است؛ ${CSR.faDuration(s.pomoShort * 60)} از صفحه دور شو.`,
+  }),
+  short: () => ({ title: 'استراحت تمام شد 📚', message: 'برگرد سر درس!' }),
+  long: () => ({ title: 'استراحت طولانی تمام شد 📚', message: 'یک دور تازه‌ی مطالعه را شروع کن.' }),
+};
+
+async function finishPhase(st, { skipped } = {}) {
+  const s = await CSR.store.getSettings();
+  const now = Date.now();
+  let next;
+  let auto;
+  let cycle = st.cycle;
+  if (st.phase === 'focus') {
+    cycle += 1;
+    next = cycle % Math.max(1, s.pomoCycles) === 0 ? 'long' : 'short';
+    auto = s.pomoAutoBreak;
+  } else {
+    next = 'focus';
+    auto = s.pomoAutoFocus;
+  }
+  const total = durationOf(s, next);
+  const nst = {
+    phase: next,
+    running: !!auto,
+    endsAt: auto ? now + total : 0,
+    left: auto ? 0 : total,
+    total,
+    cycle,
+    event: skipped ? null : { id: CSR.uid('e'), ended: st.phase, next, at: now, auto: !!auto },
+  };
+  await setState(nst);
+  if (!skipped && s.pomoNotify) {
+    const t = TEXT[st.phase](s);
+    chrome.notifications.create('pomo-' + now, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: t.title,
+      message: t.message,
+      priority: 2,
+    });
+  }
+  return nst;
+}
+
+async function command(cmd, arg) {
+  const s = await CSR.store.getSettings();
+  const st = await getState();
+  const now = Date.now();
+  switch (cmd) {
+    case 'start': {
+      if (st.running) return st;
+      const phase = st.phase === 'idle' ? 'focus' : st.phase;
+      const total = st.phase === 'idle' || !st.left ? durationOf(s, phase) : st.total || durationOf(s, phase);
+      const left = st.phase === 'idle' || !st.left ? total : st.left;
+      return setState({ ...st, phase, running: true, endsAt: now + left, left: 0, total, event: null });
+    }
+    case 'pause':
+      if (!st.running) return st;
+      return setState({ ...st, running: false, left: Math.max(0, st.endsAt - now), endsAt: 0 });
+    case 'stop':
+      return setState({ ...IDLE });
+    case 'skip':
+      if (st.phase === 'idle') return st;
+      return finishPhase(st, { skipped: true });
+    case 'extend': {
+      // "5 more minutes" of the phase that just ended
+      const phase = arg && arg.phase ? arg.phase : st.phase;
+      const total = Math.max(1, (arg && arg.minutes) || 5) * 60000;
+      const cycle = phase === 'focus' && st.event && st.event.ended === 'focus' ? Math.max(0, st.cycle - 1) : st.cycle;
+      return setState({ ...st, phase, cycle, running: true, endsAt: now + total, left: 0, total, event: null });
+    }
+    case 'state':
+      return st;
+  }
+  return st;
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'pomo') return;
+  const st = await getState();
+  if (st.running && Date.now() >= st.endsAt - 1500) await finishPhase(st);
+  else if (st.running) await setState(st); // woke up early: re-arm
+});
+
+chrome.notifications.onClicked.addListener(async (id) => {
+  chrome.notifications.clear(id);
+  const [tab] = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+  if (tab) {
+    chrome.tabs.update(tab.id, { active: true });
+    chrome.windows.update(tab.windowId, { focused: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// dictionary
+
+const dictCache = new Map();
+
+async function fetchJson(url, ms = 7000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function lookup(word) {
+  const w = word.trim().toLowerCase();
+  if (dictCache.has(w)) return dictCache.get(w);
+  const [mm, dd] = await Promise.allSettled([
+    fetchJson(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(w)}&langpair=en|fa`),
+    fetchJson(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(w)}`),
+  ]);
+  const out = { word: w, fa: [], phonetic: '', audio: '', meanings: [], ok: false };
+  if (mm.status === 'fulfilled' && mm.value) {
+    const seen = new Set();
+    const add = (t) => {
+      const clean = String(t || '').replace(/[.。]+$/, '').trim();
+      if (!clean || !/[؀-ۿ]/.test(clean) || clean.length > 60 || seen.has(clean)) return;
+      seen.add(clean);
+      out.fa.push(clean);
+    };
+    add(mm.value.responseData && mm.value.responseData.translatedText);
+    for (const m of mm.value.matches || []) if ((+m.match || 0) >= 0.5) add(m.translation);
+    out.fa = out.fa.slice(0, 5);
+  }
+  if (dd.status === 'fulfilled' && Array.isArray(dd.value) && dd.value[0]) {
+    const e = dd.value[0];
+    out.phonetic = e.phonetic || ((e.phonetics || []).find((p) => p.text) || {}).text || '';
+    out.audio = ((e.phonetics || []).find((p) => p.audio) || {}).audio || '';
+    for (const entry of dd.value) {
+      for (const m of entry.meanings || []) {
+        if (out.meanings.length >= 3) break;
+        if (out.meanings.some((x) => x.pos === m.partOfSpeech)) continue;
+        out.meanings.push({
+          pos: m.partOfSpeech,
+          defs: (m.definitions || []).slice(0, 2).map((d) => d.definition),
+          example: ((m.definitions || []).find((d) => d.example) || {}).example || '',
+        });
+      }
+    }
+  }
+  out.ok = out.fa.length > 0 || out.meanings.length > 0;
+  if (!out.ok && mm.status === 'rejected' && dd.status === 'rejected') out.error = 'network';
+  if (out.ok) dictCache.set(w, out);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (!msg || !msg.csr) return;
+  if (msg.csr === 'pomo') {
+    command(msg.cmd, msg.arg).then(reply, (e) => reply({ error: String(e) }));
+    return true;
+  }
+  if (msg.csr === 'dict') {
+    lookup(msg.word).then(reply, (e) => reply({ ok: false, error: String(e) }));
+    return true;
+  }
+});

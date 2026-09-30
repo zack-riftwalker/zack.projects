@@ -234,3 +234,237 @@ mark {
   color: var(--muted);
   padding: 60px 20px;
 }
+
+.tabs {
+  max-width: 920px;
+  margin: 6px auto 0;
+  padding: 0 20px;
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 700;
+}
+.tab.on {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.progress .bar {
+  width: 70px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg2);
+  overflow: hidden;
+}
+.progress .bar span {
+  display: block;
+  height: 100%;
+  background: #2f9e44;
+  border-radius: inherit;
+}
+.conv-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-top: 6px;
+}
+.ctag {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0 4px 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ctag button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+.ctag-input {
+  font-size: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 1px 10px;
+  background: transparent;
+  width: 110px;
+  outline: none;
+}
+.item-tagline {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* vocabulary */
+.vocab {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+}
+.vocab-word {
+  direction: ltr;
+  text-align: left;
+  font: 700 17px/1.4 Georgia, "Times New Roman", serif;
+}
+.vocab-word small {
+  font: 400 12px system-ui, sans-serif;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.vocab-fa {
+  font-weight: 700;
+}
+.vocab-def,
+.vocab-ctx {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: var(--muted);
+}
+.vocab-def {
+  direction: ltr;
+  text-align: left;
+}
+.vocab-ctx {
+  unicode-bidi: plaintext;
+  font-style: italic;
+}
+.vocab-actions {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: flex;
+  gap: 4px;
+  align-items: start;
+}
+
+/* stats */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.tile {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+.tile b {
+  display: block;
+  font-size: 22px;
+  line-height: 1.4;
+}
+.tile span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chart {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px 10px;
+}
+.chart h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.bars {
+  position: relative;
+  height: 170px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.bar-col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  position: relative;
+  cursor: default;
+}
+.bar-col i {
+  display: block;
+  width: 70%;
+  max-width: 34px;
+  min-height: 2px;
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+}
+.bar-col.today i {
+  background: #c2410c;
+}
+.bar-col .val {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.bar-col:hover i {
+  filter: brightness(1.12);
+}
+.bar-col .tip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  white-space: nowrap;
+  z-index: 2;
+}
+.bar-col:hover .tip {
+  display: block;
+}
+.labels {
+  display: flex;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.labels span {
+  flex: 1;
+  text-align: center;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

@@ -29,7 +29,7 @@
 }
 body {
   margin: 0;
-  width: 370px;
+  width: 410px;
   background: var(--bg);
   color: var(--fg);
   font: 13px/1.6 "CSR Fa vazirmatn", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
@@ -375,4 +375,95 @@ kbd {
   border-bottom-width: 2px;
   border-radius: 5px;
   padding: 0 4px;
+}
+
+h3 {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--accent);
+}
+h3:first-child {
+  margin-top: 0;
+}
+.grid4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.grid4 label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.grid4 input {
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px;
+  text-align: center;
+}
+.field-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field-col > label {
+  color: var(--muted);
+}
+.patterns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.pattern {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.pattern.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.pattern i {
+  display: block;
+  height: 16px;
+  border-radius: 4px;
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+}
+.frame-preview {
+  position: relative;
+  height: 96px;
+  border-radius: 14px;
+  background-size: auto 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.frame-preview .inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 12.5px;
+}
+.row-btns {
+  display: flex;
+  gap: 6px;
+}
+.btn.small {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
 }

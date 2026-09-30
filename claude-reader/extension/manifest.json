@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "خوانا — Claude Reader",
   "short_name": "خوانا",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "خواندن و مطالعه‌ی پاسخ‌های Claude را راحت‌تر کن: فونت فارسی، تم، راست‌چین اصولی، هایلایت، یادداشت، مداد و خط جداکننده.",
   "minimum_chrome_version": "111",
   "icons": {
@@ -20,9 +20,19 @@
     }
   },
   "options_page": "src/library/library.html",
+  "background": {
+    "service_worker": "src/background.js"
+  },
   "permissions": [
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://api.mymemory.translated.net/*",
+    "https://api.dictionaryapi.dev/*"
   ],
   "content_scripts": [
     {
@@ -46,11 +56,18 @@
         "src/shared/defaults.js",
         "src/shared/storage.js",
         "src/shared/export.js",
+        "src/shared/patterns.js",
         "src/content/dom.js",
         "src/content/appearance.js",
         "src/content/annotations.js",
         "src/content/drawing.js",
         "src/content/ui.js",
+        "src/content/focus.js",
+        "src/content/ruler.js",
+        "src/content/tts.js",
+        "src/content/toc.js",
+        "src/content/dict.js",
+        "src/content/study.js",
         "src/content/main.js"
       ],
       "run_at": "document_start"

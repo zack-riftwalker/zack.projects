@@ -21,12 +21,13 @@
     if (a.kind === 'mark') {
       const st = a.style || {};
       const tags = Object.keys(FORMAT_LABEL).filter((k) => st[k]).map((k) => FORMAT_LABEL[k]);
-      return { icon: st.hl ? COLOR_EMOJI[st.hl] || '🖍' : a.note ? '📝' : '✦', text: oneLine(a.anchor.exact), tags };
+      return { icon: st.hl ? COLOR_EMOJI[st.hl] || '🖍' : a.note ? '📝' : '✦', text: oneLine(a.anchor.exact), tags: tags.concat((a.tags || []).map((t) => '#' + t)) };
     }
     if (a.kind === 'block') {
       return { icon: a.style === 'quote' ? '❝' : '★', text: oneLine(a.anchor.snippet), tags: [a.style === 'quote' ? 'نقل‌قول' : 'مهم'] };
     }
     if (a.kind === 'divider') return { icon: '―', text: a.label ? oneLine(a.label) : 'خط جداکننده', tags: [] };
+    if (a.kind === 'bookmark') return { icon: '🔖', text: a.label ? oneLine(a.label) : 'نشانک', tags: [] };
     if (a.kind === 'drawing') return { icon: '✏️', text: `طراحی (${(a.strokes || []).length.toLocaleString('fa-IR')} خط)`, tags: [] };
     return { icon: '•', text: '', tags: [] };
   };
@@ -36,7 +37,9 @@
     lines.push(`# ${conv.title || 'گفتگو با Claude'}`, '');
     if (conv.url) lines.push(conv.url, '');
     lines.push(`_خروجی گرفته‌شده در ${new Date().toLocaleString('fa-IR')}_`, '');
-    const list = sortAnn(conv.annotations || []).filter((a) => a.kind === 'mark' || a.kind === 'block' || (a.kind === 'divider' && a.label));
+    const list = sortAnn(conv.annotations || []).filter(
+      (a) => a.kind === 'mark' || a.kind === 'block' || a.kind === 'bookmark' || (a.kind === 'divider' && a.label)
+    );
     if (list.length) {
       lines.push('## هایلایت‌ها و یادداشت‌ها', '');
       for (const a of list) {
@@ -44,6 +47,10 @@
         const tags = d.tags.length ? ` _(${d.tags.join('، ')})_` : '';
         if (a.kind === 'divider') {
           lines.push(`### ${d.text}`, '');
+          continue;
+        }
+        if (a.kind === 'bookmark') {
+          lines.push(`- 🔖 **${d.text}**`);
           continue;
         }
         lines.push(`- ${d.icon} «${d.text}»${tags}`);

@@ -58,6 +58,21 @@
     eye: svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>'),
     sizeUp: svg('<path d="M4 18 9 6l5 12"/><path d="M5.5 14h7"/><path d="M18 8v6M15 11h6"/>'),
     sizeDown: svg('<path d="M4 18 9 6l5 12"/><path d="M5.5 14h7"/><path d="M15 11h6"/>'),
+    bookmark: svg('<path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>'),
+    toc: svg('<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1" fill="currentColor"/><circle cx="3.5" cy="12" r="1" fill="currentColor"/><circle cx="3.5" cy="18" r="1" fill="currentColor"/>'),
+    speaker: svg('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>'),
+    ruler: svg('<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 7v4M10 7v3M14 7v4M18 7v3"/>'),
+    focus: svg('<path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="3"/>'),
+    timer: svg('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/>'),
+    book: svg('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'),
+    tag: svg('<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1.3" fill="currentColor"/>'),
+    play: svg('<path d="M7 4v16l13-8z" fill="currentColor"/>'),
+    pause: svg('<path d="M7 4h3v16H7zM14 4h3v16h-3z" fill="currentColor"/>'),
+    stop: svg('<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/>'),
+    prev: svg('<path d="M19 5 9 12l10 7z" fill="currentColor"/><path d="M5 5v14"/>'),
+    next: svg('<path d="m5 5 10 7-10 7z" fill="currentColor"/><path d="M19 5v14"/>'),
+    skip: svg('<path d="m5 4 10 8-10 8z" fill="currentColor"/><path d="M19 5v14"/>'),
+    moreV: svg('<circle cx="12" cy="5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="19" r="1.3" fill="currentColor"/>'),
   };
 
   // ---------------------------------------------------------------------------
@@ -87,18 +102,24 @@
   };
 
   UI.shadow = () => shadow;
+  UI.h = h;
+  UI.ICONS = ICONS;
+  UI.layer = () => el.layer;
+  UI.el = el;
+  UI.isDark = () => isDark(CSR.settings);
+  UI.setDockState = (key, on) => el.dockBtn && el.dockBtn[key] && el.dockBtn[key].classList.toggle('on', !!on);
 
   function keepSelection(e) {
     // clicking our buttons must not clear the user's text selection
     if (!e.target.closest('textarea, input, select')) e.preventDefault();
   }
 
-  UI.toast = function (msg) {
+  UI.toast = function (msg, ms = 2200) {
     if (!el.toast) return;
     el.toast.textContent = msg;
     el.toast.classList.add('show');
     clearTimeout(el.toast._t);
-    el.toast._t = setTimeout(() => el.toast.classList.remove('show'), 2200);
+    el.toast._t = setTimeout(() => el.toast.classList.remove('show'), ms);
   };
 
   UI.applySettings = function (s) {
@@ -139,13 +160,28 @@
       b('highlighter', 'marker', 'حالت ماژیک: هر متنی را انتخاب کنی هایلایت می‌شود (Alt+H)', () => toggleHighlighter()),
       b('pen', 'pen', 'مداد و طراحی (Alt+P)', () => UI.setMode(UI.mode === 'draw' ? 'none' : 'draw')),
       b('divider', 'divider', 'خط جداکننده بین بخش‌ها (Alt+L)', () => UI.setMode(UI.mode === 'divider' ? 'none' : 'divider')),
+      b('bookmark', 'bookmark', 'نشانک (مثل روبان کتاب) (Alt+G)', () => UI.setMode(UI.mode === 'bookmark' ? 'none' : 'bookmark')),
+      h('div', { class: 'dock-sep' }),
       b('notes', 'notes', 'یادداشت‌ها و هایلایت‌های این گفتگو (Alt+M)', () => UI.togglePanel()),
+      b('toc', 'toc', 'فهرست و پیشرفت مطالعه (Alt+T)', () => CSR.toc.toggle()),
       h('div', { class: 'dock-sep' }),
-      b('rtl', 'rtl', 'راست‌چین', () => UI.cycleRtl()),
-      b('bigger', 'sizeUp', 'بزرگ‌کردن متن', () => UI.bumpFont(1)),
-      b('smaller', 'sizeDown', 'کوچک‌کردن متن', () => UI.bumpFont(-1)),
+      b('tts', 'speaker', 'خواندن با صدا (Alt+V)', () => CSR.tts.toggle()),
+      b('ruler', 'ruler', 'خط‌کش خواندن (Alt+K)', () => CSR.ruler.toggle()),
+      b('focus', 'focus', 'حالت تمرکز (Alt+Z)', () => CSR.focus.toggle()),
+      b('timer', 'timer', 'زمان مطالعه و پومودورو', () => CSR.study.toggleCard()),
       h('div', { class: 'dock-sep' }),
-      b('hide', 'eye', 'پنهان/نمایش هایلایت‌ها و طراحی‌ها', () => UI.toggleHideAnnotations())
+      (el.dockExtra = h(
+        'div',
+        { class: 'dock-extra', hidden: true },
+        b('rtl', 'rtl', 'راست‌چین', () => UI.cycleRtl()),
+        b('bigger', 'sizeUp', 'بزرگ‌کردن متن', () => UI.bumpFont(1)),
+        b('smaller', 'sizeDown', 'کوچک‌کردن متن', () => UI.bumpFont(-1)),
+        b('hide', 'eye', 'پنهان/نمایش هایلایت‌ها و طراحی‌ها', () => UI.toggleHideAnnotations())
+      )),
+      b('more', 'moreV', 'ابزارهای بیشتر', () => {
+        el.dockExtra.hidden = !el.dockExtra.hidden;
+        el.dockBtn.more.classList.toggle('on', !el.dockExtra.hidden);
+      })
     );
     el.tools = h('div', { class: 'tools', hidden: true, onmousedown: keepSelection });
     el.layer.append(el.dock, el.tools);
@@ -184,12 +220,12 @@
   UI.setMode = function (mode) {
     if (UI.mode === mode) return;
     if (UI.mode === 'draw') D.disable();
-    if (UI.mode === 'divider') el.guide.hidden = true;
+    if (UI.mode === 'divider' || UI.mode === 'bookmark') el.guide.hidden = true;
     UI.mode = mode;
     const html = document.documentElement;
     if (mode === 'none') html.removeAttribute('data-csr-mode');
     else html.setAttribute('data-csr-mode', mode);
-    for (const k of ['pen', 'divider']) el.dockBtn[k].classList.toggle('on', (k === 'pen' ? 'draw' : k) === mode);
+    for (const k of ['pen', 'divider', 'bookmark']) el.dockBtn[k].classList.toggle('on', (k === 'pen' ? 'draw' : k) === mode);
     el.tools.textContent = '';
     el.tools.hidden = mode === 'none';
     hideSelectionToolbar();
@@ -200,8 +236,84 @@
     } else if (mode === 'divider') {
       buildDividerTools();
       UI.toast('بین پاراگراف‌ها کلیک کن تا خط جداکننده اضافه شود');
+    } else if (mode === 'bookmark') {
+      buildBookmarkTools();
+      UI.toast('جایی که می‌خواهی نشانک بگذاری کلیک کن');
     }
   };
+
+  const bookmarkOpts = { label: '' };
+
+  function patternChips(current, onPick) {
+    const box = h(
+      'div',
+      { class: 'patterns' },
+      CSR.PATTERNS.map((p) => {
+        const b = h(
+          'button',
+          {
+            class: 'pattern' + (p.id === current ? ' on' : ''),
+            title: p.label,
+            onclick: (e) => {
+              box.querySelectorAll('.pattern').forEach((x) => x.classList.remove('on'));
+              e.currentTarget.classList.add('on');
+              onPick(p.id);
+            },
+          },
+          h('span', { class: 'pattern-fill' }),
+          h('span', { class: 'pattern-name' }, p.label)
+        );
+        b.firstChild.innerHTML = CSR.patternFill(p.id, 14); // generated SVG
+        return b;
+      })
+    );
+    return box;
+  }
+  UI.patternChips = patternChips;
+
+  function buildBookmarkTools() {
+    const label = h('input', {
+      class: 'input',
+      dir: 'auto',
+      placeholder: 'اسم نشانک (اختیاری)، مثلاً «تا اینجا خواندم»',
+      value: bookmarkOpts.label,
+      oninput: (e) => (bookmarkOpts.label = e.target.value),
+      onkeydown: (e) => e.stopPropagation(),
+    });
+    el.tools.append(
+      h('div', { class: 'tools-title' }, 'نشانک'),
+      patternChips(CSR.settings.bookmarkPattern, (id) => CSR.store.patchSettings({ bookmarkPattern: id })),
+      label,
+      h('div', { class: 'hint' }, 'بالا یا پایین یک پاراگراف کلیک کن. نشانک‌ها در «فهرست» هم می‌آیند.'),
+      h('div', { class: 'tool-row' }, h('button', { class: 'tool-btn primary', icon: 'check', title: 'تمام (Esc)', onclick: () => UI.setMode('none') }))
+    );
+  }
+
+  function openBookmarkPopover(a, rect) {
+    popoverFor = a.id;
+    const p = el.popover;
+    p.textContent = '';
+    const label = h('input', {
+      class: 'input',
+      dir: 'auto',
+      placeholder: 'اسم نشانک',
+      oninput: (e) => AN.update(a.id, { label: e.target.value }),
+      onkeydown: (e) => e.stopPropagation(),
+    });
+    label.value = a.label || '';
+    p.append(
+      h('div', { class: 'tools-title' }, 'نشانک'),
+      patternChips(a.pattern, (id) => AN.update(a.id, { pattern: id })),
+      label,
+      h(
+        'div',
+        { class: 'pop-row end' },
+        h('button', { class: 'sel-btn danger', icon: 'trash', title: 'حذف نشانک', onclick: () => (AN.remove(a.id), closePopover()) }),
+        h('button', { class: 'sel-btn primary', icon: 'check', title: 'بستن', onclick: closePopover })
+      )
+    );
+    placePopover(rect);
+  }
 
   function toolButton(tool, icon, title) {
     return h('button', {
@@ -343,7 +455,7 @@
   function dividerTarget(e) {
     const target = e.target;
     const msg = dom.messageOf(target);
-    if (!msg || target.closest('.csr-divider')) return null;
+    if (!msg || target.closest('.csr-divider, .csr-bookmark')) return null;
     const block = dom.blockFor(target, msg);
     if (!block) return null;
     const r = block.getBoundingClientRect();
@@ -415,6 +527,18 @@
         h('span', { class: 'sep' }),
         btn('quote', 'نقل‌قول / کوت (Alt+Q)', () => act(() => AN.toggleBlockOnSelection('quote'))),
         btn('note', 'یادداشت (Alt+N)', () => UI.noteOnSelection()),
+        btn('book', 'معنی کلمه (دیکشنری)', () => {
+          const s = window.getSelection();
+          const r = s.rangeCount ? s.getRangeAt(0).getBoundingClientRect() : null;
+          const w = s.toString().trim();
+          hideSelectionToolbar();
+          if (w) CSR.dict.lookup(w, r);
+        }),
+        btn('speaker', 'خواندن با صدا', () => {
+          const s = AN.selectionInMessage();
+          hideSelectionToolbar();
+          if (s) CSR.tts.speakRange(s.range);
+        }),
         btn('more', 'بیشتر', () => {
           el.more.hidden = !el.more.hidden;
         })
@@ -453,6 +577,7 @@
     const tb = el.sel.getBoundingClientRect();
     let top = r.top - tb.height - 10;
     if (top < 8) top = r.bottom + 10;
+    top = Math.max(8, Math.min(top, window.innerHeight - tb.height - 8));
     let left = r.left + r.width / 2 - tb.width / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - tb.width - 8));
     el.sel.style.top = top + 'px';
@@ -483,14 +608,12 @@
 
   function closePopover() {
     if (!el.popover || el.popover.hidden) return;
+    if (el.popover.contains(shadow.activeElement)) shadow.activeElement.blur();
     el.popover.hidden = true;
     const id = popoverFor;
     popoverFor = null;
     const a = id && AN.get(id);
-    if (a && a.kind === 'mark') {
-      const st = a.style || {};
-      if (!Object.values(st).some(Boolean) && !(a.note && a.note.trim())) AN.remove(a.id);
-    }
+    if (a && a.kind === 'mark' && AN.isEmptyMark(a)) AN.remove(a.id);
   }
   UI.closePopover = closePopover;
 
@@ -536,10 +659,47 @@
       },
     });
     note.value = a.note || '';
+    const tagBox = h('div', { class: 'tags' });
+    const renderTags = () => {
+      tagBox.textContent = '';
+      const cur = AN.get(a.id)?.tags || [];
+      for (const t of cur) {
+        tagBox.append(
+          h('span', { class: 'tag' }, '#' + t, h('button', { class: 'tag-x', title: 'حذف برچسب', onclick: () => (AN.setTags(a.id, cur.filter((x) => x !== t)), renderTags()) }, '×'))
+        );
+      }
+      const input = h('input', {
+        class: 'tag-input',
+        dir: 'auto',
+        placeholder: cur.length ? '+' : '+ برچسب (مثلاً امتحان)',
+        onkeydown: (e) => {
+          e.stopPropagation();
+          if ((e.key === 'Enter' || e.key === ',' || e.key === '،') && e.target.value.trim()) {
+            e.preventDefault();
+            AN.setTags(a.id, [...cur, e.target.value.replace(/^#/, '')]);
+            renderTags();
+            tagBox.querySelector('.tag-input').focus();
+          }
+        },
+      });
+      const suggestions = [...new Set([...AN.allTags(), ...CSR.DEFAULT_TAGS])].filter((t) => !cur.includes(t)).slice(0, 6);
+      tagBox.append(input);
+      if (suggestions.length) {
+        tagBox.append(
+          h(
+            'div',
+            { class: 'tag-suggest' },
+            suggestions.map((t) => h('button', { class: 'chip small', onclick: () => (AN.setTags(a.id, [...cur, t]), renderTags()) }, '#' + t))
+          )
+        );
+      }
+    };
+    renderTags();
     p.append(
       h('div', { class: 'pop-row' }, swatches),
       h('div', { class: 'pop-row' }, fmt('bold', 'B', 'b'), fmt('italic', 'I', 'i'), fmt('underline', 'U', 'u'), fmt('strike', 'S', 's'), h('span', { class: 'sep' }), tcs),
       note,
+      tagBox,
       h(
         'div',
         { class: 'pop-row end' },
@@ -692,9 +852,22 @@
         )
       );
       body.append(filters);
+      const tags = AN.allTags();
+      if (tags.length) {
+        body.append(
+          h(
+            'div',
+            { class: 'chips' },
+            tags.map((t) =>
+              h('button', { class: 'chip tagchip' + (panelFilter === '#' + t ? ' on' : ''), onclick: () => ((panelFilter = panelFilter === '#' + t ? 'all' : '#' + t), renderPanel()) }, '#' + t)
+            )
+          )
+        );
+      }
       const list = AN.sorted().filter((a) => {
         if (panelFilter === 'all') return true;
         if (panelFilter === 'notes') return !!(a.note && a.note.trim());
+        if (panelFilter.startsWith('#')) return (a.tags || []).includes(panelFilter.slice(1));
         return a.kind === 'mark' && a.style && a.style.hl === panelFilter;
       });
       if (!list.length) {
@@ -775,7 +948,7 @@
         },
         h('span', { class: 'item-icon' }, d.icon),
         h('span', { class: 'item-text', dir: 'auto' }, d.text.length > 220 ? d.text.slice(0, 220) + '…' : d.text),
-        d.tags.length ? h('span', { class: 'item-tags' }, d.tags.join(' · ')) : null,
+        d.tags.length ? h('span', { class: 'item-tags' }, d.tags.join('، ')) : null,
         a.note && a.note.trim() ? h('span', { class: 'item-note', dir: 'auto' }, a.note) : null,
         orphan ? h('span', { class: 'item-tags warn' }, 'در صفحه پیدا نشد') : null
       ),
@@ -811,6 +984,7 @@
   function onSelectionDone(e) {
     if (fromUs(e) || UI.mode !== 'none') return;
     setTimeout(() => {
+      if (Date.now() < (UI.suppressToolbarUntil || 0)) return;
       const s = AN.selectionInMessage();
       if (!s || !CSR.settings.enabled) return hideSelectionToolbar();
       if (dom.isStreaming(s.msg)) return;
@@ -820,6 +994,23 @@
       }
       if (CSR.settings.selectionToolbar) showSelectionToolbar(s.range);
     }, 10);
+  }
+
+  /** Opens the editor of a divider/bookmark under `t`; true if there was one. */
+  function openExisting(t) {
+    const dv = t.closest && t.closest('.csr-divider');
+    if (dv) {
+      const a = AN.get(dv.getAttribute('data-csr-divider-id'));
+      if (a) openDividerPopover(a, dv.getBoundingClientRect());
+      return true;
+    }
+    const bm = t.closest && t.closest('.csr-bookmark');
+    if (bm) {
+      const a = AN.get(bm.getAttribute('data-csr-bookmark-id'));
+      if (a) openBookmarkPopover(a, bm.getBoundingClientRect());
+      return true;
+    }
+    return false;
   }
 
   function bindPageEvents() {
@@ -847,26 +1038,26 @@
       (e) => {
         if (fromUs(e) || !CSR.settings.enabled) return;
         const t = e.target;
-        if (UI.mode === 'divider') {
-          const dv = t.closest && t.closest('.csr-divider');
-          if (dv) {
-            e.preventDefault();
-            e.stopPropagation();
-            const a = AN.get(dv.getAttribute('data-csr-divider-id'));
-            if (a) openDividerPopover(a, dv.getBoundingClientRect());
-            return;
-          }
-          const target = dividerTarget(e);
-          if (!target) return;
+        const existing = openExisting(t);
+        if (UI.mode === 'divider' || UI.mode === 'bookmark') {
           e.preventDefault();
           e.stopPropagation();
+          if (existing) return;
+          const target = dividerTarget(e);
+          if (!target) return;
           if (dom.isStreaming(target.msg)) return UI.toast('صبر کن پاسخ کامل شود');
-          AN.addDivider(target.msg, target.block, target.pos, {
-            style: CSR.settings.dividerStyle,
-            color: dividerOpts.color,
-            label: dividerOpts.label,
-          });
-          dividerOpts.label = '';
+          if (UI.mode === 'divider') {
+            AN.addDivider(target.msg, target.block, target.pos, {
+              style: CSR.settings.dividerStyle,
+              color: dividerOpts.color,
+              label: dividerOpts.label,
+            });
+            dividerOpts.label = '';
+          } else {
+            AN.addBookmark(target.msg, target.block, target.pos, { pattern: CSR.settings.bookmarkPattern, label: bookmarkOpts.label });
+            bookmarkOpts.label = '';
+            UI.toast('نشانک گذاشته شد 🔖');
+          }
           const inp = el.tools.querySelector('input');
           if (inp) inp.value = '';
           return;
@@ -874,12 +1065,7 @@
         if (UI.mode !== 'none') return;
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed) return;
-        const dv = t.closest && t.closest('.csr-divider');
-        if (dv) {
-          const a = AN.get(dv.getAttribute('data-csr-divider-id'));
-          if (a) openDividerPopover(a, dv.getBoundingClientRect());
-          return;
-        }
+        if (existing) return;
         const m = t.closest && t.closest('.csr-m[data-csr-id]');
         if (m && !t.closest('a')) {
           const a = AN.get(m.getAttribute('data-csr-id'));
@@ -890,7 +1076,7 @@
     );
 
     document.addEventListener('mousemove', (e) => {
-      if (UI.mode !== 'divider') return;
+      if (UI.mode !== 'divider' && UI.mode !== 'bookmark') return;
       showGuide(fromUs(e) ? null : dividerTarget(e));
     });
   }

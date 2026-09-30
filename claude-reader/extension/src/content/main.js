@@ -12,6 +12,7 @@
   }
   await UI.init();
   UI.applySettings(CSR.settings);
+  CSR.study.init();
   AN.onChange(() => UI.refreshPanel());
 
   // ---------------------------------------------------------------------------
@@ -43,6 +44,8 @@
     A.markColumn(messages, s);
     let waiting = false;
     if (s.enabled) waiting = AN.sync(messages, isStable, forceAll);
+    CSR.focus.refresh(true);
+    if (forceAll || todo.length) CSR.toc.refresh();
     dirty.clear();
     forceAll = false;
     observer.takeRecords(); // drop the mutations we just made ourselves
@@ -89,12 +92,20 @@
     CSR.settings = s;
     A.apply(s);
     UI.applySettings(s);
+    CSR.ruler.applySettings(s);
+    CSR.study.applySettings(s);
+    if (prev.focusHideUser !== s.focusHideUser) CSR.focus.refresh(true);
+    if (prev.autoProgress !== s.autoProgress) CSR.toc.refresh();
     if (prev.enabled !== s.enabled) {
       if (!s.enabled) {
         AN.unplaceAll();
         A.clearRtl();
         UI.closePopover();
         UI.hideSelectionToolbar();
+        CSR.tts.stop();
+        if (CSR.ruler.on) CSR.ruler.toggle(false);
+        if (CSR.focus.on) CSR.focus.toggle(false);
+        if (CSR.toc.open) CSR.toc.toggle(false);
         observer.takeRecords(); // our own unwrapping shouldn't mark messages as "changing"
       }
       scheduleSync(true, 0);
@@ -118,10 +129,15 @@
       UI.setMode('none');
       UI.closePopover();
       UI.hideSelectionToolbar();
+      CSR.tts.stop();
+      CSR.dict.close();
       AN.setConv(null);
       if (id) {
         const c = await CSR.store.getConv(id);
-        if (dom.getConversationId() === id) AN.setConv(c);
+        if (dom.getConversationId() === id) {
+          AN.setConv(c);
+          CSR.toc.onConvLoaded();
+        }
       }
       scheduleSync(true, 50);
     })();
@@ -154,9 +170,13 @@
       const s = CSR.settings;
       if (!s.enabled) return;
       if (e.key === 'Escape') {
-        if (UI.mode !== 'none') UI.setMode('none');
+        const busy = UI.mode !== 'none';
+        if (busy) UI.setMode('none');
         UI.closePopover();
         UI.hideSelectionToolbar();
+        CSR.dict.close();
+        if (!busy && CSR.tts.active) CSR.tts.stop();
+        else if (!busy && CSR.focus.on) CSR.focus.toggle(false);
         return;
       }
       if (UI.mode === 'draw' && (e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
@@ -165,7 +185,9 @@
         return;
       }
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      if (dom.isEditable(e.target) || e.composedPath().some((n) => n.id === 'csr-host')) return;
+      if (dom.isEditable(e.target)) return;
+      // typing in one of our own fields (inside the shadow root)
+      if (e.composedPath().some((n) => n.nodeType === 1 && /^(INPUT|TEXTAREA|SELECT)$/.test(n.tagName))) return;
 
       const hasSel = !!AN.selectionInMessage();
       const code = e.code;
@@ -182,6 +204,11 @@
       else if (hasSel && code === 'KeyQ') UI.act(() => AN.toggleBlockOnSelection('quote'));
       else if (hasSel && code === 'KeyN') UI.noteOnSelection();
       else if (code === 'KeyP') UI.setMode(UI.mode === 'draw' ? 'none' : 'draw');
+      else if (code === 'KeyG') UI.setMode(UI.mode === 'bookmark' ? 'none' : 'bookmark');
+      else if (code === 'KeyT') CSR.toc.toggle();
+      else if (code === 'KeyV') CSR.tts.toggle();
+      else if (code === 'KeyK') CSR.ruler.toggle();
+      else if (code === 'KeyZ') CSR.focus.toggle();
       else if (code === 'KeyL') UI.setMode(UI.mode === 'divider' ? 'none' : 'divider');
       else if (code === 'KeyM') UI.togglePanel();
       else if (code === 'KeyR') UI.cycleRtl();

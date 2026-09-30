@@ -40,6 +40,30 @@ await context.route('https://claude.ai/**', (route) => {
   return route.fulfill({ body: MOCK, contentType: 'text/html', headers: { 'content-security-policy': CSP } });
 });
 
+// dictionary APIs: fixed answers so the test doesn't depend on the network
+await context.route('https://api.mymemory.translated.net/**', (route) =>
+  route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      responseData: { translatedText: 'همگام‌سازی کردن' },
+      matches: [{ translation: 'هماهنگ کردن', match: 0.9 }, { translation: 'همزمان کردن', match: 0.8 }],
+    }),
+  })
+);
+await context.route('https://api.dictionaryapi.dev/**', (route) =>
+  route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify([
+      {
+        word: 'synchronize',
+        phonetic: '/ˈsɪŋkrənaɪz/',
+        phonetics: [],
+        meanings: [{ partOfSpeech: 'verb', definitions: [{ definition: 'Cause to occur or operate at the same time or rate.', example: 'soldiers synchronizing their steps' }] }],
+      },
+    ]),
+  })
+);
+
 const page = await context.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -265,6 +289,142 @@ ok(streamDir === 'rtl', 'streamed message gets RTL');
 ok(JSON.stringify(await counts()) === JSON.stringify(before), 'annotations intact after streaming');
 
 // ---------------------------------------------------------------------------
+console.log('Bookmarks, tags, focus, ruler, TOC, resume, TTS, dictionary, study timer');
+await page.keyboard.press('Alt+G');
+const pbox = await page.locator('.standard-markdown p').nth(2).boundingBox();
+await page.locator('#csr-host .tools input').fill('تا اینجا خواندم');
+await page.mouse.click(pbox.x + 120, pbox.y + pbox.height - 3);
+ok((await page.locator('.csr-bookmark').count()) === 1, 'bookmark ribbon inserted');
+ok((await page.locator('.csr-bookmark svg pattern').count()) === 1, 'bookmark uses an inline SVG pattern (no data: image)');
+ok((await page.locator('.csr-bookmark .csr-bm-label').textContent()) === 'تا اینجا خواندم', 'bookmark label');
+await page.keyboard.press('Escape');
+await page.locator('.csr-bookmark').scrollIntoViewIfNeeded();
+await shot('11-bookmark');
+
+// tags on a highlight
+await page.locator('.csr-hl-blue').first().click();
+await page.locator('#csr-host .popover .tag-input').fill('امتحان');
+await page.locator('#csr-host .popover .tag-input').press('Enter');
+ok((await page.locator('#csr-host .popover .tag').count()) === 1, 'tag added to highlight');
+await page.locator('#csr-host .popover .sel-btn.primary').click();
+await page.keyboard.press('Alt+M');
+ok((await page.locator('#csr-host .panel .chip.tagchip').count()) === 1, 'panel offers a tag filter');
+await page.locator('#csr-host .panel .chip.tagchip').click();
+ok((await page.locator('#csr-host .panel .item').count()) === 1, 'tag filter shows only tagged items');
+await page.keyboard.press('Alt+M');
+
+// focus mode
+await page.keyboard.press('Alt+Z');
+const hidden = await page.evaluate(() => ({
+  nav: getComputedStyle(document.querySelector('nav')).display,
+  composer: getComputedStyle(document.querySelector('.composer')).display,
+  actions: getComputedStyle(document.querySelector('.actions')).display,
+  msg: getComputedStyle(document.querySelector('.font-claude-response')).display,
+}));
+ok(hidden.nav === 'none' && hidden.composer === 'none' && hidden.actions === 'none' && hidden.msg !== 'none', 'focus mode hides sidebar, composer, buttons; keeps messages');
+await shot('12-focus');
+await page.keyboard.press('Escape');
+ok(await page.evaluate(() => getComputedStyle(document.querySelector('nav')).display !== 'none'), 'Esc leaves focus mode');
+
+// reading ruler
+await page.keyboard.press('Alt+K');
+await page.mouse.move(640, 300);
+await page.waitForTimeout(100);
+const edges = await page.locator('#csr-host .ruler-edge').count();
+ok(edges === 2 && (await page.locator('#csr-host .ruler-edge pattern').count()) === 2, 'ruler with two patterned edges');
+const top1 = await page.locator('#csr-host .ruler-edge').first().evaluate((e) => e.style.top);
+await page.mouse.move(640, 420);
+await page.waitForTimeout(100);
+const top2 = await page.locator('#csr-host .ruler-edge').first().evaluate((e) => e.style.top);
+ok(top1 !== top2, 'ruler follows the mouse');
+await shot('13-ruler');
+await page.keyboard.press('Alt+K');
+
+// table of contents + progress
+await page.keyboard.press('Alt+T');
+const tocItems = await page.locator('#csr-host .toc .toc-item').count();
+ok(tocItems >= 5, 'TOC lists questions and sections (' + tocItems + ')');
+ok((await page.locator('#csr-host .toc .toc-bm').count()) === 1, 'TOC lists the bookmark');
+await page.locator('#csr-host .toc .toc-check').first().check();
+await page.waitForTimeout(300);
+const stat = await page.locator('#csr-host .toc .toc-stat').textContent();
+ok(/٪/.test(stat) && !stat.startsWith('۰٪'), 'progress updates after ticking a section: ' + stat);
+await shot('14-toc');
+
+// reading position: scroll to the end, wait for it to be saved, go to top, reload
+await page.evaluate(() => document.querySelector('.scroller').scrollTo(0, 99999));
+await page.waitForTimeout(2200);
+await page.evaluate(() => document.querySelector('.scroller').scrollTo(0, 0));
+await page.waitForTimeout(400);
+await page.reload();
+await page.waitForSelector('#csr-host', { state: 'attached' });
+await page.waitForTimeout(2600);
+ok(await page.locator('#csr-host .resume').isVisible(), '"continue where you left off" button after reload');
+await shot('15-resume');
+await page.locator('#csr-host .resume-go').click();
+await page.waitForTimeout(900);
+ok(await page.evaluate(() => document.querySelector('.scroller').scrollTop > 100), 'resume scrolls down to the last position');
+ok((await counts()).divider === 1 && (await page.locator('.csr-bookmark').count()) === 1, 'bookmark restored after reload');
+await page.keyboard.press('Alt+T');
+ok(await page.locator('#csr-host .toc .toc-check').first().isChecked(), 'read state restored after reload');
+await page.keyboard.press('Alt+T');
+
+// text to speech (headless Chromium may have no voices: accept a player or a clear message)
+await page.locator('.standard-markdown p', { hasText: 'In English' }).scrollIntoViewIfNeeded();
+await page.waitForTimeout(400);
+await select('useEffect lets you synchronize');
+await page.locator('#csr-host .sel-toolbar .sel-btn[title="خواندن با صدا"]').click();
+await page.waitForTimeout(300);
+const ttsState = await page.evaluate(() => ({
+  player: !!document.getElementById('csr-host').shadowRoot.querySelector('.tts-player'),
+  hl: CSS.highlights.has('csr-tts'),
+  toast: document.getElementById('csr-host').shadowRoot.querySelector('.toast').textContent,
+}));
+ok(ttsState.player || /نتوانست|خواندن/.test(ttsState.toast), 'text to speech starts (player=' + ttsState.player + ', highlight=' + ttsState.hl + ')');
+if (ttsState.player) await shot('16-tts');
+await page.keyboard.press('Escape');
+await page.keyboard.press('Escape');
+
+// dictionary
+await page.evaluate(() => {
+  const p = [...document.querySelectorAll('.standard-markdown p')].find((x) => x.textContent.startsWith('In English'));
+  const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = w.nextNode())) {
+    const i = n.nodeValue.indexOf('synchronize');
+    if (i >= 0) {
+      const r = document.createRange();
+      r.setStart(n, i);
+      r.setEnd(n, i + 'synchronize'.length);
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+      p.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      return;
+    }
+  }
+});
+await page.locator('#csr-host .dict-card').waitFor();
+await page.locator('#csr-host .dict-card .dict-chip, #csr-host .dict-card .dict-empty').first().waitFor({ timeout: 20000 }).catch(() => {});
+const faChips = await page.locator('#csr-host .dict-card .dict-chip').count();
+ok(faChips > 0, 'dictionary shows Persian meanings (' + faChips + ')');
+await shot('17-dictionary');
+if (faChips) {
+  await page.locator('#csr-host .dict-card .btn-text').first().click();
+  await page.waitForTimeout(300);
+}
+await page.keyboard.press('Escape');
+
+// study timer + pomodoro (the background worker runs the clock)
+ok(await page.locator('#csr-host .study-pill').isVisible(), 'study time pill visible');
+await page.locator('#csr-host .study-pill').click();
+ok(await page.locator('#csr-host .study-card').isVisible(), 'study card opens');
+await page.locator('#csr-host .study-card .btn-main').click();
+await page.waitForTimeout(800);
+const pillText = await page.locator('#csr-host .study-pill').textContent();
+ok(/[۰-۹]{2}:[۰-۹]{2}/.test(pillText) && pillText.includes('مطالعه'), 'pomodoro running: ' + pillText);
+await shot('18-study-card');
+
+// ---------------------------------------------------------------------------
 console.log('Theme & settings (via popup page)');
 const popup = await context.newPage();
 await popup.goto(`chrome-extension://${extId}/src/popup/popup.html`);
@@ -300,6 +460,29 @@ await popup.locator('.theme', { hasText: 'کاغذی' }).click();
 await popup.waitForTimeout(500);
 ok(await page.evaluate(() => document.documentElement.getAttribute('data-mode') === 'light'), 'light theme restores light mode');
 
+// pomodoro pop-up: simulate the moment the worker ends a focus phase
+await popup.evaluate(async () => {
+  const { pomo } = await chrome.storage.local.get('pomo');
+  await chrome.storage.local.set({
+    pomo: { ...pomo, phase: 'short', running: true, endsAt: Date.now() + 300000, total: 300000, cycle: 1, event: { id: 'test-1', ended: 'focus', next: 'short', at: Date.now(), auto: true } },
+  });
+});
+await page.bringToFront();
+await page.waitForTimeout(700);
+ok(await page.locator('#csr-host .pomo-overlay').isVisible(), 'Termeh pop-up appears when a focus phase ends');
+ok((await page.locator('#csr-host .pomo-overlay h2').textContent()).includes('مطالعه کردی'), 'pop-up says to take a break');
+await page.waitForTimeout(400);
+await shot('19-pomodoro-popup');
+await page.locator('#csr-host .pomo-overlay .pomo-primary').click();
+ok(!(await page.locator('#csr-host .pomo-overlay').count()), 'pop-up closes');
+const bg = await popup.evaluate(() => chrome.runtime.sendMessage({ csr: 'pomo', cmd: 'stop' }));
+ok(bg && bg.phase === 'idle', 'background worker handles pomodoro commands');
+
+await popup.locator('.tab[data-tab="study"]').click();
+await popup.screenshot({ path: path.join(outDir, '20-popup-study.png') });
+await popup.locator('.tab[data-tab="read"]').click();
+await popup.screenshot({ path: path.join(outDir, '21-popup-read.png') });
+
 // library
 const lib = await context.newPage();
 await lib.goto(`chrome-extension://${extId}/src/library/library.html`);
@@ -309,6 +492,12 @@ await lib.locator('#q').fill('امتحان');
 ok((await lib.locator('.conv').count()) === 1, 'library search works');
 await lib.locator('#q').fill('');
 await lib.screenshot({ path: path.join(outDir, '10-library.png'), fullPage: true });
+await lib.locator('.tab[data-tab="vocab"]').click();
+ok((await lib.locator('.vocab').count()) >= 1 || faChips === 0, 'saved word appears in the vocabulary list');
+await lib.screenshot({ path: path.join(outDir, '22-library-vocab.png') });
+await lib.locator('.tab[data-tab="stats"]').click();
+ok((await lib.locator('.bar-col').count()) === 14, 'study stats chart has 14 days');
+await lib.screenshot({ path: path.join(outDir, '23-library-stats.png') });
 
 // disable everything
 await popup.locator('#enabled').evaluate((el) => el.click());
