@@ -10,8 +10,13 @@
     user: '[data-testid="user-message"]',
     streaming: '[data-is-streaming="true"]',
     markdown: '.standard-markdown, .progressive-markdown',
-    editor: 'div.ProseMirror, [contenteditable="true"]',
+    editor: 'div.ProseMirror, [contenteditable="true"], textarea',
     ui: '[data-csr-ui]',
+    // Fallback when Claude's own classes aren't found (e.g. claude.ai/code,
+    // or after a redesign): rendered-markdown containers and message roles.
+    generic:
+      '[data-message-author-role], [data-role="user"], [data-role="assistant"], [data-testid*="message" i], div[class*="user-message" i], div[class*="human-message" i], div[class*="markdown" i], div[class*="prose" i], article[class*="prose" i], section[class*="markdown" i]',
+    notMessage: 'nav, aside, header, footer, [role="navigation"], [contenteditable="true"], [contenteditable=""], form, pre, code, [data-csr-ui]',
   });
   SEL.message = SEL.assistant + ', ' + SEL.user;
 
@@ -22,35 +27,74 @@
   const BLOCK_SEL = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, table, ul, ol, hr';
   CSR.BLOCK_SEL = BLOCK_SEL;
 
-  const dom = (CSR.dom = {});
+  const dom = (CSR.dom = { mode: 'none' });
 
+  /** Conversation key from the URL: /chat/<uuid> or /code/session_<id>. */
   dom.getConversationId = function () {
-    const m = location.pathname.match(/\/chat\/([0-9a-zA-Z_-]{8,})/);
-    return m ? m[1] : null;
+    const m = location.pathname.match(/\/(chat|code)\/(?:session_)?([0-9a-zA-Z_-]{8,})/);
+    if (!m) return null;
+    return m[1] === 'code' ? 'code-' + m[2] : m[2];
   };
 
-  /** All message roots (user + assistant) in document order, outermost only. */
+  function outermost(list, sel) {
+    return list.filter((el) => !el.parentElement || !el.parentElement.closest(sel));
+  }
+
+  const meaningful = (el) =>
+    el.hasAttribute('data-message-author-role') ||
+    el.hasAttribute('data-role') ||
+    /user-message|human-message/i.test(typeof el.className === 'string' ? el.className : '') ||
+    !!el.querySelector('p, li, h1, h2, h3, h4, pre, blockquote, table') ||
+    ((el.textContent || '').trim().length >= 40 && !el.querySelector('button, input'));
+
+  function genericMessages() {
+    const cands = Array.from(document.querySelectorAll(SEL.generic)).filter(
+      (el) => !el.closest(SEL.notMessage) && /\S/.test(el.textContent || '') && meaningful(el)
+    );
+    const set = new Set(cands);
+    // the innermost ones are the actual message bodies
+    return cands.filter((el) => !Array.from(el.querySelectorAll(SEL.generic)).some((d) => set.has(d)));
+  }
+
+  function roleGuess(el) {
+    if (el.matches(SEL.user)) return 'user';
+    if (el.closest('[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message" i], [data-testid*="human" i], [class*="user-message" i], [class*="human-message" i]')) return 'user';
+    return 'assistant';
+  }
+
+  /** All message roots (user + assistant) in document order. Also tags them
+   * with data-csr-msg so CSS and messageOf() can find them. */
   dom.getMessages = function () {
-    const all = Array.from(document.querySelectorAll(SEL.message));
-    return all.filter((el) => !el.parentElement || !el.parentElement.closest(SEL.message));
+    let list = outermost(Array.from(document.querySelectorAll(SEL.message)), SEL.message);
+    dom.mode = list.length ? 'known' : 'none';
+    if (!document.querySelector(SEL.assistant)) {
+      // Claude's answer class isn't on this page: find answers generically and
+      // keep any user messages we do recognise
+      const users = list;
+      const generic = genericMessages().filter((g) => !users.some((u) => u.contains(g) || g.contains(u)));
+      list = users.concat(generic).sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+      if (generic.length) dom.mode = 'generic';
+    }
+    for (const el of list) {
+      const role = dom.mode === 'known' ? (el.matches(SEL.user) ? 'user' : 'assistant') : roleGuess(el);
+      if (el.getAttribute('data-csr-msg') !== role) el.setAttribute('data-csr-msg', role);
+    }
+    return list;
   };
 
-  dom.messageOf = function (node) {
+  /** The message containing `node`. With `refresh`, re-scans the page first
+   * if the node isn't in a known message yet (e.g. a brand-new answer). */
+  dom.messageOf = function (node, refresh) {
     const el = node && (node.nodeType === 1 ? node : node.parentElement);
     if (!el) return null;
-    let m = el.closest(SEL.message);
-    if (!m) return null;
-    // outermost
-    let up = m.parentElement && m.parentElement.closest(SEL.message);
-    while (up) {
-      m = up;
-      up = m.parentElement && m.parentElement.closest(SEL.message);
-    }
-    return m;
+    const m = el.closest('[data-csr-msg]');
+    if (m || !refresh) return m;
+    dom.getMessages();
+    return el.closest('[data-csr-msg]');
   };
 
   dom.roleOf = function (msg) {
-    return msg.matches(SEL.user) ? 'user' : 'assistant';
+    return msg.getAttribute('data-csr-msg') || (msg.matches(SEL.user) ? 'user' : 'assistant');
   };
 
   dom.isStreaming = function (msg) {

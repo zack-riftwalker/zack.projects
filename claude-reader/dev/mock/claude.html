@@ -38,6 +38,23 @@
       .actions button { font-size: 12px; }
       .composer { position: sticky; bottom: 0; max-width: 768px; margin: 0 auto; padding: 12px 16px; }
       .ProseMirror { background: hsl(var(--bg-000)); border: 1px solid hsl(var(--border-300)); border-radius: 14px; padding: 12px; min-height: 40px; }
+      /* ---- "v3" variant used for /code/…: different markup and variable names ---- */
+      html.v3 { --surface-page: #141413; --surface-raised: oklch(0.27 0.004 90); --text-primary: #f0eee6; --text-secondary: 50 6% 68%; --border-subtle: #34332f; }
+      html.v3.light { --surface-page: #faf9f5; --surface-raised: oklch(0.97 0.004 90); --text-primary: #1f1e1d; --text-secondary: 50 4% 40%; --border-subtle: #e2dfd6; }
+      html.v3 body { background: var(--surface-page); color: var(--text-primary); }
+      .v3 .shell { display: flex; height: 100vh; }
+      .v3 .side-rail { width: 220px; background: var(--surface-raised); padding: 14px; }
+      .v3 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+      .v3 .scroll-area { flex: 1; overflow-y: auto; background: #1a1a19; } /* hard-coded: no variable */
+      .v3.light .scroll-area { background: #f4f2ec; }
+      .v3 .transcript { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; display: flex; flex-direction: column; gap: 18px; }
+      .v3 .turn-user .bubble { background: var(--surface-raised); border-radius: 12px; padding: 10px 14px; white-space: pre-wrap; align-self: flex-end; }
+      .v3 .turn-user { display: flex; justify-content: flex-end; }
+      .v3 .markdown { line-height: 1.7; }
+      .v3 .markdown p { margin: 0 0 10px; }
+      .v3 .tool-card { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 8px 12px; color: var(--text-secondary); }
+      .v3 .composer-wrap { padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--surface-page); }
+      .v3 textarea { width: 100%; min-height: 50px; background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 12px; }
     </style>
   </head>
   <body>
@@ -108,7 +125,58 @@
           'div',
           { 'data-is-streaming': String(!!streaming), className: 'group relative' },
           e('div', { className: 'font-claude-response' }, e('div', { className: 'standard-markdown grid-cols-1 grid gap-2.5' }, m.blocks.map((b, i) => e(Block, { key: i, b })))),
-          e('div', { className: 'actions' }, e('button', null, 'Copy'), e('button', null, 'Retry'))
+          e('div', { className: 'actions', role: 'group', 'aria-label': 'Message actions' }, e('button', null, 'Copy'), e('button', null, 'Retry'))
+        );
+      }
+
+      const CODE_TURNS = [
+        { role: 'user', text: 'یک تابع پایتون بنویس که فایل CSV را بخواند.' },
+        {
+          role: 'assistant',
+          blocks: [
+            ['p', 'حتماً. برای خواندن فایل CSV در پایتون بهتر است از ماژول استاندارد csv استفاده کنیم؛ این ماژول نیاز به نصب ندارد.'],
+            ['tool', 'Read file: data/users.csv'],
+            ['pre', 'import csv\n\ndef read_rows(path):\n    with open(path, newline="") as f:\n        return list(csv.DictReader(f))'],
+            ['p', 'این تابع هر سطر را به صورت یک دیکشنری برمی‌گرداند و کلیدها همان عنوان ستون‌ها هستند.'],
+            ['ul', ['اگر فایل بزرگ است، به‌جای list از حلقه استفاده کنید.', 'برای encoding فارسی، پارامتر encoding را utf-8 بگذارید.']],
+          ],
+        },
+      ];
+
+      function CodeApp() {
+        const [gen, setGen] = React.useState(0);
+        React.useEffect(() => {
+          window.__remount = () => setGen((g) => g + 1);
+          document.title = 'Claude Code';
+        }, []);
+        const block = ([tag, content], i) => {
+          if (tag === 'ul') return e('ul', { key: i }, content.map((t, j) => e('li', { key: j }, t)));
+          if (tag === 'pre') return e('pre', { key: i }, e('code', null, content));
+          if (tag === 'tool') return e('div', { key: i, className: 'tool-card' }, content);
+          return e(tag, { key: i }, content);
+        };
+        return e(
+          'div',
+          { className: 'shell' },
+          e('div', { className: 'side-rail' }, e('b', null, 'Claude Code'), e('div', null, 'Sessions')),
+          e(
+            'div',
+            { className: 'main' },
+            e(
+              'div',
+              { className: 'scroll-area' },
+              e(
+                'div',
+                { className: 'transcript', key: gen },
+                CODE_TURNS.map((t, i) =>
+                  t.role === 'user'
+                    ? e('div', { key: i, className: 'turn-user', 'data-role': 'user' }, e('div', { className: 'bubble' }, t.text))
+                    : e('div', { key: i, className: 'turn-assistant' }, e('div', { className: 'markdown prose' }, t.blocks.map(block)))
+                )
+              )
+            ),
+            e('div', { className: 'composer-wrap' }, e('textarea', { placeholder: 'Reply…' }))
+          )
         );
       }
 
@@ -148,7 +216,16 @@
           )
         );
       }
-      ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+      if (location.pathname.startsWith('/code/')) {
+        const h = document.documentElement;
+        h.removeAttribute('data-theme');
+        h.removeAttribute('data-mode');
+        h.removeAttribute('data-color-version');
+        h.className = 'v3 dark';
+        ReactDOM.createRoot(document.getElementById('root')).render(e(CodeApp));
+      } else {
+        ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+      }
     </script>
   </body>
 </html>

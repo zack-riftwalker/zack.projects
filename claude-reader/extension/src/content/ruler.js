@@ -11,7 +11,7 @@
   let raf = 0;
 
   function measureLine() {
-    const p = document.querySelector('.font-claude-response p, [data-testid="user-message"] p');
+    const p = document.querySelector('[data-csr-msg] p');
     const lh = p ? parseFloat(getComputedStyle(p).lineHeight) : NaN;
     lineH = Number.isFinite(lh) && lh > 10 ? lh : 28;
   }

@@ -329,7 +329,7 @@
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
     const range = sel.getRangeAt(0);
-    const msg = dom.messageOf(range.startContainer);
+    const msg = dom.messageOf(range.startContainer, true);
     if (!msg || dom.isEditable(range.startContainer)) return null;
     const r = range.cloneRange();
     if (!msg.contains(range.endContainer)) r.setEnd(msg, msg.childNodes.length);

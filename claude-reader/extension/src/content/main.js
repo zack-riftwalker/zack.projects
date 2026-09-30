@@ -44,7 +44,8 @@
     A.markColumn(messages, s);
     let waiting = false;
     if (s.enabled) waiting = AN.sync(messages, isStable, forceAll);
-    CSR.focus.refresh(true);
+    CSR.themeFix.sync(messages, todo, isStable);
+    CSR.focus.refresh(forceAll || todo.length > 0);
     if (forceAll || todo.length) CSR.toc.refresh();
     dirty.clear();
     forceAll = false;
@@ -82,7 +83,7 @@
     if (s.enabled && !document.documentElement.hasAttribute('data-csr-on')) A.apply(s);
     A.syncMode(s);
     UI.applySettings(s);
-  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-csr-on'] });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-csr-on', 'class', 'data-theme', 'data-color-scheme'] });
 
   // ---------------------------------------------------------------------------
   // settings
@@ -227,6 +228,7 @@
     if (!msg || !msg.csr) return;
     if (msg.csr === 'openPanel') UI.togglePanel(true);
     else if (msg.csr === 'mode') UI.setMode(msg.mode);
+    else if (msg.csr === 'diag') reply({ report: CSR.diag() });
     else if (msg.csr === 'stats') {
       const conv = AN.conv();
       reply({ convId, count: conv ? conv.annotations.length : 0, title: conv ? conv.title : '' });

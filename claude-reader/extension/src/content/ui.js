@@ -72,6 +72,7 @@
     prev: svg('<path d="M19 5 9 12l10 7z" fill="currentColor"/><path d="M5 5v14"/>'),
     next: svg('<path d="m5 5 10 7-10 7z" fill="currentColor"/><path d="M19 5v14"/>'),
     skip: svg('<path d="m5 4 10 8-10 8z" fill="currentColor"/><path d="M19 5v14"/>'),
+    minimize: svg('<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="m14 10 7-7"/><path d="m3 21 7-7"/>'),
     moreV: svg('<circle cx="12" cy="5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="19" r="1.3" fill="currentColor"/>'),
   };
 
@@ -127,7 +128,8 @@
     const dark = isDark(s);
     host.toggleAttribute('data-dark', dark);
     el.layer.setAttribute('data-side', s.dockSide === 'left' ? 'left' : 'right');
-    el.dock.hidden = !(s.enabled && s.showDock);
+    el.dock.hidden = !(s.enabled && s.showDock) || !!s.dockCollapsed;
+    el.bubble.hidden = !(s.enabled && s.showDock && s.dockCollapsed);
     el.dockBtn.highlighter.classList.toggle('on', !!s.highlighterMode);
     el.dockBtn.highlighter.style.setProperty('--sw', swatch(s.activeHighlight));
     el.dockBtn.rtl.setAttribute('data-state', s.rtlMode);
@@ -157,6 +159,8 @@
     el.dock = h(
       'div',
       { class: 'dock', onmousedown: keepSelection },
+      b('collapse', 'minimize', 'جمع کردن نوار ابزار (به یک دایره‌ی کوچک که می‌شود جابه‌جایش کرد)', () => UI.setCollapsed(true)),
+      h('div', { class: 'dock-sep' }),
       b('highlighter', 'marker', 'حالت ماژیک: هر متنی را انتخاب کنی هایلایت می‌شود (Alt+H)', () => toggleHighlighter()),
       b('pen', 'pen', 'مداد و طراحی (Alt+P)', () => UI.setMode(UI.mode === 'draw' ? 'none' : 'draw')),
       b('divider', 'divider', 'خط جداکننده بین بخش‌ها (Alt+L)', () => UI.setMode(UI.mode === 'divider' ? 'none' : 'divider')),
@@ -185,7 +189,70 @@
     );
     el.tools = h('div', { class: 'tools', hidden: true, onmousedown: keepSelection });
     el.layer.append(el.dock, el.tools);
+    buildBubble();
   }
+
+  // ---------------------------------------------------------------------------
+  // collapsed dock: a small draggable circle
+
+  const LOGO =
+    '<svg viewBox="0 0 128 128" width="26" height="26" aria-hidden="true"><path d="M64 38c-10-8-24-10-38-8v58c14-2 28 0 38 8 10-8 24-10 38-8V30c-14-2-28 0-38 8z" fill="#fffaf5"/><path d="M64 38v58" stroke="#c2573a" stroke-width="5" stroke-linecap="round"/><rect x="34" y="46" width="22" height="9" rx="3" fill="#ffd43b"/><rect x="72" y="70" width="22" height="9" rx="3" fill="#8ce99a"/></svg>';
+  const BUBBLE = 46;
+  let bubblePos = null; // {x, y} as fractions of the window
+
+  function placeBubble() {
+    const maxX = window.innerWidth - BUBBLE - 6;
+    const maxY = window.innerHeight - BUBBLE - 6;
+    const x = bubblePos ? bubblePos.x * window.innerWidth : maxX - 12;
+    const y = bubblePos ? bubblePos.y * window.innerHeight : 72;
+    el.bubble.style.left = Math.max(6, Math.min(maxX, x)) + 'px';
+    el.bubble.style.top = Math.max(6, Math.min(maxY, y)) + 'px';
+  }
+
+  function buildBubble() {
+    el.bubble = h('button', { class: 'bubble', title: 'خوانا — کلیک: باز کردن نوار ابزار، کشیدن: جابه‌جا کردن', hidden: true });
+    el.bubble.innerHTML = LOGO; // static markup
+    let drag = null;
+    el.bubble.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      el.bubble.setPointerCapture(e.pointerId);
+      const r = el.bubble.getBoundingClientRect();
+      drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false };
+    });
+    el.bubble.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.sx;
+      const dy = e.clientY - drag.sy;
+      if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+      drag.moved = true;
+      el.bubble.classList.add('dragging');
+      bubblePos = { x: (drag.ox + dx) / window.innerWidth, y: (drag.oy + dy) / window.innerHeight };
+      placeBubble();
+    });
+    const end = () => {
+      if (!drag) return;
+      const moved = drag.moved;
+      drag = null;
+      el.bubble.classList.remove('dragging');
+      if (moved) chrome.storage.local.set({ bubblePos });
+      else UI.setCollapsed(false);
+    };
+    el.bubble.addEventListener('pointerup', end);
+    el.bubble.addEventListener('pointercancel', end);
+    el.layer.append(el.bubble);
+    chrome.storage.local.get('bubblePos').then((r) => {
+      if (r.bubblePos) bubblePos = r.bubblePos;
+      placeBubble();
+    });
+    window.addEventListener('resize', placeBubble);
+    placeBubble();
+  }
+
+  UI.setCollapsed = function (on) {
+    CSR.store.patchSettings({ dockCollapsed: !!on });
+    if (on) UI.toast('نوار ابزار جمع شد؛ روی دایره کلیک کن تا باز شود، یا بکشش هر جا خواستی');
+  };
 
   async function toggleHighlighter() {
     const s = await CSR.store.patchSettings({ highlighterMode: !CSR.settings.highlighterMode });

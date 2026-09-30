@@ -133,6 +133,7 @@
     persianListNumbers: false,
     // tools
     showDock: true,
+    dockCollapsed: false,
     dockSide: 'right',
     selectionToolbar: true,
     highlighterMode: false,

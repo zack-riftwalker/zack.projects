@@ -4,8 +4,8 @@
   const { SEL } = CSR;
   const A = (CSR.appearance = {});
 
-  const MSG = ':is(.font-claude-response, .font-claude-message)';
-  const USER = '[data-testid="user-message"]';
+  const MSG = ':is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"])';
+  const USER = ':is([data-testid="user-message"], [data-csr-msg="user"])';
 
   let styleEl = null;
   const faceRules = new Map(); // family -> css text
@@ -148,7 +148,8 @@
     return `
 ${target} { ${claudeVars(t)}
   --csr-t-bg: ${t.bg}; --csr-t-text: ${t.text}; --csr-t-heading: ${t.heading || t.text};
-  --csr-t-link: ${t.link || t.text}; --csr-t-accent: ${t.accent || t.link || t.text}; }
+  --csr-t-link: ${t.link || t.text}; --csr-t-accent: ${t.accent || t.link || t.text}; ${CSR.themeFix.baseVars(t)} }
+${CSR.themeFix.varCss(t)}
 html[data-csr-theme], html[data-csr-theme] body { background-color: ${t.bg} !important; color-scheme: ${t.dark ? 'dark' : 'light'}; }
 html[data-csr-theme] :is(${MSG}, ${USER}) { color: var(--csr-t-text) !important; }
 html[data-csr-theme] :is(${MSG}, ${USER}) :is(h1, h2, h3, h4, h5, h6, strong, b) { color: var(--csr-t-heading) !important; }
@@ -157,33 +158,9 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
 `;
   }
 
-  let modeFlips = 0;
-  let modeFlipWindow = 0;
-
-  /** Makes Claude's own light/dark mode follow the chosen theme, so its code
-   * blocks and widgets match. Gives up if Claude keeps switching it back. */
+  /** Makes Claude's own light/dark mode follow the chosen theme (see theme.js). */
   A.syncMode = function (settings) {
-    const html = document.documentElement;
-    const t = settings.enabled ? CSR.resolveTheme(settings) : null;
-    if (!t) {
-      if (html.hasAttribute('data-csr-orig-mode')) {
-        const orig = html.getAttribute('data-csr-orig-mode');
-        html.removeAttribute('data-csr-orig-mode');
-        if (orig) html.setAttribute('data-mode', orig);
-      }
-      return;
-    }
-    const want = t.dark ? 'dark' : 'light';
-    const cur = html.getAttribute('data-mode');
-    if (!cur || cur === want) return;
-    const now = Date.now();
-    if (now - modeFlipWindow > 10000) {
-      modeFlipWindow = now;
-      modeFlips = 0;
-    }
-    if (++modeFlips > 6) return; // Claude insists; leave it alone
-    if (!html.hasAttribute('data-csr-orig-mode')) html.setAttribute('data-csr-orig-mode', cur);
-    html.setAttribute('data-mode', want);
+    CSR.themeFix.syncMode(settings);
   };
 
   // ---------------------------------------------------------------------------

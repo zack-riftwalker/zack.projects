@@ -354,6 +354,32 @@
     }
   });
 
+  $('diagBtn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let text;
+    try {
+      const r = await chrome.tabs.sendMessage(tab.id, { csr: 'diag' });
+      text = r && r.report;
+    } catch (e) {
+      text = null;
+    }
+    if (!text) {
+      $('diagBtn').textContent = 'اول یک صفحه از claude.ai باز کن';
+      return;
+    }
+    const out = $('diagOut');
+    out.hidden = false;
+    out.value = text;
+    out.select();
+    try {
+      await navigator.clipboard.writeText(text);
+      $('diagBtn').textContent = '✓ کپی شد — برای سازنده بفرست';
+    } catch (e) {
+      document.execCommand('copy');
+      $('diagBtn').textContent = '✓ کپی شد';
+    }
+  });
+
   // keep in sync if settings change elsewhere (e.g. the dock's A+/A- buttons)
   CSR.store.onSettingsChanged((ns) => {
     if (JSON.stringify(ns) === JSON.stringify(s)) return;

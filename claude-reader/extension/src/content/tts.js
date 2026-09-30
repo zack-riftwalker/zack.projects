@@ -247,7 +247,7 @@
   };
 
   T.speakRange = function (range) {
-    const msg = dom.messageOf(range.startContainer);
+    const msg = dom.messageOf(range.startContainer, true);
     if (!msg) return;
     const items = [];
     for (const b of readableBlocks(msg)) {

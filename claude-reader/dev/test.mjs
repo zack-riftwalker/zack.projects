@@ -80,7 +80,7 @@ async function open(p) {
 async function select(text, n = 0) {
   await page.evaluate(
     ({ text, n }) => {
-      const w = document.createTreeWalker(document.querySelector('.column'), NodeFilter.SHOW_TEXT);
+      const w = document.createTreeWalker(document.querySelector('.column') || document.querySelector('.transcript'), NodeFilter.SHOW_TEXT);
       const nodes = [];
       let all = '';
       let node;
@@ -509,6 +509,90 @@ await popup.locator('#enabled').evaluate((el) => el.click());
 await page.waitForTimeout(900);
 const on = await counts();
 ok(JSON.stringify(on) === JSON.stringify(before), 'turning back on restores them ' + JSON.stringify(on));
+
+// ---------------------------------------------------------------------------
+console.log('Claude Code page (/code): generic messages, robust theme, focus, collapsed dock, diagnostics');
+const CODE = '/code/session_01TestSessionAbcdef';
+await page.goto('https://claude.ai' + CODE);
+await page.waitForSelector('.markdown');
+await page.waitForSelector('#csr-host', { state: 'attached' });
+await page.waitForTimeout(1500);
+ok((await page.locator('[data-csr-msg]').count()) === 2, 'messages found without Claude chat classes');
+ok((await page.locator('[data-csr-msg="user"]').count()) === 1, 'user message recognised');
+ok((await page.locator('.markdown p').first().getAttribute('dir')) === 'rtl', 'RTL works on the code page');
+await select('ماژول استاندارد csv');
+await page.locator('#csr-host .sel-toolbar .swatch').first().click();
+ok((await page.locator('.csr-hl-yellow').count()) === 1, 'highlight works on the code page');
+
+const setTheme = (id) => popup.evaluate(async (id) => {
+  const { settings } = await chrome.storage.sync.get('settings');
+  await chrome.storage.sync.set({ settings: { ...settings, theme: id } });
+}, id);
+const bgOf = (sel) => page.evaluate((sel) => getComputedStyle(document.querySelector(sel)).backgroundColor, sel);
+const lumOf = (rgb) => {
+  const [r, g, b] = rgb.match(/\d+/g).map(Number);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+};
+await setTheme('paper');
+await page.waitForTimeout(900);
+ok((await bgOf('.scroll-area')) === 'rgb(250, 249, 246)', 'light theme paints the reading area (hard-coded dark background): ' + (await bgOf('.scroll-area')));
+ok(lumOf(await bgOf('.side-rail')) > 0.6, 'light theme reaches the sidebar through discovered variables: ' + (await bgOf('.side-rail')));
+ok(lumOf(await page.evaluate(() => getComputedStyle(document.querySelector('.markdown p')).color)) < 0.3, 'text is dark on the light theme');
+ok(lumOf(await bgOf('.turn-user .bubble')) > 0.6, 'user bubble is light too');
+await shot('24-code-light');
+await setTheme('night');
+await page.waitForTimeout(900);
+ok((await bgOf('.scroll-area')) === 'rgb(30, 31, 36)', 'dark theme on the code page: ' + (await bgOf('.scroll-area')));
+ok(lumOf(await page.evaluate(() => getComputedStyle(document.querySelector('.markdown p')).color)) > 0.6, 'text is light on the dark theme');
+await shot('25-code-dark');
+await setTheme('paper');
+await page.waitForTimeout(700);
+
+await page.keyboard.press('Alt+Z');
+await page.waitForTimeout(300);
+const focusState = await page.evaluate(() => ({
+  composer: getComputedStyle(document.querySelector('.composer-wrap')).display,
+  msgVisible: [...document.querySelectorAll('[data-csr-msg]')].some((m) => {
+    const r = m.getBoundingClientRect();
+    return r.height > 0 && r.bottom > 0 && r.top < innerHeight;
+  }),
+}));
+ok(focusState.composer === 'none' && focusState.msgVisible, 'focus mode on the code page keeps the conversation visible');
+await shot('26-code-focus');
+await page.keyboard.press('Escape');
+
+// collapse the dock into a draggable bubble
+await page.locator('#csr-host .dock-btn[data-key="collapse"]').click();
+await page.waitForTimeout(400);
+ok(!(await page.locator('#csr-host .dock').isVisible()) && (await page.locator('#csr-host .bubble').isVisible()), 'dock collapses into a bubble');
+let bb = await page.locator('#csr-host .bubble').boundingBox();
+ok(bb.x > 1280 - 120 && bb.y < 150, 'bubble starts at the top right');
+await page.mouse.move(bb.x + 23, bb.y + 23);
+await page.mouse.down();
+await page.mouse.move(400, 300, { steps: 8 });
+await page.mouse.up();
+await page.waitForTimeout(300);
+bb = await page.locator('#csr-host .bubble').boundingBox();
+ok(Math.abs(bb.x + 23 - 400) < 3 && Math.abs(bb.y + 23 - 300) < 3, 'bubble can be dragged');
+await shot('27-bubble');
+await page.reload();
+await page.waitForSelector('#csr-host', { state: 'attached' });
+await page.waitForTimeout(1500);
+bb = await page.locator('#csr-host .bubble').boundingBox();
+ok(bb && Math.abs(bb.x + 23 - 400) < 4, 'bubble position remembered after reload');
+ok((await page.locator('.csr-hl-yellow').count()) === 1, 'code-page highlight restored after reload');
+await page.locator('#csr-host .bubble').click();
+await page.waitForTimeout(400);
+ok((await page.locator('#csr-host .dock').isVisible()) && !(await page.locator('#csr-host .bubble').isVisible()), 'clicking the bubble brings the dock back');
+
+// diagnostic report
+const diag = await popup.evaluate(async () => {
+  const [tab] = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+  return (await chrome.tabs.sendMessage(tab.id, { csr: 'diag' })).report;
+});
+const d = JSON.parse(diag);
+ok(d.mode === 'generic' && d.counts.messages === 2 && d.assistantChain.length > 3, 'diagnostic report describes the page');
+ok(!/ماژول|پایتون|csv/i.test(diag), 'diagnostic report contains no message text');
 
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 

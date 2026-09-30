@@ -3,61 +3,61 @@
 
 /* ---------- typography ---------- */
 
-html[data-csr-font] :is(.font-claude-response, .font-claude-message) {
+html[data-csr-font] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) {
   font-family: var(--csr-font-assistant) !important;
 }
-html[data-csr-font][data-csr-user] [data-testid="user-message"] {
+html[data-csr-font][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) {
   font-family: var(--csr-font-user) !important;
 }
-html[data-csr-font] :is(.font-claude-response, .font-claude-message) :not(pre, code, kbd, samp, pre *, code *, .katex, .katex *, svg, svg *, [data-csr-ui], [data-csr-ui] *),
-html[data-csr-font][data-csr-user] [data-testid="user-message"] :not(pre, code, kbd, samp, pre *, code *, svg, svg *) {
+html[data-csr-font] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) :not(pre, code, kbd, samp, pre *, code *, .katex, .katex *, svg, svg *, [data-csr-ui], [data-csr-ui] *),
+html[data-csr-font][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) :not(pre, code, kbd, samp, pre *, code *, svg, svg *) {
   font-family: inherit !important;
 }
 
-html[data-csr-size] :is(.font-claude-response, .font-claude-message),
-html[data-csr-size][data-csr-user] [data-testid="user-message"] {
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]),
+html[data-csr-size][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) {
   font-size: var(--csr-size) !important;
 }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(p, li, span, a, strong, b, em, i, u, s, del, blockquote, td, th, dd, dt, div):not(pre *, code *, .katex *, [data-csr-ui] *) {
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(p, li, span, a, strong, b, em, i, u, s, del, blockquote, td, th, dd, dt, div):not(pre *, code *, .katex *, [data-csr-ui] *) {
   font-size: inherit !important;
 }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message) h1 { font-size: 1.55em !important; }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message) h2 { font-size: 1.35em !important; }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message) h3 { font-size: 1.18em !important; }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message) h4 { font-size: 1.08em !important; }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message) :is(h5, h6) { font-size: 1em !important; }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(code:not(pre code), pre) { font-size: 0.86em !important; }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) pre code { font-size: inherit !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) h1 { font-size: 1.55em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) h2 { font-size: 1.35em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) h3 { font-size: 1.18em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) h4 { font-size: 1.08em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) :is(h5, h6) { font-size: 1em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(code:not(pre code), pre) { font-size: 0.86em !important; }
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) pre code { font-size: inherit !important; }
 
-html[data-csr-lh] :is(.font-claude-response, .font-claude-message),
-html[data-csr-lh] :is(.font-claude-response, .font-claude-message) :is(p, li, blockquote, td, th, dd, dt),
-html[data-csr-lh][data-csr-user] [data-testid="user-message"],
-html[data-csr-lh][data-csr-user] [data-testid="user-message"] :is(p, li, div) {
+html[data-csr-lh] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]),
+html[data-csr-lh] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) :is(p, li, blockquote, td, th, dd, dt),
+html[data-csr-lh][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]),
+html[data-csr-lh][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) :is(p, li, div) {
   line-height: var(--csr-lh) !important;
 }
-html[data-csr-lh] :is(.font-claude-response, .font-claude-message) :is(h1, h2, h3, h4, h5, h6) {
+html[data-csr-lh] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) :is(h1, h2, h3, h4, h5, h6) {
   line-height: 1.4 !important;
 }
 
-html[data-csr-weight] :is(.font-claude-response, .font-claude-message),
-html[data-csr-weight][data-csr-user] [data-testid="user-message"] {
+html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]),
+html[data-csr-weight][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) {
   font-weight: var(--csr-weight) !important;
 }
-html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(p, li, span, td, blockquote, div, a, em, i, dd, dt) {
+html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(p, li, span, td, blockquote, div, a, em, i, dd, dt) {
   font-weight: inherit !important;
 }
 
-html[data-csr-wspace] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+html[data-csr-wspace] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) {
   word-spacing: var(--csr-wspace) !important;
 }
-html[data-csr-wspace] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(pre, code) {
+html[data-csr-wspace] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(pre, code) {
   word-spacing: normal !important;
 }
 
 html[data-csr-pspace] :is(.standard-markdown, .progressive-markdown) {
   row-gap: var(--csr-pspace) !important;
 }
-html[data-csr-pspace] :is(.font-claude-response, .font-claude-message) li + li {
+html[data-csr-pspace] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) li + li {
   margin-top: calc(var(--csr-pspace) / 2.5) !important;
 }
 
@@ -73,11 +73,11 @@ html[data-csr-rtl] [data-csr-dir] {
 html[data-csr-rtl] [data-csr-dir="rtl"] :is(td, th) {
   text-align: right;
 }
-html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) :is(code, kbd, samp, .katex) {
+html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(code, kbd, samp, .katex) {
   direction: ltr;
   unicode-bidi: isolate;
 }
-html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) pre {
+html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) pre {
   direction: ltr;
   text-align: left !important;
   unicode-bidi: isolate;
@@ -234,7 +234,7 @@ html:not([data-csr-hide-ann]) [data-csr-block="important"]::before {
 .csr-divider:hover { opacity: 0.8; }
 
 /* guide shown in divider mode */
-html[data-csr-mode="divider"] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+html[data-csr-mode="divider"] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) {
   cursor: row-resize;
 }
 
@@ -255,7 +255,7 @@ html[data-csr-mode="divider"] :is(.font-claude-response, .font-claude-message, [
 
 /* ---------- highlighter mode cursor ---------- */
 
-html[data-csr-mode="highlighter"] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+html[data-csr-mode="highlighter"] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) {
   cursor: text;
 }
 
@@ -338,7 +338,7 @@ html[data-csr-hide-ann] .csr-divider {
 .csr-bookmark:hover .csr-bm-label {
   filter: brightness(1.05);
 }
-html[data-csr-mode="bookmark"] :is(.font-claude-response, .font-claude-message, [data-testid="user-message"]) {
+html[data-csr-mode="bookmark"] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) {
   cursor: copy;
 }
 html[data-csr-hide-ann] .csr-bookmark {
@@ -382,4 +382,20 @@ html[data-mode="dark"] ::highlight(csr-tts) {
   100% {
     background-color: transparent;
   }
+}
+
+/* ---------- theme repaint (works whatever Claude's CSS variables are called) ---------- */
+
+html[data-csr-theme] [data-csr-paint="page"] {
+  background-color: var(--csr-t-bg) !important;
+  background-image: none !important;
+}
+html[data-csr-theme] [data-csr-paint="bubble"] {
+  background-color: var(--csr-t-bubble) !important;
+  color: var(--csr-t-text) !important;
+}
+html[data-csr-theme] [data-csr-paint="surface"] {
+  background-color: var(--csr-t-surface) !important;
+  color: var(--csr-t-text) !important;
+  border-color: var(--csr-t-border) !important;
 }
