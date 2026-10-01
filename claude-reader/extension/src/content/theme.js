@@ -176,7 +176,10 @@
       lines.push(`${v.name}: ${write(v.fmt, hex)} !important;`);
     }
     if (!lines.length) return '';
-    return `html[data-csr-theme], html[data-csr-theme] :is(body, [data-theme], [data-mode], .dark, .light, [data-csr-varhost]) { ${lines.join(' ')} }`;
+    const at = CSR.site.scopeTheme
+      ? 'html[data-csr-theme] [data-csr-chatroot], html[data-csr-theme] [data-csr-chatroot] :is([data-theme], [data-mode], .dark, .light, [data-csr-varhost])'
+      : 'html[data-csr-theme], html[data-csr-theme] :is(body, [data-theme], [data-mode], .dark, .light, [data-csr-varhost])';
+    return `${at} { ${lines.join(' ')} }`;
   };
 
   // ---------------------------------------------------------------------------
@@ -191,8 +194,12 @@
   function paintChain(messages) {
     if (!messages.length) return;
     const owners = new Map(); // element -> set of messages inside it
+    // on Notion: only up to the chat panel, never Notion's own page
+    const root = CSR.site.scopeTheme ? document.querySelector('[data-csr-chatroot]') : null;
+    if (CSR.site.scopeTheme && !root) return;
+    const stop = root ? root.parentElement : document.body;
     for (const m of messages) {
-      for (let e = m; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      for (let e = m; e && e !== stop && e !== document.body && e !== document.documentElement; e = e.parentElement) {
         if (checked.has(e)) continue;
         if (!owners.has(e)) owners.set(e, []);
         owners.get(e).push(m);
@@ -200,9 +207,11 @@
     }
     for (const [e, inside] of owners) {
       checked.add(e);
-      if (e.hasAttribute('data-csr-paint') || e.closest('[data-csr-ui]')) continue;
-      if (!opaqueBg(e)) continue;
+      if (e.hasAttribute('data-csr-paint') || e.closest('[data-csr-ui]') || e.isContentEditable) continue;
       const one = inside.length === 1 ? inside[0] : null;
+      // a see-through tint is enough for a question bubble (Notion's are)
+      const tinted = one && dom.roleOf(one) === 'user' && (toRgb(getComputedStyle(e).backgroundColor) || { a: 0 }).a > 0.03;
+      if (!opaqueBg(e) && !tinted) continue;
       let kind = 'page';
       if (one && dom.roleOf(one) === 'user') {
         const parent = e.parentElement;
@@ -215,7 +224,7 @@
 
   function paintInside(msg) {
     for (const e of msg.querySelectorAll(SURFACE_SEL)) {
-      if (e.hasAttribute('data-csr-paint') || e.closest('pre, code, .katex, [data-csr-ui]') || e.querySelector('pre')) continue;
+      if (e.hasAttribute('data-csr-paint') || e.isContentEditable || e.closest('pre, code, .katex, [data-csr-ui]') || e.querySelector('pre')) continue;
       if (opaqueBg(e)) e.setAttribute('data-csr-paint', 'surface');
     }
   }
@@ -230,8 +239,14 @@
       discover(messages);
       CSR.appearance.apply(CSR.settings); // now with the discovered variables
     }
-    syncInner(t.dark ? 'dark' : 'light');
+    if (CSR.site.flipMode) syncInner(t.dark ? 'dark' : 'light');
     paintChain(messages);
+    // a themed chat panel (Notion): its chat box area too
+    const box = CSR.site.scopeTheme ? dom.composer() : null;
+    if (box) {
+      paintChain([box]);
+      paintInside(box);
+    }
     const key = JSON.stringify(t);
     if (key !== inkKey) {
       // another theme: every contrast decision has to be made again
@@ -450,6 +465,7 @@
   }
 
   TF.syncMode = function (settings) {
+    if (!CSR.site.flipMode) return; // e.g. Notion: its own light/dark mode stays as the user set it
     const t = settings.enabled ? CSR.resolveTheme(settings) : null;
     if (document.body) syncInner(t ? (t.dark ? 'dark' : 'light') : null);
     if (!t) {

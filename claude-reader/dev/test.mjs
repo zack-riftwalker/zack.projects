@@ -13,6 +13,7 @@ const outDir = path.join(here, 'out');
 mkdirSync(outDir, { recursive: true });
 
 const MOCK = readFileSync(path.join(here, 'mock', 'claude.html'), 'utf8');
+const NOTION_MOCK = readFileSync(path.join(here, 'mock', 'notion.html'), 'utf8');
 const FILES = {
   '/__mock/react.js': path.join(here, 'node_modules/react/umd/react.production.min.js'),
   '/__mock/react-dom.js': path.join(here, 'node_modules/react-dom/umd/react-dom.production.min.js'),
@@ -39,6 +40,10 @@ await context.route('https://claude.ai/**', (route) => {
   if (FILES[url.pathname]) return route.fulfill({ path: FILES[url.pathname], contentType: 'text/javascript' });
   return route.fulfill({ body: MOCK, contentType: 'text/html', headers: { 'content-security-policy': CSP } });
 });
+
+await context.route('https://www.notion.so/**', (route) =>
+  route.fulfill({ body: NOTION_MOCK, contentType: 'text/html', headers: { 'content-security-policy': CSP } })
+);
 
 // dictionary APIs: fixed answers so the test doesn't depend on the network
 await context.route('https://api.mymemory.translated.net/**', (route) =>
@@ -90,7 +95,7 @@ async function open(p) {
 async function select(text, n = 0) {
   await page.evaluate(
     ({ text, n }) => {
-      const w = document.createTreeWalker(document.querySelector('.column') || document.querySelector('.transcript'), NodeFilter.SHOW_TEXT);
+      const w = document.createTreeWalker(document.querySelector('.column') || document.querySelector('.transcript') || document.body, NodeFilter.SHOW_TEXT);
       const nodes = [];
       let all = '';
       let node;
@@ -919,6 +924,100 @@ await page.keyboard.press('Alt+Y');
 await page.locator('#csr-host .dict-card').waitFor();
 ok(true, 'Alt+Y on a single word opens the dictionary');
 await page.keyboard.press('Escape');
+
+// ---------------------------------------------------------------------------
+console.log('Notion AI chat');
+await page.goto('https://www.notion.so/Study-Notes-0123456789abcdef0123456789abcdef');
+await page.waitForSelector('.notion-page-content');
+await page.waitForSelector('#csr-host', { state: 'attached' });
+await page.waitForTimeout(1500);
+const PAGE_MARKS = ['msg', 'dir', 'wrap', 'paint', 'keepfont', 'ink', 'column', 'prose'].map((a) => `.notion-page-content [data-csr-${a}]`).join(', ');
+const untouched = () =>
+  page.evaluate((sel) => !document.querySelector(sel) && !document.querySelector('.notion-page-content').closest('[data-csr-chatroot]'), PAGE_MARKS);
+const rolesNow = () => page.evaluate(() => [...document.querySelectorAll('[data-csr-msg]')].map((m) => m.getAttribute('data-csr-msg')).join(','));
+ok((await page.locator('[data-csr-msg]').count()) === 0, 'Notion page without its AI chat: nothing is treated as a message');
+ok(await untouched(), "the Notion page's own (editable) text is left alone");
+ok(!(await page.locator('#csr-host .dock').isVisible()) && !(await page.locator('#csr-host .bubble').isVisible()), 'no toolbar on a Notion page without the AI chat');
+
+await page.evaluate(() => window.__openAI());
+await page.waitForTimeout(1500);
+ok((await rolesNow()) === 'user,assistant,user,assistant', 'chat panel: questions and answers told apart (' + (await rolesNow()) + ')');
+ok((await page.locator('#csr-host .bubble').isVisible()) && !(await page.locator('#csr-host .dock').isVisible()), 'the toolbar waits as a small circle, off the chat panel');
+ok((await page.locator('#csr-host .bubble').boundingBox()).x < 60, 'the circle starts on the left side');
+const nd = await page.evaluate(() => {
+  const blocks = [...document.querySelectorAll('.panel [data-block-id]')];
+  const li = document.querySelector('.panel .notion-bulleted_list-block');
+  return {
+    fa: blocks.filter((b) => /[آ-ی]/.test(b.textContent)).every((b) => b.getAttribute('dir') === 'rtl'),
+    en: blocks.find((b) => b.textContent.startsWith('Classroom')).getAttribute('dir'),
+    bulletRight: li.querySelector('.bullet').getBoundingClientRect().left > li.querySelector('.leaf').getBoundingClientRect().left,
+    font: getComputedStyle(document.querySelector('.panel .notion-text-block .leaf')).fontFamily,
+  };
+});
+ok(nd.fa && nd.en === 'ltr', 'answer blocks right-to-left (the English one stays left-to-right)');
+ok(nd.bulletRight, 'list bullets move to the right side');
+ok(nd.font.includes('CSR Fa vazirmatn'), 'answers use the chosen Persian font');
+ok(nd.font.includes('sans-serif') && !/,\s*serif$/.test(nd.font), "English text falls back to Notion's sans-serif, not Claude's serif");
+await select('سه بخش اصلی دارد');
+await page.locator('#csr-host .sel-toolbar .swatch').first().click();
+await page.waitForTimeout(300);
+ok((await page.locator('.panel .csr-hl-yellow').count()) === 1, 'highlight in a Notion AI answer');
+await page.keyboard.press('Alt+T');
+await page.waitForTimeout(400);
+const tocTitles = await page.locator('#csr-host .toc .toc-title').allTextContents();
+ok(tocTitles.some((t) => t.includes('خلاصه‌ی فصل دوم')) && tocTitles.some((t) => t.includes('فصل دوم کتاب را خلاصه کن')), 'table of contents lists the questions and the answer heading');
+await page.keyboard.press('Alt+T');
+await shot('38-notion-panel');
+await select('افزونه نباید هیچ چیزی');
+await page.waitForTimeout(250);
+ok(!(await page.locator('#csr-host .sel-toolbar').isVisible()), "selecting the Notion page's own text shows no toolbar");
+ok(await untouched(), 'the Notion page is still untouched');
+
+await page.waitForTimeout(600);
+await page.reload();
+await page.waitForSelector('.notion-page-content');
+await page.waitForTimeout(800);
+await page.evaluate(() => window.__openAI());
+await page.waitForTimeout(1800);
+ok((await page.locator('.panel .csr-hl-yellow').count()) === 1, 'the highlight is back after reloading and reopening the chat');
+const notionConvs = () =>
+  popup.evaluate(async () => Object.entries(await chrome.storage.local.get(null)).filter(([k]) => k.startsWith('conv:notion-')).map(([k, v]) => ({ k, title: v.title })));
+let nconvs = await notionConvs();
+ok(nconvs.length === 1 && nconvs[0].title.startsWith('Notion AI: فصل دوم'), 'saved in the library under the chat’s first question: ' + nconvs.map((c) => c.title).join(' | '));
+
+await setTheme('night');
+await page.waitForTimeout(1000);
+const nt = await page.evaluate(() => ({
+  panel: getComputedStyle(document.querySelector('.panel')).backgroundColor,
+  page: getComputedStyle(document.querySelector('.notion-app-inner')).backgroundColor,
+  mode: document.body.className,
+}));
+ok(nt.panel === 'rgb(30, 31, 36)', 'a dark theme colors the chat panel: ' + nt.panel);
+ok(nt.page === 'rgb(255, 255, 255)' && nt.mode === 'notion-body', "Notion's own page and light/dark mode stay as they were");
+ok((await contrastOf('.panel .notion-text-block .leaf')) >= 4.5, 'answer text readable on the dark theme');
+ok((await contrastOf('.panel .leaf[style]')) >= 4.5, 'even text with a fixed dark color (' + (await contrastOf('.panel .leaf[style]')) + ':1)');
+ok(
+  await page.evaluate(() => {
+    const q = getComputedStyle(document.querySelector('.panel .q')).backgroundColor;
+    return q !== getComputedStyle(document.querySelector('.panel')).backgroundColor && !/rgba\(55, 53, 47/.test(q);
+  }),
+  'question bubbles stay visible on the dark theme'
+);
+ok(await page.evaluate(() => ![...document.querySelectorAll('[data-csr-paint], [data-csr-ink]')].some((e) => e.isContentEditable)), 'nothing editable gets repainted');
+await shot('39-notion-dark');
+await setTheme('paper');
+await page.waitForTimeout(500);
+
+await page.goto('https://www.notion.so/ai?t=1f2e3d4c-5b6a-7988-1f2e-3d4c5b6a7988');
+await page.waitForSelector('.ai-page');
+await page.waitForTimeout(1500);
+ok((await rolesNow()) === 'user,assistant,user,assistant', 'full-page chat (question and answer in one row, chat box inside the scroll): ' + (await rolesNow()));
+await select('خاموش کردن اعلان‌ها');
+await page.locator('#csr-host .sel-toolbar .swatch').nth(1).click();
+await page.waitForTimeout(800);
+nconvs = await notionConvs();
+ok(nconvs.some((c) => c.k === 'conv:notion-1f2e3d4c5b6a79881f2e3d4c5b6a7988'), 'a chat with an id in its address is kept under that id');
+await shot('40-notion-full-page');
 
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 

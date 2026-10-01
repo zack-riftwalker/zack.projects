@@ -195,6 +195,7 @@
       }
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       if (dom.isEditable(e.target)) return;
+      if (CSR.site.id === 'notion' && !CSR.notion.chat) return; // Notion without its AI chat open: not ours
       // typing in one of our own fields (inside the shadow root)
       if (e.composedPath().some((n) => n.nodeType === 1 && /^(INPUT|TEXTAREA|SELECT)$/.test(n.tagName))) return;
 

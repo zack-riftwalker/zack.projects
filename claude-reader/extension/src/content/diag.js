@@ -46,11 +46,13 @@
       holders.set(par, (holders.get(par) || 0) + 1);
     }
     const top = [...holders.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
-    const editor = Array.from(document.querySelectorAll(CSR.SEL.editor)).find((e) => !e.closest('[data-csr-ui]'));
+    const editor = dom.composer();
     const q = (sel) => document.querySelectorAll(sel).length;
     const report = {
       extension: chrome.runtime.getManifest().version,
-      path: location.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<uuid>').replace(/session_[\w-]+/g, 'session_<id>'),
+      site: CSR.site.id,
+      notion: CSR.notion ? CSR.notion.report() : undefined,
+      path: CSR.site.id === 'notion' ? '<notion page>' + (location.search ? ' ?' + [...new URLSearchParams(location.search).keys()].join('&') : '') : location.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<uuid>').replace(/session_[\w-]+/g, 'session_<id>'),
       conversation: !!dom.getConversationId(),
       mode: dom.mode,
       counts: {

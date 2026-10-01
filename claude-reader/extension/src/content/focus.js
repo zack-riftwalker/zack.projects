@@ -9,7 +9,9 @@
   const F = (CSR.focus = { on: false });
 
   const CHROME =
-    'nav, aside, header, footer, [role="navigation"], [role="banner"], [role="complementary"], [data-testid*="sidebar" i], [role="group"][aria-label="Message actions"], [data-testid^="action-bar"]';
+    'nav, aside, header, footer, [role="navigation"], [role="banner"], [role="complementary"], [data-testid*="sidebar" i], [role="group"][aria-label="Message actions"], [data-testid^="action-bar"]' +
+    // Notion: its sidebar, top bar and help button
+    (CSR.site.id === 'notion' ? ', .notion-sidebar-container, .notion-topbar, .notion-help-button' : '');
 
   function clear() {
     document.querySelectorAll('[data-csr-focus-hide]').forEach((e) => e.removeAttribute('data-csr-focus-hide'));
@@ -22,7 +24,11 @@
   /** The block holding the message box: climb from the editor while the
    * parent still doesn't contain any message. */
   function composerBlock(msgs) {
-    const editors = Array.from(document.querySelectorAll(CSR.SEL.editor)).filter((e) => !e.closest('[data-csr-ui]') && !dom.messageOf(e));
+    // on Notion every page block is editable: only the AI chat box counts
+    const editors =
+      CSR.site.id === 'notion'
+        ? [dom.composer()].filter(Boolean)
+        : Array.from(document.querySelectorAll(CSR.SEL.editor)).filter((e) => !e.closest('[data-csr-ui]') && !dom.messageOf(e));
     const out = [];
     for (const ed of editors) {
       let e = ed;

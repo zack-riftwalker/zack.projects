@@ -1102,7 +1102,8 @@ svg {
 .study-pill:hover {
   opacity: 1;
 }
-.layer[data-side="left"] .study-pill {
+.layer[data-side="left"] .study-pill,
+.layer[data-site="notion"] .study-pill {
   right: auto;
   left: 16px;
 }

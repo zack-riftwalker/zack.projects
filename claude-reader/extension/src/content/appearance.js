@@ -232,13 +232,19 @@
   }
 
   function themeCss(t) {
-    const target = 'html[data-csr-theme], html[data-csr-theme] [data-theme], html[data-csr-theme] [data-mode]';
+    // on Notion only the AI chat panel is themed, not the rest of Notion
+    const scoped = CSR.site.scopeTheme;
+    const ROOT = 'html[data-csr-theme] [data-csr-chatroot]';
+    const target = scoped ? ROOT : 'html[data-csr-theme], html[data-csr-theme] [data-theme], html[data-csr-theme] [data-mode]';
+    const page = scoped
+      ? `${ROOT} { background-color: ${t.bg} !important; color: ${t.text}; color-scheme: ${t.dark ? 'dark' : 'light'}; }`
+      : `html[data-csr-theme], html[data-csr-theme] body { background-color: ${t.bg} !important; color-scheme: ${t.dark ? 'dark' : 'light'}; }`;
     return `
-${target} { ${claudeVars(t)}
+${target} { ${scoped ? '' : claudeVars(t)}
   --csr-t-bg: ${t.bg}; --csr-t-text: ${t.text}; --csr-t-heading: ${t.heading || t.text};
   --csr-t-link: ${t.link || t.text}; --csr-t-accent: ${t.accent || t.link || t.text}; ${CSR.themeFix.baseVars(t)} ${CSR.themeFix.codeVars(t)} }
 ${CSR.themeFix.varCss(t)}
-html[data-csr-theme], html[data-csr-theme] body { background-color: ${t.bg} !important; color-scheme: ${t.dark ? 'dark' : 'light'}; }
+${page}
 html[data-csr-theme] :is(${MSG}, ${USER}) { color: var(--csr-t-text) !important; }
 html[data-csr-theme] :is(${MSG}, ${USER}) :is(h1, h2, h3, h4, h5, h6, strong, b) { color: var(--csr-t-heading) !important; }
 html[data-csr-theme] :is(${MSG}, ${USER}) a { color: var(--csr-t-link) !important; }
@@ -270,8 +276,14 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
     setAttr(html, 'data-csr-font', fontOn);
     setAttr(html, 'data-csr-user', on && s.applyToUser);
     if (fontOn) {
-      css.push(`:root { --csr-font-assistant: ${fontStack(s, '--font-claude-response', 'serif')};
-        --csr-font-user: ${fontStack(s, '--font-user-message', 'sans-serif')};
+      // what to fall back to: Claude's own fonts, or Notion's sans-serif stack
+      const NOTION_FONT = 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+      const [aVar, aGen, uVar, uGen] =
+        CSR.site.id === 'notion'
+          ? ['--csr-site-font', NOTION_FONT, '--csr-site-font', NOTION_FONT]
+          : ['--font-claude-response', 'serif', '--font-user-message', 'sans-serif'];
+      css.push(`:root { --csr-font-assistant: ${fontStack(s, aVar, aGen)};
+        --csr-font-user: ${fontStack(s, uVar, uGen)};
         --csr-font-mono-fa: ${monoStack(s)}; }`);
     }
 
@@ -362,6 +374,7 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
       }
       const o = getComputedStyle(el).overflowY;
       if (o === 'auto' || o === 'scroll') return el;
+      if (el.hasAttribute('data-csr-chatroot')) return null; // Notion: never beyond its chat panel
     }
     return null;
   }
@@ -384,7 +397,7 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
       markChain(m, sameAsColumn);
     }
     // the message box, so it lines up with the text
-    const editor = document.querySelector('div.ProseMirror') || document.querySelector(SEL.editor);
+    const editor = CSR.dom.composer();
     if (editor && !columnDone.has(editor) && !editor.closest(SEL.ui)) {
       columnDone.add(editor);
       markChain(editor.parentElement, (w) => w >= 480);
@@ -484,7 +497,8 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
     el.removeAttribute('data-csr-orig-dir');
   }
 
-  const DIR_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, table, dl';
+  const NOTION_BLOCK = CSR.site.id === 'notion' ? ', [data-block-id]' : '';
+  const DIR_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, table, dl' + NOTION_BLOCK;
 
   A.processRtl = function (msg, s) {
     const mode = s.enabled ? s.rtlMode : 'off';
@@ -497,7 +511,7 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
       if (el.closest('pre')) return false;
       // paragraphs/headings in list items and tables follow their list/table
       if (/^(P|H\d)$/.test(el.tagName)) {
-        const holder = el.parentElement && el.parentElement.closest('li, td, th, dd, dt');
+        const holder = el.parentElement && el.parentElement.closest('li, td, th, dd, dt' + NOTION_BLOCK);
         if (holder && msg.contains(holder)) return false;
       }
       return true;

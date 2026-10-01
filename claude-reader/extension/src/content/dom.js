@@ -3,6 +3,14 @@
 (function () {
   const CSR = globalThis.CSR;
 
+  // Which site this is. Claude is the home site; on Notion only its AI chat
+  // is used (notion.js), with a theme limited to the chat and the page's own
+  // light/dark mode left alone.
+  const NOTION = /(^|\.)notion\.(so|com)$/i.test(location.hostname);
+  CSR.site = NOTION
+    ? { id: 'notion', name: 'Notion AI', scopeTheme: true, flipMode: false, foldDock: true }
+    : { id: 'claude', name: 'Claude', scopeTheme: false, flipMode: true, foldDock: false };
+
   // Selectors for claude.ai. Kept in one place so they are easy to update
   // when Claude's markup changes.
   const SEL = (CSR.SEL = {
@@ -24,7 +32,8 @@
   const SKIP_TEXT = '[data-csr-ui], button, svg, style, script, textarea, input, select, [aria-hidden="true"]';
 
   // Block-level elements used for quote blocks, dividers and RTL.
-  const BLOCK_SEL = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, table, ul, ol, hr';
+  // (Notion draws paragraphs, list items and headings as blocks with data-block-id.)
+  const BLOCK_SEL = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, table, ul, ol, hr' + (NOTION ? ', [data-block-id]' : '');
   CSR.BLOCK_SEL = BLOCK_SEL;
 
   const dom = (CSR.dom = { mode: 'none' });
@@ -99,6 +108,23 @@
 
   dom.isStreaming = function (msg) {
     return !!(msg.closest(SEL.streaming) || msg.querySelector(SEL.streaming));
+  };
+
+  /** The box where the user types to the AI (Claude's composer; notion.js
+   * replaces it with Notion AI's chat box). */
+  dom.composer = function () {
+    return Array.from(document.querySelectorAll('div.ProseMirror, ' + SEL.editor)).find((e) => !e.closest(SEL.ui) && !e.closest('[data-csr-msg]')) || null;
+  };
+
+  /** 1–4 for a heading block (an <h1>–<h4>, or a block wrapping one), else 0. */
+  dom.headingLevel = function (el) {
+    let m = /^H([1-6])$/.exec(el.tagName);
+    if (!m) {
+      const inner = el.querySelector(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > * > h1, :scope > * > h2, :scope > * > h3, :scope > * > h4, [role="heading"][aria-level]');
+      if (inner && inner.textContent.trim() === el.textContent.trim()) m = /^H([1-6])$/.exec(inner.tagName) || [0, inner.getAttribute('aria-level')];
+    }
+    const n = m ? +m[1] : 0;
+    return n >= 1 && n <= 4 ? n : 0;
   };
 
   dom.isEditable = function (node) {

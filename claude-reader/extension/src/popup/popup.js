@@ -350,7 +350,7 @@
       await chrome.tabs.sendMessage(tab.id, { csr: 'openPanel' });
       window.close();
     } catch (e) {
-      $('openPanel').textContent = 'اول یک گفتگو در claude.ai باز کن';
+      $('openPanel').textContent = 'اول یک گفتگو در Claude یا Notion AI باز کن';
     }
   });
 
@@ -402,7 +402,7 @@
       text = null;
     }
     if (!text) {
-      $('diagBtn').textContent = 'اول یک صفحه از claude.ai باز کن';
+      $('diagBtn').textContent = 'اول یک صفحه از Claude یا Notion باز کن';
       return;
     }
     const out = $('diagOut');

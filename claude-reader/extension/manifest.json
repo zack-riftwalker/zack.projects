@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "خوانا — Claude Reader",
   "short_name": "خوانا",
-  "version": "0.5.3",
-  "description": "خواندن و مطالعه‌ی پاسخ‌های Claude را راحت‌تر کن: فونت فارسی، تم، راست‌چین اصولی، هایلایت، یادداشت، مداد و خط جداکننده.",
+  "version": "0.6.0",
+  "description": "خواندن و مطالعه‌ی پاسخ‌های Claude و Notion AI را راحت‌تر کن: فونت فارسی، تم، راست‌چین اصولی، هایلایت، یادداشت، مداد و خط جداکننده.",
   "minimum_chrome_version": "111",
   "icons": {
     "16": "icons/icon16.png",
@@ -31,13 +31,17 @@
   ],
   "host_permissions": [
     "https://claude.ai/*",
+    "https://*.notion.so/*",
+    "https://*.notion.com/*",
     "https://api.mymemory.translated.net/*",
     "https://api.dictionaryapi.dev/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://claude.ai/*"
+        "https://claude.ai/*",
+        "https://*.notion.so/*",
+        "https://*.notion.com/*"
       ],
       "js": [
         "src/content/main-world-guard.js"
@@ -47,7 +51,9 @@
     },
     {
       "matches": [
-        "https://claude.ai/*"
+        "https://claude.ai/*",
+        "https://*.notion.so/*",
+        "https://*.notion.com/*"
       ],
       "css": [
         "src/content/page.css"
@@ -58,6 +64,7 @@
         "src/shared/export.js",
         "src/shared/patterns.js",
         "src/content/dom.js",
+        "src/content/notion.js",
         "src/content/appearance.js",
         "src/content/theme.js",
         "src/content/annotations.js",
@@ -83,7 +90,9 @@
         "src/content/ui.css"
       ],
       "matches": [
-        "https://claude.ai/*"
+        "https://claude.ai/*",
+        "https://*.notion.so/*",
+        "https://*.notion.com/*"
       ]
     }
   ]

@@ -82,9 +82,10 @@
       }
       let cur = null;
       for (const b of topBlocks(m)) {
-        if (/^H[1-4]$/.test(b.tagName)) {
+        const level = dom.headingLevel(b);
+        if (level) {
           const title = oneLine(b.textContent).slice(0, 90);
-          cur = { key: `h:${row}:${hash(title)}`, row, ord: ++ord, kind: 'h', level: +b.tagName[1], title, el: b, blocks: [], words: 0 };
+          cur = { key: `h:${row}:${hash(title)}`, row, ord: ++ord, kind: 'h', level, title, el: b, blocks: [], words: 0 };
           out.push(cur);
         } else if (!cur) {
           const title = firstSentence(b);

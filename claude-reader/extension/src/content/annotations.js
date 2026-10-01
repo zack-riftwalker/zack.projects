@@ -47,6 +47,13 @@
   function captureTitle() {
     // only take the page title/URL while it still belongs to this conversation
     if (dom.getConversationId() !== conv.id) return;
+    if (CSR.site.id === 'notion') {
+      // the tab title is the Notion page's; name the chat after its first question
+      conv.title = CSR.notion.title();
+      conv.url = location.href;
+      conv.site = 'notion';
+      return;
+    }
     const t = (document.title || '').replace(/\s*[-–|]\s*Claude\s*$/i, '').trim();
     if (t && t !== 'Claude') conv.title = t;
     conv.url = location.origin + location.pathname;

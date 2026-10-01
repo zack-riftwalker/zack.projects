@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Study Notes</title>
+    <!-- A stand-in for Notion with its AI chat. Notion's real chat markup isn't
+         documented, so this mock is deliberately unhelpful: no class names that
+         say "chat" or "message", an editable page (whose empty block also
+         mentions AI), a comment box, and answer action buttons that look like
+         bubbles. Two layouts: the corner panel over a page (one row per
+         message), and a full-page chat at /ai (question + answer in one row,
+         with the chat box inside the scrolling area). -->
+    <style>
+      body { margin: 0; font: 16px/1.5 ui-sans-serif, -apple-system, "Segoe UI", sans-serif; color: rgb(55, 53, 47); background: #fff; }
+      #notion-app { height: 100vh; }
+      .notion-app-inner { display: flex; height: 100%; background: #fff; }
+      .notion-sidebar-container { width: 240px; background: rgb(247, 247, 245); padding: 12px; flex-shrink: 0; }
+      .notion-frame { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+      .notion-topbar { height: 45px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 12px; }
+      .notion-scroller { flex: 1; overflow-y: auto; }
+      .notion-page-content { max-width: 708px; margin: 0 auto; padding: 0 24px 200px; }
+      [data-block-id] { padding: 3px 2px; }
+      .row-flex { display: flex; align-items: flex-start; gap: 4px; }
+      .bullet { width: 22px; text-align: center; flex-shrink: 0; }
+      .leaf { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+      .ai-launcher { position: fixed; right: 20px; bottom: 20px; width: 44px; height: 44px; border-radius: 50%; border: 1px solid #ddd; background: #fff; cursor: pointer; }
+      .panel { position: fixed; right: 16px; bottom: 76px; width: 440px; height: 620px; background: #fff; border-radius: 12px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; overflow: hidden; }
+      .panel-head { padding: 10px 14px; font-weight: 600; font-size: 14px; border-bottom: 1px solid #eee; }
+      .panel-scroll { flex: 1; overflow-y: auto; padding: 12px 14px; }
+      .turn { padding: 6px 0; }
+      .q-wrap { display: flex; justify-content: flex-end; }
+      .q { background: rgba(55, 53, 47, 0.06); border-radius: 12px; padding: 6px 12px; max-width: 80%; }
+      .acts { display: flex; justify-content: flex-end; gap: 4px; margin-top: 4px; }
+      .acts [role="button"] { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: rgba(55, 53, 47, 0.06); cursor: pointer; }
+      .composer { padding: 10px 14px; border-top: 1px solid #eee; }
+      .box { border: 1px solid #ddd; border-radius: 10px; padding: 8px 10px; min-height: 22px; }
+      .box[placeholder]:empty::before { content: attr(placeholder); color: rgba(55, 53, 47, 0.4); }
+      /* full-page chat */
+      .ai-page { flex: 1; overflow-y: auto; }
+      .ai-column { max-width: 760px; margin: 0 auto; padding: 24px 24px 0; }
+      .ai-sticky { position: sticky; bottom: 0; background: #fff; padding: 12px 0 18px; }
+    </style>
+  </head>
+  <body class="notion-body">
+    <div id="notion-app"></div>
+    <script>
+      const app = document.getElementById('notion-app');
+      let uid = 0;
+      const id = () => 'b' + (++uid).toString(16).padStart(8, '0');
+
+      // Notion-like blocks: [kind, text]
+      function block([kind, text], editable) {
+        const ce = editable ? 'true' : 'false';
+        const leaf = (extra = '') => `<div class="leaf" contenteditable="${ce}" data-content-editable-leaf="true"${extra}>${text}</div>`;
+        if (kind === 'h') return `<div class="notion-selectable notion-header-block" data-block-id="${id()}"><h3 style="margin:8px 0 2px;font-size:1.25em">${leaf()}</h3></div>`;
+        if (kind === 'li') return `<div class="notion-selectable notion-bulleted_list-block" data-block-id="${id()}"><div class="row-flex"><div class="bullet">•</div>${leaf()}</div></div>`;
+        if (kind === 'empty') return `<div class="notion-selectable notion-text-block" data-block-id="${id()}"><div class="row-flex">${leaf(' placeholder="Press \'space\' for AI or \'/\' for commands"').replace('>' + text + '<', '><')}</div></div>`;
+        if (kind === 'ink') return `<div class="notion-selectable notion-text-block" data-block-id="${id()}"><div class="row-flex">${leaf(' style="color: rgb(55, 53, 47)"')}</div></div>`;
+        return `<div class="notion-selectable notion-text-block" data-block-id="${id()}"><div class="row-flex">${leaf()}</div></div>`;
+      }
+
+      const PAGE = [
+        ['h', 'یادداشت‌های درس'],
+        ['p', 'این متن صفحه‌ی خود Notion است و قابل ویرایش است؛ افزونه نباید هیچ چیزی در آن بنویسد.'],
+        ['li', 'جلسه‌ی اول: مقدمه'],
+        ['empty', ''],
+      ];
+
+      const ANSWER_1 = [
+        ['h', 'خلاصه‌ی فصل دوم'],
+        ['p', 'فصل دوم درباره‌ی مدیریت کلاس است و سه بخش اصلی دارد که در ادامه توضیح داده شده‌اند.'],
+        ['li', 'تعیین قوانین روشن از جلسه‌ی اول'],
+        ['li', 'بازخورد سریع و دقیق به دانش‌آموزان'],
+        ['p', 'Classroom management means setting clear routines so students know what to expect.'],
+      ];
+      const ANSWER_2 = [
+        ['p', 'برای تمرین، هر روز ده دقیقه یکی از این روش‌ها را روی یک موقعیت واقعی امتحان کن.'],
+        ['ink', 'این خط رنگ ثابت تیره دارد تا خوانایی آن روی تم تیره آزموده شود.'],
+      ];
+
+      const answer = (blocks) => blocks.map((b) => block(b, false)).join('') + `<div class="acts"><div role="button">Copy</div><div role="button">Retry</div></div>`;
+      const question = (t) => `<div class="q-wrap"><div class="q">${t}</div></div>`;
+
+      function pageView(withPanel) {
+        app.innerHTML = `
+          <div class="notion-app-inner">
+            <div class="notion-sidebar-container"><b>Workspace</b><div>Study Notes</div><div>AI</div></div>
+            <div class="notion-frame">
+              <div class="notion-topbar"><span>Share</span><span>⋯</span></div>
+              <div class="notion-scroller">
+                <div class="notion-page-content">${PAGE.map((b) => block(b, true)).join('')}
+                  <div style="margin-top:24px"><div class="box" contenteditable="true" placeholder="Add a comment…"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button class="ai-launcher" title="Notion AI">✦</button>`;
+        app.querySelector('.ai-launcher').onclick = () => openPanel(!document.querySelector('.panel'));
+        if (withPanel) openPanel(true);
+      }
+
+      function openPanel(on) {
+        const old = document.querySelector('.panel');
+        if (old) old.remove();
+        if (!on) return;
+        const p = document.createElement('div');
+        p.className = 'panel';
+        p.innerHTML = `
+          <div class="panel-head">Notion AI</div>
+          <div class="panel-scroll"><div>
+            <div class="turn">${question('فصل دوم کتاب را خلاصه کن')}</div>
+            <div class="turn">${answer(ANSWER_1)}</div>
+            <div class="turn">${question('یک تمرین برای هر روز پیشنهاد بده')}</div>
+            <div class="turn">${answer(ANSWER_2)}</div>
+          </div></div>
+          <div class="composer"><div class="box" contenteditable="true" role="textbox" placeholder="Ask AI anything…"></div></div>`;
+        app.appendChild(p);
+      }
+
+      function aiView() {
+        app.innerHTML = `
+          <div class="notion-app-inner">
+            <div class="notion-sidebar-container"><b>Workspace</b><div>Notion AI</div></div>
+            <div class="ai-page"><div class="ai-column">
+              <div>
+                <div class="turn">${question('روش‌های تمرکز هنگام مطالعه چیست؟')}<div>${answer([['p', 'سه روش ساده برای تمرکز بیشتر هنگام مطالعه وجود دارد که امتحان‌شان آسان است.'], ['li', 'خاموش کردن اعلان‌ها'], ['li', 'مطالعه در بازه‌های کوتاه']])}</div></div>
+                <div class="turn">${question('درباره‌ی روش پومودورو بیشتر بگو')}<div>${answer([['p', 'در روش پومودورو بیست‌وپنج دقیقه کار می‌کنی و بعد پنج دقیقه استراحت.']])}</div></div>
+              </div>
+              <div class="ai-sticky"><div class="box" contenteditable="true" placeholder="Ask, search, or make anything…"></div></div>
+            </div></div>
+          </div>`;
+      }
+
+      if (location.pathname === '/ai') aiView();
+      else pageView(false);
+      window.__openAI = () => openPanel(true);
+      window.__closeAI = () => openPanel(false);
+    </script>
+  </body>
+</html>

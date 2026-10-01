@@ -1,6 +1,6 @@
 /* Background service worker: the pomodoro clock (so it keeps running when
  * tabs are closed or asleep), system notifications, and dictionary lookups
- * (claude.ai's CSP doesn't let the page itself call other sites). */
+ * (the sites' CSP doesn't let the page itself call other sites). */
 importScripts('shared/defaults.js', 'shared/storage.js');
 
 const CSR = globalThis.CSR;
@@ -113,9 +113,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   else if (st.running) await setState(st); // woke up early: re-arm
 });
 
+// the sites the extension works on (same as the manifest's content scripts)
+const SITE_TABS = ['https://claude.ai/*', 'https://*.notion.so/*', 'https://*.notion.com/*'];
+
 chrome.notifications.onClicked.addListener(async (id) => {
   chrome.notifications.clear(id);
-  const [tab] = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+  const [tab] = await chrome.tabs.query({ url: SITE_TABS });
   if (tab) {
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
@@ -284,7 +287,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   checkUpdate();
   if (details.reason === 'update') {
     // pages still running the old version's scripts: reload them
-    const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+    const tabs = await chrome.tabs.query({ url: SITE_TABS });
     for (const t of tabs) chrome.tabs.reload(t.id);
   }
 });

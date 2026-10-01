@@ -128,11 +128,15 @@
     const dark = isDark(s);
     host.toggleAttribute('data-dark', dark);
     el.layer.setAttribute('data-side', s.dockSide === 'left' ? 'left' : 'right');
-    // on a narrow window the dock would cover the start of Persian lines:
-    // show the small circle instead (until it's clicked), without changing the setting
-    const collapsed = !!s.dockCollapsed || (isNarrow() && !openedNarrow);
-    el.dock.hidden = !(s.enabled && s.showDock) || collapsed;
-    el.bubble.hidden = !(s.enabled && s.showDock && collapsed);
+    el.layer.setAttribute('data-site', CSR.site.id);
+    // on a narrow window the dock would cover the start of Persian lines, and
+    // on Notion it would sit on Notion's own chat panel: show the small circle
+    // instead (until it's clicked), without changing the setting
+    const collapsed = !!s.dockCollapsed || (autoFold() && !openedFolded);
+    // on Notion, only while its AI chat is open
+    const here = CSR.site.id !== 'notion' || !!(CSR.notion && CSR.notion.chat);
+    el.dock.hidden = !(s.enabled && s.showDock && here) || collapsed;
+    el.bubble.hidden = !(s.enabled && s.showDock && here && collapsed);
     el.dockBtn.highlighter.classList.toggle('on', !!s.highlighterMode);
     el.dockBtn.highlighter.style.setProperty('--sw', swatch(s.activeHighlight));
     el.dockBtn.rtl.setAttribute('data-state', s.rtlMode);
@@ -204,25 +208,31 @@
   let bubblePos = null; // {x, y} as fractions of the window
   const NARROW = 720;
   const isNarrow = () => window.innerWidth < NARROW;
-  let openedNarrow = false; // dock opened from the circle on a narrow window
+  const autoFold = () => isNarrow() || CSR.site.foldDock;
+  let openedFolded = false; // dock opened from the circle where it starts folded
   let wasNarrow = isNarrow();
   window.addEventListener('resize', () => {
     if (isNarrow() === wasNarrow) return;
     wasNarrow = isNarrow();
-    openedNarrow = false;
+    openedFolded = false;
     if (CSR.settings) UI.applySettings(CSR.settings);
   });
 
   // a spot picked on a wide window means little on a narrow one: there the
-  // circle starts in its corner, and moving it lasts only for this visit
+  // circle starts in its corner, and moving it lasts only for this visit.
+  // Notion keeps its own spot (its top right holds Notion's buttons).
   let narrowPos = null;
+  let notionPos = null;
+  const NOTION = CSR.site.id === 'notion';
+  const posNow = () => (isNarrow() ? narrowPos : NOTION ? notionPos : bubblePos);
 
   function placeBubble() {
-    const pos = isNarrow() ? narrowPos : bubblePos;
+    const pos = posNow();
     const maxX = window.innerWidth - BUBBLE - 6;
     const maxY = window.innerHeight - BUBBLE - 6;
-    const x = pos ? pos.x * window.innerWidth : maxX - 12;
-    const y = pos ? pos.y * window.innerHeight : 72;
+    const leftEdge = NOTION && !isNarrow();
+    const x = pos ? pos.x * window.innerWidth : leftEdge ? 6 : maxX - 12;
+    const y = pos ? pos.y * window.innerHeight : leftEdge ? Math.round(window.innerHeight * 0.55) : 72;
     el.bubble.style.left = Math.max(6, Math.min(maxX, x)) + 'px';
     el.bubble.style.top = Math.max(6, Math.min(maxY, y)) + 'px';
   }
@@ -247,6 +257,7 @@
       el.bubble.classList.add('dragging');
       const p = { x: (drag.ox + dx) / window.innerWidth, y: (drag.oy + dy) / window.innerHeight };
       if (isNarrow()) narrowPos = p;
+      else if (NOTION) notionPos = p;
       else bubblePos = p;
       placeBubble();
     });
@@ -256,19 +267,19 @@
       drag = null;
       el.bubble.classList.remove('dragging');
       if (moved) {
-        if (!isNarrow()) chrome.storage.local.set({ bubblePos });
-      }
-      else if (CSR.settings.dockCollapsed) UI.setCollapsed(false);
+        if (!isNarrow()) chrome.storage.local.set(NOTION ? { bubblePosNotion: notionPos } : { bubblePos });
+      } else if (CSR.settings.dockCollapsed) UI.setCollapsed(false);
       else {
-        openedNarrow = true; // only folded because the window is narrow
+        openedFolded = true; // only folded because of the window / the site
         UI.applySettings(CSR.settings);
       }
     };
     el.bubble.addEventListener('pointerup', end);
     el.bubble.addEventListener('pointercancel', end);
     el.layer.append(el.bubble);
-    chrome.storage.local.get('bubblePos').then((r) => {
+    chrome.storage.local.get(['bubblePos', 'bubblePosNotion']).then((r) => {
       if (r.bubblePos) bubblePos = r.bubblePos;
+      if (r.bubblePosNotion) notionPos = r.bubblePosNotion;
       placeBubble();
     });
     window.addEventListener('resize', placeBubble);
@@ -276,9 +287,11 @@
   }
 
   UI.setCollapsed = function (on) {
-    if (on && openedNarrow && !CSR.settings.dockCollapsed) {
-      openedNarrow = false; // folding it again on a narrow window
+    if (on && autoFold() && !CSR.settings.dockCollapsed) {
+      // where the dock starts folded anyway: just fold it back, save nothing
+      openedFolded = false;
       UI.applySettings(CSR.settings);
+      return;
     }
     CSR.store.patchSettings({ dockCollapsed: !!on });
     if (on) UI.toast('نوار ابزار جمع شد؛ روی دایره کلیک کن تا باز شود، یا بکشش هر جا خواستی');
