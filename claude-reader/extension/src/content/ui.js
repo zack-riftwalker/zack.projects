@@ -1134,11 +1134,36 @@
     return e.composedPath().includes(host);
   }
 
+  // for the diagnostic report: did a page event reach the document, and
+  // where did the last selection end up (no text, just structure)
+  let reachedDoc = 0;
+  document.addEventListener('mouseup', () => (reachedDoc = Date.now()));
+
+  function probe(via, s) {
+    const sel = window.getSelection();
+    const node = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+    const ne = node && (node.nodeType === 1 ? node : node.parentElement);
+    const ce = [];
+    for (let x = ne, i = 0; x && i < 14; x = x.parentElement, i++) if (x.hasAttribute('contenteditable')) ce.push(x.getAttribute('contenteditable') || '""');
+    const m = ne && ne.closest('[data-csr-msg]');
+    CSR.lastSelection = {
+      at: new Date().toTimeString().slice(0, 8),
+      via,
+      reachedPage: via === 'mouseup' ? Date.now() - reachedDoc < 300 : null,
+      collapsed: !sel || sel.isCollapsed,
+      inMessage: m ? m.getAttribute('data-csr-msg') : null,
+      editable: ne ? dom.isEditable(ne) : null,
+      contenteditable: ce.join('>'),
+      accepted: !!s,
+    };
+  }
+
   function onSelectionDone(e) {
     if (fromUs(e) || UI.mode !== 'none') return;
     setTimeout(() => {
       if (Date.now() < (UI.suppressToolbarUntil || 0)) return;
       const s = AN.selectionInMessage();
+      probe(e.type || 'settle', s);
       if (!s || !CSR.settings.enabled) return hideSelectionToolbar();
       if (dom.isStreaming(s.msg)) return;
       if (CSR.settings.highlighterMode) {
@@ -1167,13 +1192,28 @@
   }
 
   function bindPageEvents() {
-    document.addEventListener('mouseup', onSelectionDone);
-    document.addEventListener('keyup', (e) => {
-      if (e.shiftKey && e.key.startsWith('Arrow')) onSelectionDone(e);
-    });
+    // capture phase on window: some sites (Notion's text blocks) handle the
+    // mouse themselves and don't let the event reach the page
+    window.addEventListener('mouseup', onSelectionDone, true);
+    window.addEventListener(
+      'keyup',
+      (e) => {
+        if (e.shiftKey && e.key.startsWith('Arrow')) onSelectionDone(e);
+      },
+      true
+    );
+    // and if a selection settles without any of those events reaching us
+    let pressed = false;
+    let settle = 0;
+    window.addEventListener('pointerdown', () => (pressed = true), true);
+    window.addEventListener('pointerup', () => (pressed = false), true);
     document.addEventListener('selectionchange', () => {
       const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) hideSelectionToolbar();
+      clearTimeout(settle);
+      if (!sel || sel.isCollapsed) return hideSelectionToolbar();
+      settle = setTimeout(() => {
+        if (!pressed && el.sel && el.sel.hidden) onSelectionDone({ composedPath: () => [] });
+      }, 450);
     });
     document.addEventListener(
       'mousedown',
@@ -1247,9 +1287,13 @@
       true
     );
 
-    document.addEventListener('mousemove', (e) => {
-      if (UI.mode !== 'divider' && UI.mode !== 'bookmark') return;
-      showGuide(fromUs(e) ? null : dividerTarget(e));
-    });
+    window.addEventListener(
+      'mousemove',
+      (e) => {
+        if (UI.mode !== 'divider' && UI.mode !== 'bookmark') return;
+        showGuide(fromUs(e) ? null : dividerTarget(e));
+      },
+      true
+    );
   }
 })();

@@ -154,8 +154,8 @@
       const nest = (n, inner) => (n ? `<div class="x78zum5 xdt5ytf autolayout-col autolayout-fill-width">${nest(n - 1, inner)}</div>` : inner);
       const deepTurn = (q, parts) => `
         <div class="x78zum5 xdt5ytf"><div class="autolayout-col"><div class="x78zum5 xdt5ytf autolayout-fill-width">
-          <div class="u-line"><div><div class="u-bub">${q}</div></div><div role="button" style="font-size:12px;opacity:.6;padding:0 6px">Edit</div></div>
-          <div class="a-part"><div>${parts}</div><div class="acts"><div role="button">Copy</div></div></div>
+          <div class="u-line"><div style="font-size:11px;opacity:.5;padding:0 6px;align-self:center">4:15 PM</div><div><div class="u-bub">${q}</div></div><div role="button" style="font-size:12px;opacity:.6;padding:0 6px">Edit</div></div>
+          <div class="a-part"><div data-content-editable-root="true" data-content-editable-selecting="false">${parts}</div><div class="acts"><div role="button">Copy</div></div></div>
         </div></div></div>`;
       function deepView() {
         document.body.classList.add('dark', 'notion-dark-theme');
@@ -164,12 +164,19 @@
             <nav class="notion-sidebar-container"><b>Workspace</b><div>Notion AI</div></nav>
             <div class="deep-root">
               <div class="deep-list">${nest(14, `<div class="deep-col"><div class="day">Today</div><div class="contents">
-                ${deepTurn('مدیریت کلاس را در سه جمله توضیح بده', '<p>مدیریت کلاس یعنی ساختن <code>روال</code> روشن از همان روز اول تا دانش‌آموزان بدانند چه انتظاری از آن‌ها می‌رود.</p><ul><li>قوانین کم و روشن</li><li>بازخورد سریع</li></ul>')}
-                ${deepTurn('یک مثال بزن', '<p>مثلاً هر جلسه با یک فعالیت کوتاه پنج‌دقیقه‌ای شروع شود تا کلاس آرام شود.</p>')}
+                ${deepTurn('مدیریت کلاس را در سه جمله توضیح بده', [['p', 'مدیریت کلاس یعنی ساختن <code>روال</code> روشن از همان روز اول تا دانش‌آموزان بدانند چه انتظاری از آن‌ها می‌رود.'], ['li', 'قوانین کم و روشن'], ['li', 'بازخورد سریع']].map((b) => block(b, false)).join(''))}
+                ${deepTurn('یک مثال بزن', block(['p', 'مثلاً هر جلسه با یک فعالیت کوتاه پنج‌دقیقه‌ای شروع شود تا کلاس آرام شود.'], false))}
               </div></div>`)}</div>
               <div class="deep-composer"><div class="x78zum5 xdt5ytf" data-notion-chat-input-container="true">${nest(3, `<div role="presentation"><div class="deep-box"><div class="content-editable-leaf notranslate" contenteditable="true" role="textbox" data-content-editable-leaf="true" placeholder="Do anything with AI…"></div></div></div>`)}</div></div>
             </div>
           </div>`;
+        // like Notion's text-block framework: it takes the mouse itself (the
+        // release never reaches the page) and makes the blocks editable while
+        // you select in them
+        for (const root of app.querySelectorAll('[data-content-editable-root]')) {
+          root.addEventListener('mouseup', (e) => e.stopPropagation());
+          root.addEventListener('mousedown', () => root.querySelectorAll('[data-content-editable-leaf]').forEach((l) => l.setAttribute('contenteditable', 'true')));
+        }
       }
 
       if (location.pathname === '/ai') aiView();

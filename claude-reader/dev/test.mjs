@@ -118,7 +118,12 @@ async function select(text, n = 0) {
       const s = getSelection();
       s.removeAllRanges();
       s.addRange(r);
-      document.body.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      // where a real mouse would be released: on the selected text
+      const where = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+      where.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      s.removeAllRanges();
+      s.addRange(r);
+      where.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     },
     { text, n }
   );
@@ -1036,6 +1041,10 @@ const nreport = JSON.parse(
     const [tab] = await chrome.tabs.query({ url: 'https://www.notion.so/*' });
     return (await chrome.tabs.sendMessage(tab.id, { csr: 'diag' })).report;
   })
+);
+ok(
+  nreport.selection && nreport.selection.accepted && nreport.selection.reachedPage === false && nreport.selection.inMessage === 'assistant',
+  'a selection in an answer whose mouse release Notion keeps to itself still works: ' + JSON.stringify(nreport.selection)
 );
 ok(
   nreport.notion.found && nreport.notion.rows.length === 3 && nreport.notion.path.length > 10 && nreport.notion.bubbles.some((r) => r.some((b) => b.includes('BUBBLE'))),

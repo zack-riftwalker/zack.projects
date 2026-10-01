@@ -66,7 +66,7 @@
     for (const r of records) {
       if (isOurs(r.target)) continue;
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
-      if (el && el.closest(SEL.editor)) continue; // typing in the composer
+      if (el && el.closest(SEL.editor) && !(CSR.site.id === 'notion' && dom.messageOf(el))) continue; // typing in the composer (or a Notion page)
       const m = dom.messageOf(r.target);
       if (m) {
         dirty.add(m);

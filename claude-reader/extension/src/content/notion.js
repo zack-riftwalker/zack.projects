@@ -202,6 +202,11 @@
     return null;
   }
 
+  const BLOCKISH = '[data-block-id], p, li, h1, h2, h3, h4, pre, table';
+  /** A few characters beside a question (a time, "Edited") or only buttons. */
+  const isMeta = (el) => ownText(el) <= 0 || (ownText(el) <= 20 && !el.querySelector(BLOCKISH));
+  const onlyMeta = (parent, except) => Array.from(parent.children).every((c) => c === except || isMeta(c));
+
   const roles = new WeakMap(); // row -> {sig, list: [{el, role}]}
 
   function split(row, L) {
@@ -211,15 +216,16 @@
     let list;
     const b = bubbleIn(row, L);
     if (!b) list = [{ el: row, role: 'assistant' }];
-    else if (ownText(row) - ownText(b) < 2) list = [{ el: b, role: 'user' }];
     else {
-      // a whole turn in one row: find where the question and the answer part
-      // (buttons beside the bubble, like "Edit", don't count)
+      // climb from the bubble while the levels around it add only small
+      // things (its time, "Edited", buttons); where real content joins in,
+      // that content is the answer
       let holder = b;
-      while (holder !== row && holder.parentElement && ownText(holder.parentElement) - ownText(b) < 2) holder = holder.parentElement;
-      const turn = holder === row ? row : holder.parentElement;
+      while (holder !== row && holder.parentElement && onlyMeta(holder.parentElement, holder)) holder = holder.parentElement;
       list = [{ el: b, role: 'user' }];
-      for (const c of turn.children) if (c !== holder && !c.contains(b) && ownText(c) > 0) list.push({ el: c, role: 'assistant' });
+      if (holder !== row) {
+        for (const c of holder.parentElement.children) if (c !== holder && !isMeta(c)) list.push({ el: c, role: 'assistant' });
+      }
     }
     roles.set(row, { sig, list });
     return list;
@@ -237,8 +243,10 @@
         for (const m of parts) out.push(m);
       }
     }
-    // never anything editable (a message being edited, or a Notion page)
-    const list = out.filter((m) => !m.el.closest(EDITABLE) && !m.el.querySelector(EDITABLE) && !m.el.closest(PAGE));
+    // never a Notion page. (Answers are drawn with Notion's text-block
+    // framework, which may make them editable for its selection handling;
+    // inside the chat's message list that is text to read, not a document.)
+    const list = out.filter((m) => !m.el.closest(PAGE) && !m.el.querySelector(PAGE) && !(c && m.el.contains(c.composer)));
     list.sort((a, b) => (a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
     const keep = new Set(list.map((m) => m.el));
     for (const el of document.querySelectorAll('[data-csr-msg]')) if (!keep.has(el)) el.removeAttribute('data-csr-msg');
@@ -250,6 +258,16 @@
   };
 
   dom.composer = () => (N.chat ? N.chat.input : null);
+
+  // Same idea for "is the user typing here?": text inside a chat message
+  // counts as text to read; the chat box, pages and everything else as typing.
+  const baseEditable = dom.isEditable;
+  dom.isEditable = function (node) {
+    if (!baseEditable(node)) return false;
+    const el = node.nodeType === 1 ? node : node.parentElement;
+    const c = N.chat;
+    return !(c && el && el.closest('[data-csr-msg]') && c.list.contains(el) && !c.composer.contains(el) && !el.closest(PAGE));
+  };
 
   // 53-bit string hash (cyrb53)
   function hash(str) {

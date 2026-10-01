@@ -167,7 +167,7 @@
     }
   };
 
-  document.addEventListener('dblclick', (e) => {
+  window.addEventListener('dblclick', (e) => {
     if (!CSR.settings.enabled || !CSR.settings.dictDblclick || CSR.ui.mode !== 'none') return;
     if (e.composedPath().some((n) => n.id === 'csr-host')) return;
     if (!dom.messageOf(e.target, true) || dom.isEditable(e.target)) return;
@@ -177,7 +177,7 @@
     CSR.ui.suppressToolbarUntil = Date.now() + 400;
     CSR.ui.hideSelectionToolbar();
     DI.lookup(w, sel.getRangeAt(0).getBoundingClientRect());
-  });
+  }, true);
 
   document.addEventListener(
     'mousedown',
