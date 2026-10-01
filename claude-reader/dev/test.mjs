@@ -709,6 +709,35 @@ ok(ht !== null && ht >= 0 && ht < 320, 'TOC click finds and jumps to a section t
 await shot('28-virtual-toc');
 await page.keyboard.press('Alt+T');
 
+console.log('Reading column width on the virtual list');
+const setWidth = (w) =>
+  popup.evaluate(async (w) => {
+    const { settings } = await chrome.storage.sync.get('settings');
+    await chrome.storage.sync.set({ settings: { ...settings, contentWidth: w } });
+  }, w);
+const widths = () =>
+  page.evaluate(() => ({
+    rows: [...document.querySelectorAll('.row-inner')].map((r) => Math.round(r.getBoundingClientRect().width)),
+    composer: Math.round(document.querySelector('.composer').getBoundingClientRect().width),
+    bubble: Math.max(...[...document.querySelectorAll('[data-testid="user-message"]')].map((b) => b.getBoundingClientRect().width)),
+  }));
+const rowsBefore = (await widths()).rows;
+await setWidth(920);
+await page.waitForTimeout(700);
+let cw = await widths();
+ok(cw.rows.length > 1 && cw.rows.every((x) => x === 920), 'every rendered row takes the chosen width (' + rowsBefore[0] + ' → ' + cw.rows.join(',') + ')');
+await page.evaluate(() => document.querySelector('.scroller').scrollTo({ top: 0, behavior: 'instant' }));
+await page.waitForTimeout(1500);
+cw = await widths();
+ok(cw.rows.length > 1 && cw.rows.every((x) => x === 920), 'rows that appear while scrolling get it too: ' + cw.rows.join(','));
+ok(cw.composer >= 920, 'the message box lines up with the text (' + cw.composer + ')');
+ok(cw.bubble < 920 * 0.85, 'your own message bubbles are not stretched (' + Math.round(cw.bubble) + ')');
+await shot('29-wide-column');
+await setWidth(0);
+await page.waitForTimeout(500);
+cw = await widths();
+ok(cw.rows.every((x) => x === rowsBefore[0]), "back to Claude's width when reset");
+
 // ---------------------------------------------------------------------------
 console.log('Regressions from the code review');
 await open(CONV);

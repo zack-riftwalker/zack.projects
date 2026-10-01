@@ -53,6 +53,9 @@
       .v3 .shell { display: flex; height: 100vh; }
       .v3 .side-rail { width: 220px; background: var(--surface-raised); padding: 14px; }
       .v3 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+      /* virtual list: each row limits its own width, like the current claude.ai */
+      .column.feed { max-width: none; }
+      .row-inner { max-width: 736px; margin: 0 auto; }
       .v3 .scroll-area { flex: 1; overflow-y: auto; background: #1a1a19; } /* hard-coded: no variable */
       .v3.light .scroll-area { background: #f4f2ec; }
       .v3 .transcript { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; display: flex; flex-direction: column; gap: 18px; }
@@ -279,7 +282,7 @@
             e(
               'div',
               { key: i, 'data-testid': 'transcript-row', 'data-index': i, ref: measure(i), style: { paddingBottom: 18 } },
-              e(Message, { m: VTURNS[i] })
+              e('div', { className: 'row-inner' }, e(Message, { m: VTURNS[i] }))
             )
           );
         }
@@ -290,7 +293,7 @@
           e(
             'main',
             { className: 'scroller', ref: scRef, style: { scrollBehavior: 'smooth' } },
-            e('div', { className: 'column', role: 'feed', 'aria-label': 'Chat messages' }, e('div', { style: { height: before } }), rows, e('div', { style: { height: after } })),
+            e('div', { className: 'column feed', role: 'feed', 'aria-label': 'Chat messages' }, e('div', { style: { height: before } }), rows, e('div', { style: { height: after } })),
             e('div', { className: 'composer' }, e('div', { className: 'ProseMirror', contentEditable: true, suppressContentEditableWarning: true }, e('p', null)))
           )
         );

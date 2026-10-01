@@ -71,7 +71,7 @@
     { key: 'fontWeight', label: 'ضخامت فونت', min: 300, max: 600, step: 10, def: 400, fmt: (v) => fa(v) },
     { key: 'wordSpacing', label: 'فاصله‌ی کلمات', min: 1, max: 40, step: 1, def: 8, fmt: (v) => fa(v) + '٪' },
     { key: 'paragraphSpacing', label: 'فاصله‌ی پاراگراف', min: 0.3, max: 2.5, step: 0.05, def: 0.75, fmt: (v) => fa(v.toFixed(2)) + 'em' },
-    { key: 'contentWidth', label: 'عرض ستون متن', min: 560, max: 1600, step: 20, def: 768, fmt: (v) => fa(v) + 'px' },
+    { key: 'contentWidth', label: 'عرض ستون متن', min: 560, max: 2000, step: 20, def: 768, fmt: (v) => fa(v) + 'px' },
   ];
   for (const r of RANGES) {
     const input = Object.assign(document.createElement('input'), { type: 'range', min: r.min, max: r.max, step: r.step, id: r.key });

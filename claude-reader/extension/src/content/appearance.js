@@ -310,19 +310,53 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
   };
 
   // ---------------------------------------------------------------------------
-  // Reading column width
+  // Reading column width. Claude limits the text with max-width on one or more
+  // wrappers; on the current site every row of the (virtual) conversation has
+  // its own, and rows come and go while scrolling. Each one gets marked
+  // (with its original width, for the diagnostic report).
+
+  const columnDone = new WeakSet();
+  const columnWidths = new Set(); // max-widths found around answers
+
+  function pxMaxWidth(el) {
+    const mw = getComputedStyle(el).maxWidth;
+    return mw.endsWith('px') ? parseFloat(mw) : 0;
+  }
+
+  /** Marks the width-limiting wrappers from `start` up to the scroll container. */
+  function markChain(start, accept) {
+    for (let el = start, i = 0; el && el !== document.body && i < 16; el = el.parentElement, i++) {
+      if (!el.hasAttribute('data-csr-column')) {
+        const w = pxMaxWidth(el);
+        // reading columns, not tiny boxes or the whole app
+        if (w >= 400 && w <= 1100 && accept(w)) el.setAttribute('data-csr-column', Math.round(w) + 'px');
+      }
+      const o = getComputedStyle(el).overflowY;
+      if (o === 'auto' || o === 'scroll') break;
+    }
+  }
 
   A.markColumn = function (messages, s) {
     if (!(s.enabled && s.contentWidth > 0) || !messages.length) return;
-    const first = messages[0];
-    if (first.closest('[data-csr-column]')) return;
-    let cur = first.parentElement;
-    for (let i = 0; cur && i < 10; i++, cur = cur.parentElement) {
-      const mw = getComputedStyle(cur).maxWidth;
-      if (mw && mw !== 'none' && cur.clientWidth < window.innerWidth - 40) {
-        cur.setAttribute('data-csr-column', '');
-        return;
-      }
+    // answers first: their wrappers tell how wide Claude's column is
+    for (const m of messages) {
+      if (columnDone.has(m) || CSR.dom.roleOf(m) === 'user') continue;
+      columnDone.add(m);
+      markChain(m, (w) => columnWidths.add(Math.round(w)));
+    }
+    if (!columnWidths.size) return;
+    // your messages: only wrappers as wide as that column (not the bubble itself)
+    const sameAsColumn = (w) => [...columnWidths].some((c) => Math.abs(c - w) <= 2);
+    for (const m of messages) {
+      if (columnDone.has(m)) continue;
+      columnDone.add(m);
+      markChain(m, sameAsColumn);
+    }
+    // the message box, so it lines up with the text
+    const editor = document.querySelector('div.ProseMirror') || document.querySelector(SEL.editor);
+    if (editor && !columnDone.has(editor) && !editor.closest(SEL.ui)) {
+      columnDone.add(editor);
+      markChain(editor.parentElement, (w) => w >= 480);
     }
   };
 

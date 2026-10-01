@@ -70,6 +70,7 @@
       theme: CSR.themeFix.report(),
       painted: q('[data-csr-paint]'),
       focusHidden: q('[data-csr-focus-hide]'),
+      column: { width: CSR.settings.contentWidth, marked: [...document.querySelectorAll('[data-csr-column]')].slice(0, 12).map((e) => e.tagName.toLowerCase() + ':' + e.getAttribute('data-csr-column')) },
       assistantChain: chain(first),
       userChain: chain(user, 6),
       paragraphHolders: top.map(([el, n]) => ({ paragraphs: n, chain: chain(el, 8) })),
