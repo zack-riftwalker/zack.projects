@@ -186,6 +186,15 @@
     return 0;
   };
 
+  /** Document order of two annotations: by conversation row (Claude's virtual
+   * list index; older anchors only have the rendered message index), then by
+   * position inside the message. */
+  CSR.compareAnchors = function (x, y) {
+    const a = x.anchor || {};
+    const b = y.anchor || {};
+    return (a.row ?? a.msg ?? 0) - (b.row ?? b.msg ?? 0) || (a.start ?? a.block ?? 0) - (b.start ?? b.block ?? 0);
+  };
+
   CSR.DEFAULT_TAGS = ['امتحان', 'مهم', 'مرور', 'سؤال', 'تعریف', 'فرمول', 'مثال'];
 
   /** Local date key (YYYY-MM-DD) for study statistics. */

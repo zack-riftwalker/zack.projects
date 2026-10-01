@@ -310,6 +310,26 @@
           )
         );
       }
+      // Claude's own floating «Reply» button above a selection
+      (() => {
+        const btn = document.createElement('button');
+        btn.textContent = 'Reply ↩';
+        btn.className = 'mock-reply';
+        btn.style.cssText = 'position:fixed;display:none;z-index:50;padding:6px 12px;border-radius:8px;background:#1f1e1d;color:#fff;font:600 14px system-ui';
+        document.body.appendChild(btn);
+        document.addEventListener('mouseup', () =>
+          setTimeout(() => {
+            const sel = getSelection();
+            if (!sel.rangeCount || sel.isCollapsed || !sel.anchorNode.parentElement.closest('.standard-markdown')) return (btn.style.display = 'none');
+            const r = sel.getRangeAt(0).getBoundingClientRect();
+            btn.style.display = 'block';
+            btn.style.left = r.left + r.width / 2 - 40 + 'px';
+            btn.style.top = r.top - 44 + 'px';
+          }, 60)
+        );
+        document.addEventListener('selectionchange', () => getSelection().isCollapsed && (btn.style.display = 'none'));
+      })();
+
       if (location.pathname.startsWith('/code/')) {
         const h = document.documentElement;
         h.removeAttribute('data-theme');

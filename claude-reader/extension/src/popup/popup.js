@@ -377,11 +377,11 @@
     const u = await chrome.runtime.sendMessage({ csr: 'checkUpdate' }).catch(() => null);
     $('checkUpdate').textContent = 'بررسی به‌روزرسانی';
     paintUpdate(u);
-    if (u && u.error) $('versionNote').textContent = 'اتصال به گیت‌هاب برقرار نشد؛ بعداً دوباره امتحان کن.';
+    if (!u || u.error) $('versionNote').textContent = 'اتصال به گیت‌هاب برقرار نشد؛ بعداً دوباره امتحان کن.';
   });
   $('ubDownload').addEventListener('click', async () => {
     const { update } = await chrome.storage.local.get('update');
-    if (update && update.zip) chrome.tabs.create({ url: update.zip });
+    if (update && /^https:\/\//.test(String(update.zip || ''))) chrome.tabs.create({ url: update.zip });
   });
   $('ubHow').addEventListener('click', () => ($('ubSteps').hidden = !$('ubSteps').hidden));
   $('reloadExt').addEventListener('click', () => chrome.runtime.sendMessage({ csr: 'reloadExtension' }));

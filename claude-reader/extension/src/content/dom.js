@@ -363,14 +363,39 @@
     return out;
   }
 
+  // Only the newest jump may keep scrolling: a second click (or the reader
+  // moving on) while an earlier jump is still correcting would otherwise
+  // make both fight over the scroll position.
+  let jump = 0;
+
+  // scroll margins we set, with the element's own values to put back once
+  // the last jump using that element is done
+  const margins = new Map();
+  function holdMargins(el) {
+    let m = margins.get(el);
+    if (!m) {
+      m = { top: el.style.scrollMarginTop, bottom: el.style.scrollMarginBottom, users: 0 };
+      margins.set(el, m);
+      el.style.scrollMarginTop = '84px';
+      el.style.scrollMarginBottom = '120px';
+    }
+    m.users++;
+  }
+  function releaseMargins(el) {
+    const m = margins.get(el);
+    if (!m || --m.users > 0) return;
+    margins.delete(el);
+    el.style.scrollMarginTop = m.top;
+    el.style.scrollMarginBottom = m.bottom;
+  }
+
   /** Jumps so `el` is at the top (or center) of the screen. Instant jumps with
-   * re-checks, so layout shifts from the virtual list can't undo it. */
+   * re-checks, so layout shifts from the virtual list can't undo it. Resolves
+   * false if the element went away or a newer jump took over. */
   dom.scrollToEl = async function (el, block = 'start') {
     if (!el || !el.isConnected) return false;
-    const prevTop = el.style.scrollMarginTop;
-    const prevBottom = el.style.scrollMarginBottom;
-    el.style.scrollMarginTop = '84px';
-    el.style.scrollMarginBottom = '120px';
+    const me = ++jump;
+    holdMargins(el);
     const sc = dom.scrollParent(el);
     const inPlace = () => {
       const r = el.getBoundingClientRect();
@@ -387,7 +412,7 @@
       let steady = 0;
       for (let i = 0; i < 16 && el.isConnected; i++) {
         await wait(i < 3 ? 70 : 140);
-        if (!el.isConnected) return false;
+        if (me !== jump || !el.isConnected) return false;
         if (inPlace()) {
           if (++steady >= 3) break;
         } else {
@@ -396,21 +421,23 @@
         }
       }
     } finally {
-      el.style.scrollMarginTop = prevTop;
-      el.style.scrollMarginBottom = prevBottom;
+      releaseMargins(el);
     }
     return true;
   };
 
   /** Finds something that may not be rendered yet: calls `find()`, and if it
-   * returns nothing, scrolls toward virtual-list row `row` until it appears. */
+   * returns nothing, scrolls toward virtual-list row `row` until it appears.
+   * Resolves false (not null) when a newer jump took over. */
   dom.seek = async function (find, row) {
     let el = find();
     if (el || row == null) return el;
     const first = document.querySelector('[data-csr-msg]');
     if (!first) return null;
+    const me = ++jump;
     const sc = dom.scrollParent(first);
     for (let i = 0; i < 60; i++) {
+      if (me !== jump) return false;
       const rows = renderedRows();
       if (!rows.length) return null;
       const min = Math.min(...rows);
@@ -420,6 +447,7 @@
         if (target) target.scrollIntoView({ block: 'start', behavior: 'instant' });
         for (let k = 0; k < 14 && !el; k++) {
           await wait(150);
+          if (me !== jump) return false;
           el = find();
         }
         return el;
@@ -427,6 +455,7 @@
       const before = sc.scrollTop;
       sc.scrollBy({ top: (row < min ? -1 : 1) * sc.clientHeight * 0.85, behavior: 'instant' });
       await wait(110);
+      if (me !== jump) return false;
       el = find();
       if (el) return el;
       if (sc.scrollTop === before) return null; // reached the end

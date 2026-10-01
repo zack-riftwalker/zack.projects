@@ -8,13 +8,7 @@
   const oneLine = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 
   function sortAnn(list) {
-    return list
-      .slice()
-      .sort(
-        (x, y) =>
-          (x.anchor.row ?? x.anchor.msg ?? 0) - (y.anchor.row ?? y.anchor.msg ?? 0) ||
-          (x.anchor.start ?? x.anchor.block ?? 0) - (y.anchor.start ?? y.anchor.block ?? 0)
-      );
+    return list.slice().sort(CSR.compareAnchors);
   }
 
   CSR.describeAnnotation = function (a) {

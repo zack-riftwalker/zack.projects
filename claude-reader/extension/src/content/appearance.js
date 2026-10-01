@@ -11,6 +11,8 @@
   const faceRules = new Map(); // family -> css text
   const loadedFaces = new Set();
 
+  A.styleConnected = () => !!(styleEl && styleEl.isConnected);
+
   function ensureStyle() {
     if (styleEl && styleEl.isConnected) return styleEl;
     styleEl = document.createElement('style');

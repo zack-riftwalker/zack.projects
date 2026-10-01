@@ -652,6 +652,86 @@ ok(ht !== null && ht >= 0 && ht < 320, 'TOC click finds and jumps to a section t
 await shot('28-virtual-toc');
 await page.keyboard.press('Alt+T');
 
+// ---------------------------------------------------------------------------
+console.log('Regressions from the code review');
+await open(CONV);
+// notes panel must not be rebuilt by reading-position saves (a rebuild can eat clicks)
+await page.keyboard.press('Alt+M');
+await page.evaluate(() => (document.getElementById('csr-host').shadowRoot.querySelector('.panel').__probe = 1));
+await page.evaluate(() => document.querySelector('.scroller').scrollBy({ top: 300, behavior: 'instant' }));
+await page.waitForTimeout(2300);
+ok(await page.evaluate(() => document.getElementById('csr-host').shadowRoot.querySelector('.panel').__probe === 1), 'notes panel is not rebuilt when only the reading position changes');
+await page.keyboard.press('Alt+M');
+// selection toolbar survives a small automatic scroll
+await page.locator('.standard-markdown p', { hasText: 'In English' }).scrollIntoViewIfNeeded();
+await page.waitForTimeout(400);
+await select('a browser API');
+ok(await page.locator('#csr-host .sel-toolbar').isVisible(), 'toolbar shown');
+await page.evaluate(() => document.querySelector('.scroller').scrollBy({ top: 2, behavior: 'instant' }));
+await page.waitForTimeout(200);
+ok(await page.locator('#csr-host .sel-toolbar').isVisible(), 'toolbar stays open through a small automatic scroll');
+await page.evaluate(() => getSelection().removeAllRanges());
+// Esc while typing in the message box doesn't leave focus mode
+await page.keyboard.press('Alt+Z');
+await page.evaluate(() => {
+  const ed = document.querySelector('.ProseMirror');
+  ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+});
+await page.waitForTimeout(200);
+ok(await page.evaluate(() => document.documentElement.hasAttribute('data-csr-focus')), 'Esc in the message box keeps focus mode');
+await page.keyboard.press('Escape');
+ok(!(await page.evaluate(() => document.documentElement.hasAttribute('data-csr-focus'))), 'Esc elsewhere leaves focus mode');
+
+// ---------------------------------------------------------------------------
+console.log("Toolbar vs Claude's Reply button; drawings follow the text when the font grows");
+await page.locator('.standard-markdown p', { hasText: 'In English' }).scrollIntoViewIfNeeded();
+await page.waitForTimeout(300);
+await select('external system');
+await page.waitForTimeout(600);
+const boxes = await page.evaluate(() => {
+  const r = (e) => e && e.getBoundingClientRect();
+  const tb = r(document.getElementById('csr-host').shadowRoot.querySelector('.sel-toolbar'));
+  const rep = r(document.querySelector('.mock-reply'));
+  const sel = getSelection().getRangeAt(0).getBoundingClientRect();
+  return { tb: { t: tb.top, b: tb.bottom, l: tb.left, r: tb.right }, rep: { t: rep.top, b: rep.bottom, l: rep.left, r: rep.right }, selBottom: sel.bottom };
+});
+const hit = boxes.tb.l < boxes.rep.r && boxes.tb.r > boxes.rep.l && boxes.tb.t < boxes.rep.b && boxes.tb.b > boxes.rep.t;
+ok(!hit, "selection toolbar doesn't cover Claude's Reply button");
+ok(boxes.tb.t >= boxes.selBottom, 'toolbar sits under the selection');
+await shot('30-toolbar-reply');
+await page.evaluate(() => getSelection().removeAllRanges());
+
+// the remaining pen stroke was drawn over the paragraph «این هوک دو ورودی…»
+const strokeVsPara = () =>
+  page.evaluate(() => {
+    const path = document.querySelector('.csr-draw-layer path');
+    const para = [...document.querySelectorAll('.standard-markdown p')].find((p) => p.textContent.startsWith('این هوک دو ورودی'));
+    const a = path.getBoundingClientRect();
+    const b = para.getBoundingClientRect();
+    return { cy: a.top + a.height / 2, top: b.top, bottom: b.bottom, w: a.width };
+  });
+await page.evaluate(() => [...document.querySelectorAll('.standard-markdown p')].find((p) => p.textContent.startsWith('این هوک دو ورودی')).scrollIntoView({ block: 'center' }));
+await page.waitForTimeout(400);
+const s0 = await strokeVsPara();
+ok(s0.cy >= s0.top - 4 && s0.cy <= s0.bottom + 4, 'stroke starts on its paragraph');
+await popup.evaluate(async () => {
+  const { settings } = await chrome.storage.sync.get('settings');
+  await chrome.storage.sync.set({ settings: { ...settings, fontSize: 26, lineHeight: 2.1 } });
+});
+await page.waitForTimeout(1200);
+await page.evaluate(() => [...document.querySelectorAll('.standard-markdown p')].find((p) => p.textContent.startsWith('این هوک دو ورودی')).scrollIntoView({ block: 'center' }));
+await page.waitForTimeout(500);
+const s1 = await strokeVsPara();
+ok(s1.cy >= s1.top - 4 && s1.cy <= s1.bottom + 4, `stroke still on its paragraph after the font grew (stroke ${Math.round(s1.cy)}, paragraph ${Math.round(s1.top)}–${Math.round(s1.bottom)})`);
+ok(s1.w > s0.w * 1.2, 'stroke scaled with the text');
+ok((await page.locator('.csr-hl-blue').textContent()) === 'کارهای جانبی', 'highlights still cover exactly the same words');
+await shot('31-font-grown');
+await popup.evaluate(async () => {
+  const { settings } = await chrome.storage.sync.get('settings');
+  await chrome.storage.sync.set({ settings: { ...settings, fontSize: 19, lineHeight: 2 } });
+});
+await page.waitForTimeout(500);
+
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 
 await context.close();

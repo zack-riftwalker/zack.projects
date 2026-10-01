@@ -35,6 +35,7 @@
   function sync() {
     timer = 0;
     const s = CSR.settings;
+    if (!A.styleConnected()) A.apply(s); // the page dropped our <style>: put it back
     const messages = dom.getMessages();
     const todo = forceAll ? messages : messages.filter((m) => dirty.has(m) || !seen.has(m));
     for (const m of todo) {
@@ -176,8 +177,10 @@
         UI.closePopover();
         UI.hideSelectionToolbar();
         CSR.dict.close();
-        if (!busy && CSR.tts.active) CSR.tts.stop();
-        else if (!busy && CSR.focus.on) CSR.focus.toggle(false);
+        // Esc in Claude's message box (or one of our own fields) isn't meant for focus mode / reading
+        if (busy || dom.isEditable(e.composedPath()[0])) return;
+        if (CSR.tts.active) CSR.tts.stop();
+        else if (CSR.focus.on) CSR.focus.toggle(false);
         return;
       }
       if (UI.mode === 'draw' && (e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
@@ -235,5 +238,7 @@
     }
   });
 
-  CSR.debug = { sync: () => scheduleSync(true, 0) };
+  /** Full placement pass soon (e.g. after scrolling rows of the virtual list in). */
+  CSR.resync = () => scheduleSync(true, 0);
+  CSR.debug = { sync: CSR.resync };
 })();

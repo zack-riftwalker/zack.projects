@@ -31,7 +31,9 @@
     emit();
   };
 
-  AN.save = function () {
+  /** Saves soon. `quiet` skips notifying the notes panel (for changes it
+   * doesn't show, like the reading position). */
+  AN.save = function (opts) {
     if (!conv) return;
     clearTimeout(saveTimer);
     captureTitle();
@@ -39,7 +41,7 @@
       saveTimer = 0;
       write();
     }, 250);
-    emit();
+    if (!(opts && opts.quiet)) emit();
   };
 
   function captureTitle() {
@@ -92,12 +94,16 @@
   function candidates(a, ctx) {
     const want = a.anchor || {};
     return ctx.messages
-      .map((m, j) => ({
-        m,
-        keyOk: want.key && msgKey(ctx.index(m)) === want.key ? 0 : 1,
-        roleOk: want.role && dom.roleOf(m) === want.role ? 0 : 1,
-        d: Math.abs(j - (want.msg || 0)),
-      }))
+      .map((m, j) => {
+        // on a virtual list the rendered index shifts while scrolling; the row doesn't
+        const row = want.row != null ? dom.rowIndex(m) : null;
+        return {
+          m,
+          keyOk: want.key && msgKey(ctx.index(m)) === want.key ? 0 : 1,
+          roleOk: want.role && dom.roleOf(m) === want.role ? 0 : 1,
+          d: row != null ? Math.abs(row - want.row) : Math.abs(j - (want.msg || 0)),
+        };
+      })
       .sort((x, y) => x.keyOk - y.keyOk || x.roleOk - y.roleOk || x.d - y.d)
       .map((x) => x.m);
   }
@@ -281,7 +287,8 @@
       svg.setAttribute('data-csr-draw-id', a.id);
       msg.setAttribute('data-csr-has-drawing', '');
       msg.appendChild(svg);
-      CSR.draw.render(svg, a.strokes || []);
+      if (CSR.draw.render(svg, a.strokes || [])) AN.save({ quiet: true }); // old strokes got anchors
+      CSR.draw.track(msg, svg, a);
       placed.set(a.id, { el: svg, msg });
       return 'ok';
     }
@@ -296,7 +303,7 @@
     let waiting = false;
     const now = Date.now();
     const tryOrphans = force || messages.length !== lastMsgCount || now - lastOrphanTry > 4000;
-    let anyOrphan = false;
+    let statusChanged = false;
     // blocks before dividers so that divider insertion doesn't shift nothing important;
     // marks last since wrapping changes text nodes.
     const order = { block: 0, divider: 1, bookmark: 1, drawing: 2, mark: 3 };
@@ -305,20 +312,19 @@
       if (isPlacedOk(a)) continue;
       const wasPlaced = placed.has(a.id);
       if (wasPlaced) unplace(a);
-      if (!wasPlaced && a._orphan && !tryOrphans) {
-        anyOrphan = true;
-        continue;
-      }
+      if (!wasPlaced && a._orphan && !tryOrphans) continue;
       const r = place(a, ctx, isStable);
       if (r === 'wait') waiting = true;
+      // (a waiting one counts as found, so it's retried on the next pass)
+      if (!!a._orphan !== (r === 'missing')) statusChanged = true;
       Object.defineProperty(a, '_orphan', { value: r === 'missing', enumerable: false, configurable: true, writable: true });
-      if (r === 'missing') anyOrphan = true;
     }
     if (tryOrphans) {
       lastOrphanTry = now;
       lastMsgCount = messages.length;
     }
-    if (anyOrphan || waiting) emit();
+    // only tell the panel when something actually appeared or disappeared
+    if (statusChanged) emit();
     return waiting;
   };
 
@@ -578,6 +584,7 @@
     svg.setAttribute('data-csr-draw-id', a.id);
     msg.setAttribute('data-csr-has-drawing', '');
     msg.appendChild(svg);
+    CSR.draw.track(msg, svg, a);
     placed.set(a.id, { el: svg, msg });
     return a;
   };
@@ -624,13 +631,21 @@
   AN.reveal = async function (id) {
     const a = AN.get(id);
     if (!a) return false;
+    let asked = 0;
     const el = await dom.seek(() => {
       const t = targetOf(a);
-      if (!t && CSR.debug) CSR.debug.sync();
+      // rows that just scrolled in: ask for a placement pass (a full sync, so
+      // orphans are retried), but not on every poll of the seek loop
+      if (!t && CSR.resync && Date.now() - asked > 400) {
+        asked = Date.now();
+        CSR.resync();
+      }
       return t;
     }, a.anchor.row ?? null);
+    if (el === false) return true; // a newer jump took over; nothing to report
     if (!el) return false;
-    await dom.scrollToEl(el, 'center');
+    // false: a newer jump took over (fine), or Claude re-rendered it mid-jump
+    if (!(await dom.scrollToEl(el, 'center'))) return el.isConnected;
     const p = placed.get(id);
     const flashEls = p ? p.els || [p.el] : [];
     flashEls.forEach((e) => e.classList && e.classList.add('csr-flash'));
@@ -640,9 +655,7 @@
 
   /** Annotations in reading order. */
   AN.sorted = function () {
-    return AN.all()
-      .slice()
-      .sort((x, y) => (x.anchor.row ?? x.anchor.msg ?? 0) - (y.anchor.row ?? y.anchor.msg ?? 0) || (x.anchor.start ?? x.anchor.block ?? 0) - (y.anchor.start ?? y.anchor.block ?? 0));
+    return AN.all().slice().sort(CSR.compareAnchors);
   };
 
   AN.isOrphan = (a) => !!a._orphan && !placed.has(a.id);

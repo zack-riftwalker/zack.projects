@@ -60,12 +60,19 @@
   // conversations only have part of their messages in the page at a time;
   // sections of rows that aren't rendered stay listed from this cache.
   let known = new Map();
+  let builtFrom = []; // the message elements the last build saw
+  let stale = true; // the page changed since the last build (see TOC.refresh)
 
-  TOC.build = function () {
+  TOC.build = function (messages = dom.getMessages()) {
     const out = [];
     const rows = new Set();
-    dom.getMessages().forEach((m, mi) => {
-      const row = dom.rowIndex(m) ?? mi;
+    let virtual = false;
+    builtFrom = messages;
+    stale = false;
+    messages.forEach((m, mi) => {
+      const ri = dom.rowIndex(m);
+      if (ri != null) virtual = true;
+      const row = ri ?? mi;
       rows.add(row);
       let ord = 0;
       if (dom.roleOf(m) === 'user') {
@@ -88,7 +95,10 @@
         cur.words += words(b);
       }
     });
-    // forget cached sections of rows that are rendered now (they may have changed)
+    // forget cached sections of rows that are rendered now (they may have
+    // changed); without a virtual list every message is rendered, so nothing
+    // unrendered is worth keeping (and old positions would linger as ghosts)
+    if (!virtual && messages.length) known.clear();
     for (const [k, sec] of known) if (rows.has(sec.row)) known.delete(k);
     for (const sec of out) known.set(sec.key, sec);
     sections = [...known.values()].sort((a, b) => a.row - b.row || a.ord - b.ord);
@@ -119,7 +129,7 @@
     if (!p) return;
     if (on) p.read[key] = Date.now();
     else delete p.read[key];
-    AN.save();
+    AN.save({ quiet: true });
     TOC.refresh();
   }
   TOC.setRead = setRead;
@@ -135,7 +145,11 @@
 
   TOC.tick = function () {
     if (!AN.conv()) return;
-    if (!sections.length || !sections.some(live) || dom.getMessages().some((m) => !m.isConnected)) TOC.build();
+    // rebuild when the rendered messages changed (virtual list scrolled,
+    // Claude re-rendered a row, a new message arrived) or their content did
+    // (a streamed answer grew new headings)
+    const msgs = dom.getMessages();
+    if (stale || !sections.length || msgs.length !== builtFrom.length || msgs.some((m, i) => m !== builtFrom[i])) TOC.build(msgs);
     const p = progress();
     const vh = window.innerHeight;
     let changed = false;
@@ -155,7 +169,7 @@
       }
     }
     if (changed) {
-      AN.save();
+      AN.save({ quiet: true });
       TOC.refresh();
     } else if (cur !== current) {
       current = cur;
@@ -175,7 +189,7 @@
           if (r.top > window.innerHeight) return;
           const p = progress();
           p.lastPos = { msg: msgs.indexOf(m), row: dom.rowIndex(m), ...dom.makeBlockAnchor(m, b), at: Date.now() };
-          AN.save();
+          AN.save({ quiet: true });
           return;
         }
       }
@@ -213,7 +227,14 @@
     const p = progress();
     if (!p || !p.lastPos) return null;
     const msgs = dom.getMessages();
-    const order = msgs.map((m, i) => ({ m, d: Math.abs(i - p.lastPos.msg) })).sort((a, b) => a.d - b.d);
+    const row = p.lastPos.row;
+    // on a virtual list the saved row says exactly which message it was; the
+    // rendered index only means something when every message is rendered
+    const rowed = row != null && msgs.some((m) => dom.rowIndex(m) != null);
+    const order = msgs
+      .map((m, i) => ({ m, d: Math.abs(i - p.lastPos.msg) }))
+      .filter((x) => !rowed || dom.rowIndex(x.m) === row)
+      .sort((a, b) => a.d - b.d);
     for (const { m } of order) {
       const el = dom.locateBlock(m, p.lastPos);
       if (el) return el;
@@ -231,8 +252,9 @@
     resumeBtn = null;
     const p = progress();
     const el = await dom.seek(findLastPos, p && p.lastPos ? p.lastPos.row : null);
+    if (el === false) return; // a newer jump took over
     if (!el) return CSR.ui.toast('آخرین جای خواندن پیدا نشد');
-    await dom.scrollToEl(el, 'center');
+    if (!(await dom.scrollToEl(el, 'center'))) return el.isConnected || CSR.ui.toast('آخرین جای خواندن پیدا نشد');
     flash(el);
   };
 
@@ -242,6 +264,7 @@
     current = null;
     sections = [];
     known = new Map();
+    builtFrom = [];
     lastSig = '';
     if (resumeBtn) resumeBtn.remove();
     resumeBtn = null;
@@ -291,6 +314,7 @@
   /** Rebuild after the page changed (debounced; skipped when nothing visible
    * changed, so a click on the list is never lost to a re-render). */
   TOC.refresh = function () {
+    stale = true; // so the next tick rebuilds even while the panel is closed
     if (!TOC.open) return;
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
@@ -322,8 +346,9 @@
       return f && live(f) ? f.el : null;
     };
     const el = await dom.seek(find, sec.row);
+    if (el === false) return; // a newer jump took over
     if (!el) return CSR.ui.toast('این بخش الان در صفحه پیدا نشد');
-    await dom.scrollToEl(el, 'start');
+    if (!(await dom.scrollToEl(el, 'start'))) return el.isConnected || CSR.ui.toast('این بخش الان در صفحه پیدا نشد');
     flash(el);
     current = sections.find((x) => x.key === sec.key) || null;
     markCurrent();
@@ -418,7 +443,7 @@
             class: 'chip',
             onclick: () => {
               for (const s of sections.filter(readable)) progress().read[s.key] = progress().read[s.key] || Date.now();
-              AN.save();
+              AN.save({ quiet: true });
               render();
             },
           },
@@ -432,7 +457,7 @@
               if (!confirm('پیشرفت این گفتگو صفر شود؟')) return;
               progress().read = {};
               dwell = new Map();
-              AN.save();
+              AN.save({ quiet: true });
               render();
             },
           },

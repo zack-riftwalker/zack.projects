@@ -7,12 +7,15 @@
   const DI = (CSR.dict = {});
   const cache = new Map();
   let card = null;
+  let anchorRange = null; // the looked-up word, to keep the card next to it
+  let lookups = 0; // only the newest lookup may fill the card
 
   const WORD = /^[A-Za-z][A-Za-z'’-]{0,40}$/;
 
   function close() {
     if (card) card.remove();
     card = null;
+    anchorRange = null;
   }
   DI.close = close;
 
@@ -136,9 +139,17 @@
       return;
     }
     const context = contextSentence();
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null;
     const key = word.toLowerCase();
-    if (cache.has(key)) return render(word, cache.get(key), rect, context);
+    const me = ++lookups;
+    if (cache.has(key)) {
+      render(word, cache.get(key), rect, context);
+      anchorRange = range;
+      return;
+    }
     render(word, null, rect, context);
+    anchorRange = range;
     let data;
     try {
       data = await chrome.runtime.sendMessage({ csr: 'dict', word: key });
@@ -146,7 +157,11 @@
       data = { ok: false, error: String(e) };
     }
     if (data && data.ok) cache.set(key, data);
-    if (card) render(word, data || { ok: false }, rect, context);
+    if (card && me === lookups) {
+      const r = anchorRange ? anchorRange.getBoundingClientRect() : rect;
+      render(word, data || { ok: false }, r, context);
+      anchorRange = range;
+    }
   };
 
   document.addEventListener('dblclick', (e) => {
@@ -168,5 +183,15 @@
     },
     true
   );
-  document.addEventListener('scroll', () => close(), true);
+  document.addEventListener(
+    'scroll',
+    () => {
+      if (!card) return;
+      if (!anchorRange) return close();
+      const r = anchorRange.getBoundingClientRect();
+      if ((!r.width && !r.height) || r.bottom < 0 || r.top > window.innerHeight) return close();
+      place(r);
+    },
+    true
+  );
 })();

@@ -285,18 +285,20 @@
 
   /** Claude's design system also sets data-mode on inner containers. */
   function syncInner(want) {
-    const els = document.querySelectorAll(want ? '[data-mode]:not(html)' : '[data-csr-orig-mode]:not(html)');
-    let n = 0;
-    for (const el of els) {
-      if (++n > 60) break;
-      if (el.closest('[data-csr-ui]')) continue;
-      if (!want) {
+    if (!want) {
+      // put back every container we flipped, however many there are
+      for (const el of document.querySelectorAll('[data-csr-orig-mode]:not(html)')) {
         el.setAttribute('data-mode', el.getAttribute('data-csr-orig-mode'));
         el.removeAttribute('data-csr-orig-mode');
-        continue;
       }
+      return;
+    }
+    let n = 0;
+    for (const el of document.querySelectorAll('[data-mode]:not(html)')) {
+      if (el.closest('[data-csr-ui]')) continue;
       const cur = el.getAttribute('data-mode');
       if (cur === want || (cur !== 'dark' && cur !== 'light')) continue;
+      if (++n > 60) break; // at most this many flips per pass
       if (!el.hasAttribute('data-csr-orig-mode')) el.setAttribute('data-csr-orig-mode', cur);
       el.setAttribute('data-mode', want);
     }

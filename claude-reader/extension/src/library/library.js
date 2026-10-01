@@ -67,7 +67,7 @@
       const items = conv.annotations
         .filter((a) => a.kind !== 'drawing' || filter === 'all')
         .filter((a) => matches(a, conv))
-        .sort((x, y) => (x.anchor.msg || 0) - (y.anchor.msg || 0) || (x.anchor.start ?? 0) - (y.anchor.start ?? 0));
+        .sort(CSR.compareAnchors);
       const nb = (conv.notebook || '').trim();
       const nbMatch = nb && (!query || nb.toLowerCase().includes(query.toLowerCase())) && filter === 'all';
       if (!items.length && !nbMatch) continue;

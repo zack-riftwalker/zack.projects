@@ -188,20 +188,18 @@ async function lookup(word) {
 async function checkUpdate() {
   const current = chrome.runtime.getManifest().version;
   let best = null;
-  for (const url of CSR.UPDATE_SOURCES) {
-    try {
-      const info = await fetchJson(url + '?t=' + Date.now(), 10000);
-      if (info && info.version && (!best || CSR.compareVersions(info.version, best.version) > 0)) best = info;
-    } catch (e) {
-      /* that source doesn't exist (yet) */
-    }
+  // a source that doesn't exist (yet) just comes back rejected
+  const found = await Promise.allSettled(CSR.UPDATE_SOURCES.map((url) => fetchJson(url + '?t=' + Date.now(), 10000)));
+  for (const r of found) {
+    const info = r.status === 'fulfilled' ? r.value : null;
+    if (info && info.version && (!best || CSR.compareVersions(info.version, best.version) > 0)) best = info;
   }
   const update = {
     checked: Date.now(),
     current,
     latest: best ? best.version : current,
     notes: best && Array.isArray(best.notes) ? best.notes.slice(0, 12) : [],
-    zip: best ? best.zip : '',
+    zip: best && /^https:\/\//.test(String(best.zip || '')) ? best.zip : '',
     available: !!best && CSR.compareVersions(best.version, current) > 0,
     error: best ? '' : 'offline',
   };

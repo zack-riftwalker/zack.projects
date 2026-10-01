@@ -1,6 +1,8 @@
 /* Pencil / marker / straight line / eraser drawing on top of messages.
- * Strokes are stored per message, in pixels relative to the message box, so
- * they scroll together with the text. */
+ * Strokes are stored per message in pixels relative to the message box, plus
+ * an anchor: the character of text closest to the stroke. When the text
+ * reflows (bigger font, wider column, RTL…) each stroke is moved and scaled to
+ * follow its character, so it stays on the words it was drawn on. */
 (function () {
   const CSR = globalThis.CSR;
   const dom = CSR.dom;
@@ -37,9 +39,170 @@
     return path;
   }
 
+  // ---------------------------------------------------------------------------
+  // anchoring strokes to text
+
+  const placedAt = new WeakMap(); // stroke -> {nx, ny, k, ax, ay} used for the last render
+
+  function bbox(p) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (let i = 0; i + 1 < p.length; i += 2) {
+      x0 = Math.min(x0, p[i]);
+      x1 = Math.max(x1, p[i]);
+      y0 = Math.min(y0, p[i + 1]);
+      y1 = Math.max(y1, p[i + 1]);
+    }
+    return { x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+  }
+
+  function caretAt(x, y) {
+    if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      return r ? { node: r.startContainer, offset: r.startOffset } : null;
+    }
+    const p = document.caretPositionFromPoint && document.caretPositionFromPoint(x, y);
+    return p ? { node: p.offsetNode, offset: p.offset } : null;
+  }
+
+  function charRect(index, off) {
+    const r = dom.offsetsToRange(index, off, off + 1);
+    if (!r) return null;
+    const rects = r.getClientRects();
+    const rect = rects[0] || r.getBoundingClientRect();
+    return rect && rect.height ? rect : null;
+  }
+
+  /** Text anchor for a stroke drawn in `msg` (stroke coordinates are relative
+   * to the message box). Needs the stroke to be on screen. */
+  function anchorFor(msg, stroke, index) {
+    const mr = msg.getBoundingClientRect();
+    const b = bbox(stroke.pts);
+    const probes = [
+      [b.cx, b.cy],
+      [stroke.pts[0], stroke.pts[1]],
+      [b.cx, b.y0 - 8],
+      [b.cx, b.y1 + 8],
+    ];
+    const blockers = [overlay, document.getElementById('csr-host')].filter(Boolean);
+    const saved = blockers.map((e) => e.style.pointerEvents);
+    blockers.forEach((e) => (e.style.pointerEvents = 'none'));
+    try {
+      for (const [x, y] of probes) {
+        const cx = mr.left + x;
+        const cy = mr.top + y;
+        if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) continue;
+        const c = caretAt(cx, cy);
+        if (!c || !msg.contains(c.node)) continue;
+        let off = dom.pointToOffset(index, c.node, c.offset);
+        if (off < 0) continue;
+        // step onto a visible character
+        for (let d = 0; d < 6 && off < index.text.length && /\s/.test(index.text[off]); d++) off++;
+        if (off >= index.text.length) off = index.text.length - 1;
+        while (off > 0 && /\s/.test(index.text[off])) off--;
+        const rect = charRect(index, off);
+        if (!rect) continue;
+        return {
+          ...dom.makeTextAnchor(index, off, off + 1),
+          ax: Math.round((rect.left + rect.width / 2 - mr.left) * 10) / 10,
+          ay: Math.round((rect.top - mr.top) * 10) / 10,
+          ah: Math.round(rect.height * 10) / 10,
+        };
+      }
+    } finally {
+      blockers.forEach((e, i) => (e.style.pointerEvents = saved[i]));
+    }
+    return null;
+  }
+  D.anchorFor = anchorFor;
+
+  /** Where the stroke's anchor character is now → SVG transform. */
+  function transformFor(msg, s, index, mr) {
+    if (!s.anchor) return null;
+    const loc = dom.locateText(index, s.anchor);
+    if (!loc || loc.score < -5) return null;
+    const rect = charRect(index, loc.start);
+    if (!rect) return null;
+    const k = Math.max(0.4, Math.min(3, rect.height / (s.anchor.ah || rect.height)));
+    let nx = rect.left + rect.width / 2 - mr.left;
+    // when the text wraps differently, a long stroke could stick out of the
+    // message: slide it back inside horizontally
+    const b = bbox(s.pts);
+    const x0 = nx + (b.x0 - s.anchor.ax) * k;
+    const x1 = nx + (b.x1 - s.anchor.ax) * k;
+    if (x1 > mr.width) nx -= x1 - mr.width;
+    if (x0 + (nx - (rect.left + rect.width / 2 - mr.left)) < 0) nx -= x0 + (nx - (rect.left + rect.width / 2 - mr.left));
+    return { nx, ny: rect.top - mr.top, k, ax: s.anchor.ax, ay: s.anchor.ay };
+  }
+
+  /** Pointer position (message coords) → the stroke's own coordinates. */
+  D.toStroke = function (s, x, y) {
+    const t = placedAt.get(s);
+    if (!t) return [x, y];
+    return [(x - t.nx) / t.k + t.ax, (y - t.ny) / t.k + t.ay];
+  };
+  D.scaleOf = (s) => (placedAt.get(s) || { k: 1 }).k;
+
+  /** Draws all strokes of a layer, each following its anchor. Strokes saved
+   * before anchoring existed get one now (from the current layout) when on
+   * screen; returns true if any anchor was added. */
   D.render = function (svg, strokes) {
     while (svg.firstChild) svg.firstChild.remove();
-    for (const s of strokes) svg.appendChild(strokeEl(s));
+    const msg = svg.parentElement;
+    let index = null;
+    let mr = null;
+    let added = false;
+    for (const s of strokes) {
+      const path = strokeEl(s);
+      if (msg && msg.isConnected) {
+        if (!index) {
+          index = dom.buildIndex(msg);
+          mr = msg.getBoundingClientRect();
+        }
+        if (!s.anchor && !D.active) {
+          const a = anchorFor(msg, s, index);
+          if (a) {
+            s.anchor = a;
+            added = true;
+          }
+        }
+        const t = transformFor(msg, s, index, mr);
+        if (t) {
+          placedAt.set(s, t);
+          path.setAttribute('transform', `translate(${round(t.nx)} ${round(t.ny)}) scale(${t.k.toFixed(3)}) translate(${-t.ax} ${-t.ay})`);
+        } else placedAt.delete(s);
+      }
+      svg.appendChild(path);
+    }
+    return added;
+  };
+
+  // re-layout when a message with drawings changes size (font, width, RTL…)
+  const layers = new WeakMap(); // msg -> { svg, a }
+  const pending = new Set();
+  let raf = 0;
+  const ro = new ResizeObserver((entries) => {
+    for (const e of entries) pending.add(e.target);
+    if (!raf) {
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        for (const msg of pending) {
+          const l = layers.get(msg);
+          if (l && l.svg.isConnected) {
+            if (D.render(l.svg, l.a.strokes)) CSR.ann.save({ quiet: true });
+          }
+        }
+        pending.clear();
+      });
+    }
+  });
+
+  /** Called when a drawing layer is placed on a message. */
+  D.track = function (msg, svg, a) {
+    layers.set(msg, { svg, a });
+    ro.observe(msg);
   };
 
   // ---------------------------------------------------------------------------
@@ -129,6 +292,8 @@
     current = null;
     if (c.erasing) return;
     if (c.stroke.pts.length === 2) c.stroke.pts.push(c.stroke.pts[0] + 0.01, c.stroke.pts[1]);
+    const anchor = anchorFor(c.msg, c.stroke, dom.buildIndex(c.msg));
+    if (anchor) c.stroke.anchor = anchor;
     c.a.strokes.push(c.stroke);
     undoStack.push({ annId: c.a.id, stroke: c.stroke });
     CSR.ann.rerenderDrawing(c.a);
@@ -158,10 +323,12 @@
       const y = cy - r.top;
       const before = a.strokes.length;
       a.strokes = a.strokes.filter((s) => {
-        const w = (s.tool === 'marker' ? s.width * 4 : s.width) / 2 + 8;
+        // strokes may be moved/scaled to follow their text: test in their own coordinates
+        const [sx, sy] = D.toStroke(s, x, y);
+        const w = ((s.tool === 'marker' ? s.width * 4 : s.width) / 2 + 8) / D.scaleOf(s);
         const p = s.pts;
         for (let i = 0; i + 3 < p.length; i += 2) {
-          if (distToSeg(x, y, p[i], p[i + 1], p[i + 2], p[i + 3]) < w) return false;
+          if (distToSeg(sx, sy, p[i], p[i + 1], p[i + 2], p[i + 3]) < w) return false;
         }
         return true;
       });

@@ -636,19 +636,57 @@
     openMarkPopover(a, rect, true);
   };
 
-  function showSelectionToolbar(range) {
+  /** Claude's own buttons that float next to a selection (its «Reply»). */
+  function claudeFloaters() {
+    const out = [];
+    for (const b of document.querySelectorAll('button, [role="button"]')) {
+      if (b.closest('[data-csr-ui]')) continue;
+      const label = (b.getAttribute('aria-label') || b.textContent || '').trim();
+      if (!/^(reply|quote|ask claude|پاسخ)/i.test(label)) continue;
+      const r = b.getBoundingClientRect();
+      if (r.width && r.height && r.bottom > 0 && r.top < window.innerHeight) out.push(r);
+    }
+    return out;
+  }
+
+  const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+  /** Under the selection (Claude shows «Reply» above it), moved out of the way
+   * of any of Claude's floating buttons. */
+  function positionToolbar(range) {
     const r = range.getBoundingClientRect();
     if (!r.width && !r.height) return;
-    el.more.hidden = true;
-    el.sel.hidden = false;
     const tb = el.sel.getBoundingClientRect();
-    let top = r.top - tb.height - 10;
-    if (top < 8) top = r.bottom + 10;
-    top = Math.max(8, Math.min(top, window.innerHeight - tb.height - 8));
+    const fits = (t) => t >= 8 && t + tb.height <= window.innerHeight - 8;
+    let top = r.bottom + 12;
+    if (!fits(top)) top = r.top - tb.height - 12;
     let left = r.left + r.width / 2 - tb.width / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - tb.width - 8));
+    for (const f of claudeFloaters()) {
+      const box = { left, right: left + tb.width, top, bottom: top + tb.height };
+      if (!overlaps(box, { left: f.left - 6, right: f.right + 6, top: f.top - 6, bottom: f.bottom + 6 })) continue;
+      const below = Math.max(r.bottom, f.bottom) + 10;
+      top = fits(below) ? below : Math.min(r.top, f.top) - tb.height - 10;
+    }
+    top = Math.max(8, Math.min(top, window.innerHeight - tb.height - 8));
     el.sel.style.top = top + 'px';
     el.sel.style.left = left + 'px';
+  }
+
+  function showSelectionToolbar(range, keepMore) {
+    const r = range.getBoundingClientRect();
+    if (!r.width && !r.height) return;
+    if (!keepMore) el.more.hidden = true;
+    el.sel.hidden = false;
+    positionToolbar(range);
+    if (!keepMore) {
+      // Claude's «Reply» can appear a moment later: check again
+      for (const ms of [120, 400]) {
+        setTimeout(() => {
+          if (!el.sel.hidden) positionToolbar(range);
+        }, ms);
+      }
+    }
   }
 
   function hideSelectionToolbar() {
@@ -878,7 +916,7 @@
       el.panel = null;
       return;
     }
-    renderPanel();
+    renderPanel(true);
     el.panel.classList.add('enter');
   };
 
@@ -886,11 +924,22 @@
     if (UI.panelOpen) renderPanel();
   };
 
-  function renderPanel() {
+  let panelSig = '';
+  let panelConv = null; // the conversation object the panel was built from
+
+  function renderPanel(force) {
     const conv = AN.conv();
     const keepScroll = el.panel ? el.panel.querySelector('.panel-body')?.scrollTop : 0;
     const focused = el.panel && el.panel.contains(shadow.activeElement) && shadow.activeElement.tagName === 'TEXTAREA';
     if (focused) return; // don't disturb typing in the notebook
+    // nothing the panel shows has changed: keep it (a re-render could eat a click)
+    const sig = [conv ? conv.id : '', panelTab, panelFilter]
+      .concat(conv ? conv.annotations.map((a) => `${a.id}:${a.updated || 0}:${AN.isOrphan(a) ? 1 : 0}`) : [])
+      .join('|');
+    // (a conversation reloaded from storage may differ in what the sig leaves out, e.g. the notebook)
+    if (!force && el.panel && sig === panelSig && conv === panelConv) return;
+    panelSig = sig;
+    panelConv = conv;
     if (el.panel) el.panel.remove();
     const tabs = h(
       'div',
@@ -1097,7 +1146,26 @@
       },
       true
     );
-    document.addEventListener('scroll', () => hideSelectionToolbar(), true);
+    // Claude scrolls by itself too (auto-scroll, virtual-list corrections):
+    // keep the toolbar next to the selection instead of closing it
+    // (once per frame: scroll events come far more often than that)
+    let follow = 0;
+    const followSelection = () => {
+      follow = 0;
+      if (!el.sel || el.sel.hidden) return;
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return hideSelectionToolbar();
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight) return hideSelectionToolbar();
+      showSelectionToolbar(sel.getRangeAt(0), true);
+    };
+    document.addEventListener(
+      'scroll',
+      () => {
+        if (!follow && el.sel && !el.sel.hidden) follow = requestAnimationFrame(followSelection);
+      },
+      true
+    );
 
     // clicks on our marks / dividers, and divider placement
     document.addEventListener(
