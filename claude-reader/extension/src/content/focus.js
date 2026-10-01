@@ -112,6 +112,11 @@
     }
     CSR.ui.setDockState('focus', F.on);
     CSR.ui.toast(F.on ? 'حالت تمرکز — برای خروج Esc یا Alt+Z' : 'حالت تمرکز خاموش شد');
+    // the whole browser window goes fullscreen too (like F11); turning focus
+    // off only undoes a fullscreen that focus mode started
+    if (!F.on || CSR.settings.focusFullscreen) {
+      chrome.runtime.sendMessage({ csr: 'fullscreen', on: F.on }).catch(() => {});
+    }
   };
 
   /** After the page changed: re-apply to newly rendered chrome. */

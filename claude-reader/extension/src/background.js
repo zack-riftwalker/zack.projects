@@ -182,6 +182,70 @@ async function lookup(word) {
 }
 
 // ---------------------------------------------------------------------------
+// translation of a line / paragraph (MyMemory, free; ~500 bytes per request)
+
+const trCache = new Map();
+const bytes = (s) => new TextEncoder().encode(s).length;
+
+/** Splits text into pieces under `max` UTF-8 bytes, at sentence ends when possible. */
+function chunks(text, max = 480) {
+  const out = [];
+  for (const para of text.split(/\n+/)) {
+    const sentences = para.match(/[^.!?؟…;؛]+[.!?؟…;؛]*\s*/g) || [para];
+    let cur = '';
+    for (let s of sentences) {
+      while (bytes(s) > max) {
+        // one very long sentence: cut at a comma or space
+        let cut = s.length;
+        while (cut > 1 && bytes(s.slice(0, cut)) > max) cut = Math.floor(cut * 0.8);
+        const sp = Math.max(s.lastIndexOf('،', cut), s.lastIndexOf(',', cut), s.lastIndexOf(' ', cut));
+        if (sp > cut * 0.5) cut = sp + 1;
+        if (cur) out.push(cur), (cur = '');
+        out.push(s.slice(0, cut));
+        s = s.slice(cut);
+      }
+      if (bytes(cur + s) > max) out.push(cur), (cur = '');
+      cur += s;
+    }
+    if (cur.trim()) out.push(cur);
+    out.push('\n');
+  }
+  out.pop();
+  return out;
+}
+
+const unescape = (s) =>
+  String(s || '')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+async function translate(text, from, to) {
+  const key = from + to + text;
+  if (trCache.has(key)) return trCache.get(key);
+  const s = await CSR.store.getSettings();
+  const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.translateEmail || '') ? '&de=' + encodeURIComponent(s.translateEmail) : '';
+  let out = '';
+  for (const c of chunks(text)) {
+    if (c === '\n') {
+      out += '\n';
+      continue;
+    }
+    const j = await fetchJson(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(c.trim())}&langpair=${from}|${to}${email}`, 12000);
+    const t = unescape(j && j.responseData && j.responseData.translatedText);
+    if (+j.responseStatus === 429 || /MYMEMORY WARNING|USED ALL AVAILABLE FREE/i.test(t)) return { ok: false, error: 'quota' };
+    if (!t || +j.responseStatus >= 400) return { ok: false, error: 'failed' };
+    out += (out && !out.endsWith('\n') ? ' ' : '') + t.trim();
+  }
+  const res = { ok: true, text: out.trim(), engine: 'MyMemory' };
+  trCache.set(key, res);
+  return res;
+}
+
+// ---------------------------------------------------------------------------
 // updates: an unpacked extension can't replace its own files, but it can tell
 // you when a new version is out and where to get it
 
@@ -227,8 +291,33 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+// ---------------------------------------------------------------------------
+// focus mode: whole-window fullscreen, like F11 (no tabs, no address bar)
+
+async function setFullscreen(windowId, on) {
+  const key = 'fs:' + windowId;
+  const win = await chrome.windows.get(windowId);
+  if (on) {
+    if (win.state === 'fullscreen') return { ok: true, already: true };
+    await chrome.storage.session.set({ [key]: win.state });
+    await chrome.windows.update(windowId, { state: 'fullscreen' });
+    return { ok: true };
+  }
+  // only undo a fullscreen we started ourselves
+  const prev = (await chrome.storage.session.get(key))[key];
+  if (!prev) return { ok: true };
+  await chrome.storage.session.remove(key);
+  if (win.state === 'fullscreen') await chrome.windows.update(windowId, { state: prev === 'minimized' ? 'normal' : prev });
+  return { ok: true };
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (!msg || !msg.csr) return;
+  if (msg.csr === 'fullscreen') {
+    if (!sender.tab) return;
+    setFullscreen(sender.tab.windowId, !!msg.on).then(reply, (e) => reply({ ok: false, error: String(e) }));
+    return true;
+  }
   if (msg.csr === 'pomo') {
     command(msg.cmd, msg.arg).then(reply, (e) => reply({ error: String(e) }));
     return true;
@@ -240,6 +329,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.csr === 'reloadExtension') {
     chrome.runtime.reload();
     return;
+  }
+  if (msg.csr === 'translate') {
+    translate(String(msg.text || '').slice(0, 4000), msg.from === 'fa' ? 'fa' : 'en', msg.to === 'en' ? 'en' : 'fa').then(reply, () =>
+      reply({ ok: false, error: 'failed' })
+    );
+    return true;
   }
   if (msg.csr === 'dict') {
     lookup(msg.word).then(reply, (e) => reply({ ok: false, error: String(e) }));

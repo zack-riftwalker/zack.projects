@@ -71,8 +71,9 @@
 
   function render(word, data, rect, context) {
     const h = CSR.ui.h;
+    const replacing = !!card;
     close();
-    card = h('div', { class: 'dict-card', onmousedown: (e) => e.preventDefault() });
+    card = h('div', { class: 'dict-card' + (replacing ? ' still' : ''), onmousedown: (e) => e.preventDefault() });
     const head = h(
       'div',
       { class: 'dict-head' },

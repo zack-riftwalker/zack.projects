@@ -594,13 +594,7 @@
         h('span', { class: 'sep' }),
         btn('quote', 'نقل‌قول / کوت (Alt+Q)', () => act(() => AN.toggleBlockOnSelection('quote'))),
         btn('note', 'یادداشت (Alt+N)', () => UI.noteOnSelection()),
-        btn('book', 'معنی کلمه (دیکشنری)', () => {
-          const s = window.getSelection();
-          const r = s.rangeCount ? s.getRangeAt(0).getBoundingClientRect() : null;
-          const w = s.toString().trim();
-          hideSelectionToolbar();
-          if (w) CSR.dict.lookup(w, r);
-        }),
+        btn('book', 'معنی کلمه / ترجمه‌ی جمله و پاراگراف (Alt+Y)', () => CSR.translate.fromSelection()),
         btn('speaker', 'خواندن با صدا', () => {
           const s = AN.selectionInMessage();
           hideSelectionToolbar();

@@ -133,6 +133,7 @@
       UI.hideSelectionToolbar();
       CSR.tts.stop();
       CSR.dict.close();
+      CSR.translate.close();
       AN.setConv(null);
       if (id) {
         const c = await CSR.store.getConv(id);
@@ -177,6 +178,7 @@
         UI.closePopover();
         UI.hideSelectionToolbar();
         CSR.dict.close();
+        CSR.translate.close();
         // Esc in Claude's message box (or one of our own fields) isn't meant for focus mode / reading
         if (busy || dom.isEditable(e.composedPath()[0])) return;
         if (CSR.tts.active) CSR.tts.stop();
@@ -207,6 +209,9 @@
       else if (hasSel && code === 'KeyS') UI.act(() => AN.applyStyleToSelection('strike'));
       else if (hasSel && code === 'KeyQ') UI.act(() => AN.toggleBlockOnSelection('quote'));
       else if (hasSel && code === 'KeyN') UI.noteOnSelection();
+      else if (code === 'KeyY' && CSR.translate.fromSelection()) {
+        /* translated the selection */
+      }
       else if (code === 'KeyP') UI.setMode(UI.mode === 'draw' ? 'none' : 'draw');
       else if (code === 'KeyG') UI.setMode(UI.mode === 'bookmark' ? 'none' : 'bookmark');
       else if (code === 'KeyT') CSR.toc.toggle();

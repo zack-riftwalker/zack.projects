@@ -148,6 +148,9 @@
     bookmarkPattern: 'termeh',
     // focus mode
     focusHideUser: false,
+    focusFullscreen: true,
+    // translation
+    translateEmail: '',
     // text to speech
     ttsRate: 1,
     ttsFaVoice: '',

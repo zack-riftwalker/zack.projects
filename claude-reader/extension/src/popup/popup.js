@@ -220,7 +220,7 @@
   paintSw();
 
   // ---------- study tab ----------
-  for (const key of ['showTimer', 'pomoAutoBreak', 'pomoAutoFocus', 'pomoSound', 'pomoNotify', 'autoProgress', 'resumePrompt', 'focusHideUser', 'dictDblclick']) {
+  for (const key of ['showTimer', 'pomoAutoBreak', 'pomoAutoFocus', 'pomoSound', 'pomoNotify', 'autoProgress', 'resumePrompt', 'focusHideUser', 'focusFullscreen', 'dictDblclick']) {
     $(key).checked = !!s[key];
     $(key).addEventListener('change', (e) => {
       s[key] = e.target.checked;
@@ -352,6 +352,12 @@
     } catch (e) {
       $('openPanel').textContent = 'اول یک گفتگو در claude.ai باز کن';
     }
+  });
+
+  $('translateEmail').value = s.translateEmail || '';
+  $('translateEmail').addEventListener('input', (e) => {
+    s.translateEmail = e.target.value.trim();
+    save();
   });
 
   // ---------- updates ----------

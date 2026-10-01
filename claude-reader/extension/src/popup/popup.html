@@ -143,6 +143,7 @@
             <tr><td><kbd>Alt</kbd>+<kbd>H</kbd></td><td>حالت ماژیک</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>M</kbd></td><td>پنل یادداشت‌ها</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>R</kbd></td><td>تغییر حالت راست‌چین</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>Y</kbd></td><td>معنی کلمه / ترجمه‌ی متن انتخاب‌شده</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>G</kbd></td><td>نشانک</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>T</kbd></td><td>فهرست و پیشرفت</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>V</kbd></td><td>خواندن با صدا</td></tr>
@@ -176,6 +177,7 @@
         <label class="check"><input type="checkbox" id="autoProgress" /> بخش‌هایی که خواندی خودکار علامت بخورند</label>
         <label class="check"><input type="checkbox" id="resumePrompt" /> وقتی برمی‌گردم، «ادامه از آخرین جا» را نشان بده</label>
         <h3>حالت تمرکز</h3>
+        <label class="check"><input type="checkbox" id="focusFullscreen" /> حالت تمرکز کل پنجره را تمام‌صفحه کند (مثل F11)</label>
         <label class="check"><input type="checkbox" id="focusHideUser" /> در حالت تمرکز پیام‌های خودم هم پنهان شوند</label>
       </section>
 
@@ -201,9 +203,14 @@
           <button class="btn ghost small" id="testEn">Test English voice</button>
         </div>
         <p class="note" id="voiceNote"></p>
-        <h3>دیکشنری</h3>
+        <h3>دیکشنری و ترجمه</h3>
         <label class="check"><input type="checkbox" id="dictDblclick" /> با دوبار کلیک روی کلمه‌ی انگلیسی، معنی‌اش را نشان بده</label>
-        <p class="note">معنی فارسی از MyMemory و تعریف انگلیسی از Free Dictionary API گرفته می‌شود (هر دو رایگان). فقط همان کلمه فرستاده می‌شود.</p>
+        <p class="note">برای ترجمه‌ی یک جمله یا پاراگراف: متن را انتخاب کن و دکمه‌ی کتاب در نوار قالب‌بندی یا <kbd>Alt</kbd>+<kbd>Y</kbd> را بزن. ترجمه‌ی سریع از MyMemory می‌آید (رایگان، روزی حدود ۵۰۰۰ حرف)، و دکمه‌ی «ترجمه‌ی بهتر با Claude» متن را در یک گفتگوی تازه به Claude می‌دهد.</p>
+        <div class="field">
+          <label for="translateEmail">ایمیل (اختیاری)</label>
+          <input class="text" id="translateEmail" type="email" placeholder="برای سهمیه‌ی ده‌برابر MyMemory" />
+        </div>
+        <p class="note">معنی کلمه‌ها از MyMemory و تعریف انگلیسی از Free Dictionary API می‌آید. فقط متنی که خودت انتخاب می‌کنی (و اگر گذاشتی، ایمیلت) برای این سرویس‌ها فرستاده می‌شود.</p>
       </section>
     </main>
 

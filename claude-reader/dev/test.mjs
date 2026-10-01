@@ -732,6 +732,48 @@ await popup.evaluate(async () => {
 });
 await page.waitForTimeout(500);
 
+// ---------------------------------------------------------------------------
+console.log('Focus mode fullscreen; paragraph translation');
+const winState = () => popup.evaluate(async () => (await chrome.windows.getAll()).map((w) => w.state));
+const winBefore = await winState();
+await page.bringToFront();
+await page.keyboard.press('Alt+Z');
+await page.waitForTimeout(1200);
+const during = await winState();
+ok(during.includes('fullscreen'), 'focus mode puts the window in fullscreen (' + winBefore.join(',') + ' → ' + during.join(',') + ')');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(1200);
+const after = await winState();
+ok(!after.includes('fullscreen'), 'leaving focus mode restores the window (' + after.join(',') + ')');
+
+await page.locator('.standard-markdown p', { hasText: 'In English' }).scrollIntoViewIfNeeded();
+await page.waitForTimeout(300);
+await select('lets you synchronize a component with an external system');
+await page.locator('#csr-host .sel-toolbar .sel-btn[title^="معنی کلمه"]').click();
+await page.locator('#csr-host .tr-card .tr-body').waitFor();
+await page.waitForFunction(() => !document.getElementById('csr-host').shadowRoot.querySelector('.tr-card .dict-loading'), null, { timeout: 15000 });
+const trText = await page.locator('#csr-host .tr-card .tr-body').textContent();
+ok(trText.includes('همگام'), 'translation card shows the Persian translation: ' + trText.slice(0, 40));
+ok((await page.locator('#csr-host .tr-card .tr-dir').textContent()).includes('انگلیسی ← فارسی'), 'direction detected');
+await page.waitForTimeout(300);
+await shot('32-translation');
+const newTab = context.waitForEvent('page');
+await page.locator('#csr-host .tr-card .btn-main').click();
+const claudeTab = await newTab;
+ok(claudeTab.url().startsWith('https://claude.ai/new?q='), 'better translation opens a new Claude chat with the text');
+ok(decodeURIComponent(claudeTab.url()).includes('lets you synchronize'), 'the new chat carries the selected text');
+await claudeTab.close();
+await page.bringToFront();
+await page.locator('#csr-host .tr-card .btn-text', { hasText: 'ذخیره' }).click();
+await page.waitForTimeout(300);
+ok((await page.locator('.csr-note[title^="🌐"]').count()) >= 1, 'translation saved as a note on that text');
+// one word still goes to the dictionary
+await select('synchronize');
+await page.keyboard.press('Alt+Y');
+await page.locator('#csr-host .dict-card').waitFor();
+ok(true, 'Alt+Y on a single word opens the dictionary');
+await page.keyboard.press('Escape');
+
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 
 await context.close();
