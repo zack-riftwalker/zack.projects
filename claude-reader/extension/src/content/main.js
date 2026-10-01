@@ -34,6 +34,7 @@
 
   function sync() {
     timer = 0;
+    if (CSR.dead) return;
     const s = CSR.settings;
     if (!A.styleConnected()) A.apply(s); // the page dropped our <style>: put it back
     const messages = dom.getMessages();
@@ -80,12 +81,13 @@
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
   // Claude switching light/dark, or dropping our attributes on <html>
-  new MutationObserver(() => {
+  const modeObserver = new MutationObserver(() => {
     const s = CSR.settings;
     if (s.enabled && !document.documentElement.hasAttribute('data-csr-on')) A.apply(s);
     A.syncMode(s);
     UI.applySettings(s);
-  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-csr-on', 'class', 'data-theme', 'data-color-scheme'] });
+  });
+  modeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-csr-on', 'class', 'data-theme', 'data-color-scheme'] });
 
   // ---------------------------------------------------------------------------
   // settings
@@ -151,7 +153,23 @@
     loading = null;
   }
   checkUrl();
-  setInterval(checkUrl, 600);
+  const urlTimer = setInterval(() => {
+    if (!CSR.alive()) return shutdown();
+    checkUrl();
+  }, 600);
+
+  /** The extension was reloaded or updated while this page stayed open: this
+   * old copy steps aside (the page gets the new one when it's reloaded). */
+  function shutdown() {
+    if (CSR.dead) return;
+    CSR.dead = true;
+    clearInterval(urlTimer);
+    clearTimeout(timer);
+    observer.disconnect();
+    modeObserver.disconnect();
+    const host = document.getElementById('csr-host');
+    if (host) host.remove();
+  }
 
   // changes made from another tab or the library page
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -174,7 +192,7 @@
     'keydown',
     (e) => {
       const s = CSR.settings;
-      if (!s.enabled) return;
+      if (!s.enabled || CSR.dead) return;
       if (e.key === 'Escape') {
         const busy = UI.mode !== 'none';
         if (busy) UI.setMode('none');

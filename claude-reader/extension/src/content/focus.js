@@ -121,7 +121,7 @@
     // the whole browser window goes fullscreen too (like F11); turning focus
     // off only undoes a fullscreen that focus mode started
     if (!F.on || CSR.settings.focusFullscreen) {
-      chrome.runtime.sendMessage({ csr: 'fullscreen', on: F.on }).catch(() => {});
+      if (CSR.alive()) chrome.runtime.sendMessage({ csr: 'fullscreen', on: F.on }).catch(() => {});
     }
   };
 

@@ -267,7 +267,7 @@
       drag = null;
       el.bubble.classList.remove('dragging');
       if (moved) {
-        if (!isNarrow()) chrome.storage.local.set(NOTION ? { bubblePosNotion: notionPos } : { bubblePos });
+        if (!isNarrow() && CSR.alive()) chrome.storage.local.set(NOTION ? { bubblePosNotion: notionPos } : { bubblePos });
       } else if (CSR.settings.dockCollapsed) UI.setCollapsed(false);
       else {
         openedFolded = true; // only folded because of the window / the site
@@ -277,7 +277,7 @@
     el.bubble.addEventListener('pointerup', end);
     el.bubble.addEventListener('pointercancel', end);
     el.layer.append(el.bubble);
-    chrome.storage.local.get(['bubblePos', 'bubblePosNotion']).then((r) => {
+    if (CSR.alive()) chrome.storage.local.get(['bubblePos', 'bubblePosNotion']).then((r) => {
       if (r.bubblePos) bubblePos = r.bubblePos;
       if (r.bubblePosNotion) notionPos = r.bubblePosNotion;
       placeBubble();

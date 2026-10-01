@@ -1,10 +1,10 @@
 {
- "version": "0.6.0",
+ "version": "0.6.1",
  "zip": "https://raw.githubusercontent.com/zack-riftwalker/zack.projects/claude/brave-franklin-agv173/claude-reader/dist/khana-extension.zip",
  "notes": [
-  "حالا روی چت Notion AI هم کار می‌کند (پنل گوشه‌ی صفحه و صفحه‌ی کامل Notion AI)",
-  "فونت، راست‌چین، هایلایت، یادداشت، فهرست، ترجمه و تم روی پاسخ‌های Notion AI؛ متن صفحه‌های Notion دست نمی‌خورد",
-  "حافظه‌ی جدا برای هر چت Notion AI؛ در کتابخانه با نام اولین سؤال",
-  "بعد از نصب، یک بار صفحه‌های Notion را رفرش کن"
+  "Notion AI: پیام‌های چت حالا در ساختار جدید و تودرتوی Notion هم پیدا می‌شوند (سؤال‌ها و پاسخ‌ها جدا)",
+  "Notion AI: برچسب‌هایی مثل «Today» و دکمه‌هایی مثل «Edit» دیگر با پیام اشتباه گرفته نمی‌شوند",
+  "خطای «Cannot read properties of undefined» در تب‌هایی که موقع به‌روزرسانی باز مانده بودند برطرف شد",
+  "گزارش عیب‌یابی روی Notion حالا ساختار چت را دقیق‌تر نشان می‌دهد (بدون متن پیام‌ها)"
  ]
 }

@@ -255,6 +255,16 @@
     return t;
   };
 
+  /** False once the extension was reloaded or updated: this page's old copy
+   * of the content scripts can't use chrome.* anymore and should stay quiet. */
+  CSR.alive = function () {
+    try {
+      return !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
+    } catch (e) {
+      return false;
+    }
+  };
+
   // ---------- color utils ----------
 
   const Color = (CSR.color = {});

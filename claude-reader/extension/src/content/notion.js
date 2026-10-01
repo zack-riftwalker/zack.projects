@@ -116,19 +116,58 @@
   N.find = chat;
   N.active = () => !!chat();
 
-  /** The message rows: children of the list, below single wrappers (and
-   * below a wrapper that also holds the chat box, in the full-page chat). */
-  function rowsOf(c) {
-    let box = c.list;
-    for (let i = 0; i < 10; i++) {
-      const kids = Array.from(box.children).filter((e) => e !== c.composer && !c.composer.contains(e) && !ours(e) && textLen(e) > 0 && shown(e));
-      const holder = kids.find((e) => e.contains(c.composer));
-      const rows = kids.filter((e) => !e.contains(c.composer));
-      if (holder && !rows.length) box = holder;
-      else if (!holder && rows.length === 1 && rows[0].children.length) box = rows[0];
-      else return rows;
+  const BUTTON = 'button, [role="button"]';
+
+  /** Text that isn't on buttons (copy / retry / edit…). */
+  function ownText(el) {
+    let n = textLen(el);
+    for (const b of el.querySelectorAll(BUTTON)) n -= textLen(b);
+    return n;
+  }
+
+  /** Children worth looking at; wrappers without a box of their own
+   * (display: contents) are looked through. */
+  function kidsOf(box, c) {
+    const out = [];
+    for (const e of box.children) {
+      if (e === c.composer || c.composer.contains(e) || ours(e) || !textLen(e)) continue;
+      if (getComputedStyle(e).display === 'contents') out.push(...kidsOf(e, c));
+      else if (shown(e)) out.push(e);
     }
-    return [];
+    return out;
+  }
+
+  /** The message rows. Notion nests its layout deeply: go down through
+   * single wrappers (and the one that also holds the chat box, in the
+   * full-page chat), and past small labels such as a date, until the
+   * conversation splits into its rows. */
+  function rowsOf(c, L) {
+    let box = c.list;
+    let rows = [];
+    for (let i = 0; i < 80; i++) {
+      const kids = kidsOf(box, c);
+      const holder = kids.find((e) => e.contains(c.composer));
+      rows = kids.filter((e) => !e.contains(c.composer));
+      if (holder && !rows.length) {
+        box = holder;
+        continue;
+      }
+      if (!holder && rows.length === 1 && rows[0].children.length) {
+        box = rows[0];
+        continue;
+      }
+      if (!holder && rows.length > 1 && rows.length <= 3) {
+        const big = rows.reduce((a, b) => (textLen(b) > textLen(a) ? b : a));
+        const rest = rows.filter((r) => r !== big);
+        const total = rows.reduce((n, r) => n + textLen(r), 0);
+        if (big.children.length && textLen(big) >= total * 0.9 && rest.every((r) => textLen(r) <= 40 && !bubbleIn(r, L))) {
+          box = big;
+          continue;
+        }
+      }
+      return rows;
+    }
+    return rows;
   }
 
   function alphaOf(css) {
@@ -136,18 +175,15 @@
     return c ? c.a : 0;
   }
 
-  /** A chat bubble: has a background or border, rounded, clearly narrower
-   * than the list and closer to its end (right) side. */
-  const BUTTON = 'button, [role="button"]';
-
-  function isBubble(e, L) {
-    // not a button, nor a group of buttons (copy / retry under an answer)
+  /** A question bubble: on a line of its own (its parent adds no text),
+   * tinted or outlined, rounded, clearly narrower than the list and closer
+   * to its end (right) side. Not a button, not a Notion block. */
+  function isBubble(e, L, row) {
     if (e.closest(BUTTON)) return false;
-    // answers are made of Notion blocks; a question bubble is not one
     if (e.closest('[data-block-id]') || e.querySelector('[data-block-id]')) return false;
-    let own = textLen(e);
-    for (const b of e.querySelectorAll(BUTTON)) own -= textLen(b);
+    const own = ownText(e);
     if (own <= 0) return false;
+    if (e !== row && e.parentElement && ownText(e.parentElement) - own > 2) return false; // inline in a paragraph
     const r = e.getBoundingClientRect();
     if (r.width < 10 || r.width > L.width * 0.88) return false;
     if (L.right - r.right > r.left - L.left) return false;
@@ -158,10 +194,10 @@
 
   function bubbleIn(row, L) {
     const queue = [[row, 0]];
-    while (queue.length) {
+    for (let seen = 0; queue.length && seen < 300; seen++) {
       const [e, d] = queue.shift();
-      if (isBubble(e, L)) return e;
-      if (d < 3) for (const c of e.children) if (textLen(c)) queue.push([c, d + 1]);
+      if (isBubble(e, L, row)) return e;
+      if (d < 12) for (const c of e.children) if (textLen(c)) queue.push([c, d + 1]);
     }
     return null;
   }
@@ -169,19 +205,21 @@
   const roles = new WeakMap(); // row -> {sig, list: [{el, role}]}
 
   function split(row, L) {
-    const sig = row.childElementCount + ':' + Array.from(row.children, (c) => c.childElementCount).join(',');
+    const sig = row.childElementCount + ':' + Array.from(row.children, (c) => c.childElementCount).join(',') + ':' + (textLen(row) > 0);
     const hit = roles.get(row);
     if (hit && hit.sig === sig && hit.list.every((m) => m.el.isConnected)) return hit.list;
     let list;
     const b = bubbleIn(row, L);
     if (!b) list = [{ el: row, role: 'assistant' }];
-    else if (textLen(row) - textLen(b) < 2) list = [{ el: b, role: 'user' }];
+    else if (ownText(row) - ownText(b) < 2) list = [{ el: b, role: 'user' }];
     else {
-      // a whole turn in one row: the question bubble, and the answer beside it
+      // a whole turn in one row: find where the question and the answer part
+      // (buttons beside the bubble, like "Edit", don't count)
       let holder = b;
-      while (holder.parentElement && holder.parentElement !== row) holder = holder.parentElement;
+      while (holder !== row && holder.parentElement && ownText(holder.parentElement) - ownText(b) < 2) holder = holder.parentElement;
+      const turn = holder === row ? row : holder.parentElement;
       list = [{ el: b, role: 'user' }];
-      for (const c of row.children) if (c !== holder && textLen(c) > 0) list.push({ el: c, role: 'assistant' });
+      for (const c of turn.children) if (c !== holder && !c.contains(b) && ownText(c) > 0) list.push({ el: c, role: 'assistant' });
     }
     roles.set(row, { sig, list });
     return list;
@@ -192,7 +230,12 @@
     const out = [];
     if (c) {
       const L = c.list.getBoundingClientRect();
-      for (const row of rowsOf(c)) for (const m of split(row, L)) out.push(m);
+      for (const row of rowsOf(c, L)) {
+        const parts = split(row, L);
+        // a chat starts with a question: short rows before it are labels ("Today")
+        if (!out.length && parts.every((m) => m.role === 'assistant') && ownText(row) <= 40) continue;
+        for (const m of parts) out.push(m);
+      }
     }
     // never anything editable (a message being edited, or a Notion page)
     const list = out.filter((m) => !m.el.closest(EDITABLE) && !m.el.querySelector(EDITABLE) && !m.el.closest(PAGE));
@@ -233,27 +276,66 @@
 
   N.title = () => (N.firstUser ? 'Notion AI: ' + N.firstUser.slice(0, 70) : 'Notion AI');
 
-  /** For the diagnostic report: how the chat was found (no text). */
+  /** For the diagnostic report: how the chat was found (structure only:
+   * tags, a few class names, attribute names, sizes; never any text). */
   N.report = function () {
     const desc = (el) => {
       if (!el) return null;
-      const cls = typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 4).join('.') : '';
+      const cls = typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 3).join('.') : '';
       const r = el.getBoundingClientRect();
-      return `${el.tagName.toLowerCase()}${cls ? '.' + cls : ''} ${Math.round(r.width)}x${Math.round(r.height)}`;
+      const data = el.getAttributeNames().filter((a) => a.startsWith('data-') && !a.startsWith('data-csr')).slice(0, 4);
+      const disp = getComputedStyle(el).display;
+      return `${el.tagName.toLowerCase()}${cls ? '.' + cls : ''}${data.length ? ' [' + data.join(' ') + ']' : ''} ${Math.round(r.width)}x${Math.round(r.height)}${disp === 'block' ? '' : ' ' + disp} t${textLen(el)}`;
     };
     const inputs = Array.from(document.querySelectorAll(INPUTS))
       .filter((el) => !ours(el) && !el.closest(PAGE) && shown(el))
       .slice(0, 8)
       .map((el) => ({ el: desc(el), hint: hintOf(el).replace(/\s+/g, ' ').trim().slice(0, 60), matches: HINT.test(hintOf(el)) }));
-    const c = N.chat;
-    const rows = c ? rowsOf(c) : [];
+    const c = N.chat || chat();
+    if (!c) return { inputs, found: false };
+    const L = c.list.getBoundingClientRect();
+    // the way down from the list to the rows
+    const path = [];
+    let box = c.list;
+    for (let i = 0; i < 40 && box; i++) {
+      const kids = kidsOf(box, c);
+      path.push(`${desc(box)} → ${kids.length} kids`);
+      if (kids.length !== 1) break;
+      box = kids[0];
+    }
+    const attrs = new Set();
+    for (const el of c.list.querySelectorAll('*')) {
+      for (const a of el.getAttributeNames()) if ((a.startsWith('data-') && !a.startsWith('data-csr')) || a === 'role' || a.startsWith('aria-')) attrs.add(a + (a === 'role' ? '=' + el.getAttribute('role') : ''));
+      if (attrs.size > 60) break;
+    }
+    const rows = rowsOf(c, L);
+    // what in the first rows looks a bit like a bubble (tinted / rounded)
+    const looks = [];
+    for (const row of rows.slice(0, 4)) {
+      const queue = [[row, 0]];
+      const found = [];
+      for (let seen = 0; queue.length && seen < 200 && found.length < 4; seen++) {
+        const [e, d] = queue.shift();
+        const cs = getComputedStyle(e);
+        const r = e.getBoundingClientRect();
+        if (alphaOf(cs.backgroundColor) > 0.03 || parseFloat(cs.borderTopLeftRadius) >= 4) {
+          found.push(`d${d} ${e.tagName.toLowerCase()} w${Math.round((r.width / L.width) * 100)}% gapL${Math.round(r.left - L.left)} gapR${Math.round(L.right - r.right)} r${parseFloat(cs.borderTopLeftRadius)} a${alphaOf(cs.backgroundColor).toFixed(2)} own${ownText(e)}/${e.parentElement ? ownText(e.parentElement) : 0}${e.closest('[data-block-id]') ? ' inBlock' : ''}${isBubble(e, L, row) ? ' BUBBLE' : ''}`);
+        }
+        if (d < 12) for (const k of e.children) if (textLen(k)) queue.push([k, d + 1]);
+      }
+      looks.push(found);
+    }
     return {
       inputs,
-      found: !!c,
-      root: c && desc(c.root),
-      list: c && desc(c.list),
-      composer: c && desc(c.composer),
-      rows: rows.slice(0, 12).map((r) => desc(r) + ' → ' + split(r, c.list.getBoundingClientRect()).map((m) => m.role[0]).join('')),
+      found: true,
+      root: desc(c.root),
+      list: desc(c.list),
+      composer: desc(c.composer),
+      path,
+      attrs: [...attrs].slice(0, 60),
+      blocks: c.list.querySelectorAll('[data-block-id]').length,
+      rows: rows.slice(0, 12).map((r) => desc(r) + ' → ' + split(r, L).map((m) => m.role[0]).join('')),
+      bubbles: looks,
     };
   };
 })();

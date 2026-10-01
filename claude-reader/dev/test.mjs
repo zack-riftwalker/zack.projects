@@ -1019,6 +1019,31 @@ nconvs = await notionConvs();
 ok(nconvs.some((c) => c.k === 'conv:notion-1f2e3d4c5b6a79881f2e3d4c5b6a7988'), 'a chat with an id in its address is kept under that id');
 await shot('40-notion-full-page');
 
+// the layout from a real notion.so report: dark mode, very deep nesting,
+// a display:contents wrapper, a date label, inline code in the answers
+await page.goto('https://www.notion.so/deep?t=aa11bb22cc33dd44ee55ff6677889900');
+await page.waitForSelector('.deep-list');
+await page.waitForTimeout(1500);
+ok((await rolesNow()) === 'user,assistant,user,assistant', 'deeply nested Notion chat: questions and answers found (' + (await rolesNow()) + ')');
+ok((await page.locator('.a-part code[data-csr-msg], .day[data-csr-msg]').count()) === 0, 'inline code and the date label are not taken for messages');
+ok(await page.evaluate(() => [...document.querySelectorAll('.a-part p')].every((p) => p.getAttribute('dir') === 'rtl')), 'answers right-to-left');
+await select('بازخورد سریع');
+await page.locator('#csr-host .sel-toolbar .swatch').first().click();
+await page.waitForTimeout(300);
+ok((await page.locator('.a-part .csr-hl-yellow').count()) === 1, 'highlight in the deeply nested chat');
+const nreport = JSON.parse(
+  await popup.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ url: 'https://www.notion.so/*' });
+    return (await chrome.tabs.sendMessage(tab.id, { csr: 'diag' })).report;
+  })
+);
+ok(
+  nreport.notion.found && nreport.notion.rows.length === 3 && nreport.notion.path.length > 10 && nreport.notion.bubbles.some((r) => r.some((b) => b.includes('BUBBLE'))),
+  'diagnostic report shows how the Notion chat was found'
+);
+ok(!/مدیریت|بازخورد|Study Notes|Study-Notes/.test(JSON.stringify(nreport)), 'the report holds no message text or page names');
+await shot('41-notion-deep');
+
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 
 await context.close();

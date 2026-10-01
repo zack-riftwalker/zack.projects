@@ -39,12 +39,13 @@
   };
 
   async function loadStats() {
+    if (!CSR.alive()) return;
     const r = await chrome.storage.local.get('stats');
     stats = { days: {}, convs: {}, session: null, ...(r.stats || {}) };
   }
 
   async function flush() {
-    if (!pending) return;
+    if (!pending || !CSR.alive()) return;
     const add = pending;
     pending = 0;
     const r = await chrome.storage.local.get('stats');
@@ -70,7 +71,7 @@
   const convSecs = () => (stats.convs[dom.getConversationId()] || 0) + pending;
 
   setInterval(() => {
-    if (!CSR.settings || !CSR.settings.enabled) return;
+    if (!CSR.settings || !CSR.settings.enabled || CSR.dead) return;
     if (S.isActive() && dom.getConversationId()) {
       pending += 1;
       if (CSR.toc) CSR.toc.tick();
@@ -84,10 +85,11 @@
   // ---------------------------------------------------------------------------
   // pomodoro state (owned by the background worker)
 
-  const send = (cmd, arg) => chrome.runtime.sendMessage({ csr: 'pomo', cmd, arg }).catch(() => null);
+  const send = (cmd, arg) => (CSR.alive() ? chrome.runtime.sendMessage({ csr: 'pomo', cmd, arg }).catch(() => null) : Promise.resolve(null));
   S.cmd = send;
 
   async function loadPomo() {
+    if (!CSR.alive()) return;
     const r = await chrome.storage.local.get('pomo');
     pomo = { phase: 'idle', running: false, ...(r.pomo || {}) };
     if (pomo.event) shownEvent = pomo.event.id; // don't re-show old pop-ups on page load

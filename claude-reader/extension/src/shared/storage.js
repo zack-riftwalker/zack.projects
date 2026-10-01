@@ -5,7 +5,10 @@
   const CSR = (root.CSR = root.CSR || {});
   const CONV_PREFIX = 'conv:';
 
+  const dead = () => CSR.alive && !CSR.alive(); // see CSR.alive
+
   async function syncGet(key) {
+    if (dead()) return undefined;
     try {
       return (await chrome.storage.sync.get(key))[key];
     } catch (e) {
@@ -14,6 +17,7 @@
   }
 
   async function syncSet(key, value) {
+    if (dead()) return;
     try {
       await chrome.storage.sync.set({ [key]: value });
     } catch (e) {
@@ -52,12 +56,14 @@
     },
 
     async getConv(id) {
+      if (dead()) return CSR.store.emptyConv(id);
       const key = CONV_PREFIX + id;
       const r = await chrome.storage.local.get(key);
       return r[key] ? { ...CSR.store.emptyConv(id), ...r[key] } : CSR.store.emptyConv(id);
     },
 
     async saveConv(conv) {
+      if (dead()) return;
       const key = CONV_PREFIX + conv.id;
       const p = conv.progress || {};
       const hasProgress = (p.read && Object.keys(p.read).length) || p.lastPos;

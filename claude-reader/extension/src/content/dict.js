@@ -50,11 +50,13 @@
   }
 
   async function isSaved(word) {
+    if (!CSR.alive()) return false;
     const { vocab = [] } = await chrome.storage.local.get('vocab');
     return vocab.some((v) => v.word === word);
   }
 
   async function save(entry, context) {
+    if (!CSR.alive()) return;
     const { vocab = [] } = await chrome.storage.local.get('vocab');
     if (vocab.some((v) => v.word === entry.word)) return;
     vocab.unshift({
