@@ -1010,7 +1010,7 @@
           onkeydown: (e) => e.key === 'Enter' && e.currentTarget.click(),
           title: orphan ? 'این قسمت در صفحه پیدا نشد (شاید پیام ویرایش یا دوباره تولید شده)' : 'رفتن به این قسمت',
           onclick: () => {
-            if (!AN.reveal(a.id)) UI.toast('این قسمت الان در صفحه نیست');
+            AN.reveal(a.id).then((ok) => ok || UI.toast('این قسمت الان در صفحه پیدا نشد'));
           },
         },
         h('span', { class: 'item-icon' }, d.icon),

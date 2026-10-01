@@ -486,3 +486,35 @@ h3:first-child {
   padding: 6px;
   color: var(--fg);
 }
+
+.update-banner {
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ub-title {
+  font-weight: 800;
+  color: var(--accent);
+}
+.ub-notes,
+.ub-steps {
+  margin: 0;
+  padding-inline-start: 18px;
+  font-size: 12px;
+}
+.ub-actions {
+  display: flex;
+  gap: 6px;
+}
+.update-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}

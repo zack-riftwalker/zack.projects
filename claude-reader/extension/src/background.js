@@ -182,12 +182,66 @@ async function lookup(word) {
 }
 
 // ---------------------------------------------------------------------------
+// updates: an unpacked extension can't replace its own files, but it can tell
+// you when a new version is out and where to get it
+
+async function checkUpdate() {
+  const current = chrome.runtime.getManifest().version;
+  let best = null;
+  for (const url of CSR.UPDATE_SOURCES) {
+    try {
+      const info = await fetchJson(url + '?t=' + Date.now(), 10000);
+      if (info && info.version && (!best || CSR.compareVersions(info.version, best.version) > 0)) best = info;
+    } catch (e) {
+      /* that source doesn't exist (yet) */
+    }
+  }
+  const update = {
+    checked: Date.now(),
+    current,
+    latest: best ? best.version : current,
+    notes: best && Array.isArray(best.notes) ? best.notes.slice(0, 12) : [],
+    zip: best ? best.zip : '',
+    available: !!best && CSR.compareVersions(best.version, current) > 0,
+    error: best ? '' : 'offline',
+  };
+  await chrome.storage.local.set({ update });
+  await chrome.action.setBadgeText({ text: update.available ? 'NEW' : '' });
+  if (update.available) await chrome.action.setBadgeBackgroundColor({ color: '#c2410c' });
+  return update;
+}
+
+chrome.alarms.get('update-check').then((a) => {
+  if (!a) chrome.alarms.create('update-check', { delayInMinutes: 1, periodInMinutes: 360 });
+});
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'update-check') checkUpdate();
+});
+
+chrome.runtime.onInstalled.addListener(async (details) => {
+  checkUpdate();
+  if (details.reason === 'update') {
+    // pages still running the old version's scripts: reload them
+    const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+    for (const t of tabs) chrome.tabs.reload(t.id);
+  }
+});
+
+// ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (!msg || !msg.csr) return;
   if (msg.csr === 'pomo') {
     command(msg.cmd, msg.arg).then(reply, (e) => reply({ error: String(e) }));
     return true;
+  }
+  if (msg.csr === 'checkUpdate') {
+    checkUpdate().then(reply, (e) => reply({ error: String(e) }));
+    return true;
+  }
+  if (msg.csr === 'reloadExtension') {
+    chrome.runtime.reload();
+    return;
   }
   if (msg.csr === 'dict') {
     lookup(msg.word).then(reply, (e) => reply({ ok: false, error: String(e) }));

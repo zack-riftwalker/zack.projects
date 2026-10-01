@@ -226,6 +226,7 @@
       discover(messages);
       CSR.appearance.apply(CSR.settings); // now with the discovered variables
     }
+    syncInner(t.dark ? 'dark' : 'light');
     paintChain(messages);
     for (const m of messages) {
       if ((changed.includes(m) || !scanned.has(m)) && isStable(m)) {
@@ -282,8 +283,28 @@
 
   let original = null; // { m, value }
 
+  /** Claude's design system also sets data-mode on inner containers. */
+  function syncInner(want) {
+    const els = document.querySelectorAll(want ? '[data-mode]:not(html)' : '[data-csr-orig-mode]:not(html)');
+    let n = 0;
+    for (const el of els) {
+      if (++n > 60) break;
+      if (el.closest('[data-csr-ui]')) continue;
+      if (!want) {
+        el.setAttribute('data-mode', el.getAttribute('data-csr-orig-mode'));
+        el.removeAttribute('data-csr-orig-mode');
+        continue;
+      }
+      const cur = el.getAttribute('data-mode');
+      if (cur === want || (cur !== 'dark' && cur !== 'light')) continue;
+      if (!el.hasAttribute('data-csr-orig-mode')) el.setAttribute('data-csr-orig-mode', cur);
+      el.setAttribute('data-mode', want);
+    }
+  }
+
   TF.syncMode = function (settings) {
     const t = settings.enabled ? CSR.resolveTheme(settings) : null;
+    if (document.body) syncInner(t ? (t.dark ? 'dark' : 'light') : null);
     if (!t) {
       if (original) {
         set(original.m, original.value);

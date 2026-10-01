@@ -180,6 +180,100 @@
         );
       }
 
+      // ---- virtual list like the current claude.ai (rows with data-index, only
+      // rows near the viewport are rendered, scroll position gets corrected)
+      const VTURNS = [];
+      for (let i = 0; i < 12; i++) {
+        VTURNS.push({ role: 'user', text: `سؤال شماره ${i + 1}: درباره‌ی مبحث ${i + 1} توضیح بده.` });
+        VTURNS.push({
+          role: 'assistant',
+          blocks: [
+            ['h2', `مبحث ${i + 1}: مقدمه`],
+            ['p', `این پاراگراف اول مبحث ${i + 1} است و برای آزمایش فهرست خودکار نوشته شده. متن کمی طولانی است تا ارتفاع ردیف واقعی‌تر باشد و اسکرول معنا داشته باشد.`],
+            ['p', `جمله‌ی دوم مبحث ${i + 1}: فهرست باید بتواند حتی وقتی این بخش در صفحه نیست، به آن برسد.`],
+            ['h3', `مبحث ${i + 1}: جمع‌بندی`],
+            ['p', `جمع‌بندی مبحث ${i + 1}: اگر روی این عنوان در فهرست کلیک شود، صفحه باید دقیقاً به همین‌جا بیاید.`],
+            ['p', 'یک پاراگراف دیگر برای پر کردن صفحه و نزدیک‌تر شدن به ارتفاع پاسخ‌های واقعی Claude که معمولاً چند پاراگراف دارند.'],
+          ],
+        });
+      }
+
+      function VirtualApp() {
+        const scRef = React.useRef(null);
+        const heights = React.useRef({});
+        const [range, setRange] = React.useState([0, 5]);
+        const [, setTick] = React.useState(0);
+        const est = (i) => heights.current[i] || 420;
+        const recompute = () => {
+          const sc = scRef.current;
+          if (!sc) return;
+          const top = sc.scrollTop - 600;
+          const bottom = sc.scrollTop + sc.clientHeight + 600;
+          let y = 0;
+          let a = null;
+          let b = VTURNS.length - 1;
+          for (let i = 0; i < VTURNS.length; i++) {
+            const h = est(i);
+            if (a === null && y + h >= top) a = i;
+            if (y > bottom) {
+              b = i - 1;
+              break;
+            }
+            y += h;
+          }
+          setRange([a || 0, Math.max(a || 0, b)]);
+        };
+        React.useEffect(() => {
+          document.title = 'Virtual chat - Claude';
+          const sc = scRef.current;
+          const onScroll = () => {
+            recompute();
+            // like Claude's "stays put" sizer: programmatic scroll writes that
+            // cancel any smooth scroll in progress
+            requestAnimationFrame(() => {
+              sc.scrollTop = sc.scrollTop;
+            });
+          };
+          sc.addEventListener('scroll', onScroll);
+          recompute();
+          return () => sc.removeEventListener('scroll', onScroll);
+        }, []);
+        const measure = (i) => (el) => {
+          if (!el) return;
+          const h = el.getBoundingClientRect().height;
+          if (h && Math.abs((heights.current[i] || 0) - h) > 1) {
+            heights.current[i] = h;
+            setTick((t) => t + 1);
+          }
+        };
+        const [a, b] = range;
+        let before = 0;
+        for (let i = 0; i < a; i++) before += est(i);
+        let after = 0;
+        for (let i = b + 1; i < VTURNS.length; i++) after += est(i);
+        const rows = [];
+        for (let i = a; i <= b; i++) {
+          rows.push(
+            e(
+              'div',
+              { key: i, 'data-testid': 'transcript-row', 'data-index': i, ref: measure(i), style: { paddingBottom: 18 } },
+              e(Message, { m: VTURNS[i] })
+            )
+          );
+        }
+        return e(
+          'div',
+          { className: 'app' },
+          e('aside', { style: { width: 230, padding: 16 } }, e('b', null, 'Claude')),
+          e(
+            'main',
+            { className: 'scroller', ref: scRef, style: { scrollBehavior: 'smooth' } },
+            e('div', { className: 'column', role: 'feed', 'aria-label': 'Chat messages' }, e('div', { style: { height: before } }), rows, e('div', { style: { height: after } })),
+            e('div', { className: 'composer' }, e('div', { className: 'ProseMirror', contentEditable: true, suppressContentEditableWarning: true }, e('p', null)))
+          )
+        );
+      }
+
       function App() {
         const [path, setPath] = React.useState(location.pathname);
         const [tick, setTick] = React.useState(0);
@@ -223,6 +317,10 @@
         h.removeAttribute('data-color-version');
         h.className = 'v3 dark';
         ReactDOM.createRoot(document.getElementById('root')).render(e(CodeApp));
+      } else if (location.pathname.includes('22222222-3333')) {
+        document.documentElement.classList.add('scroll-smooth');
+        document.documentElement.style.scrollBehavior = 'smooth';
+        ReactDOM.createRoot(document.getElementById('root')).render(e(VirtualApp));
       } else {
         ReactDOM.createRoot(document.getElementById('root')).render(e(App));
       }

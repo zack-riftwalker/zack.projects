@@ -339,7 +339,7 @@
 
   function baseAnchor(msg, index) {
     const messages = dom.getMessages();
-    return { msg: messages.indexOf(msg), role: dom.roleOf(msg), key: msgKey(index || dom.buildIndex(msg)) };
+    return { msg: messages.indexOf(msg), row: dom.rowIndex(msg), role: dom.roleOf(msg), key: msgKey(index || dom.buildIndex(msg)) };
   }
 
   function push(a) {
@@ -612,13 +612,27 @@
     return p.els ? p.els[0] : p.el;
   };
 
-  AN.reveal = function (id) {
-    const a = AN.get(id);
-    const p = placed.get(id);
-    if (!a || !p) return false;
+  function targetOf(a) {
+    const p = placed.get(a.id);
+    if (!p) return null;
     const el = p.els ? p.els[0] : a.kind === 'drawing' ? p.msg : p.el;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const flashEls = p.els || [p.el];
+    return el && el.isConnected ? el : null;
+  }
+
+  /** Scrolls to an annotation; if its message isn't rendered right now
+   * (Claude's virtual list), scrolls toward it until it is. */
+  AN.reveal = async function (id) {
+    const a = AN.get(id);
+    if (!a) return false;
+    const el = await dom.seek(() => {
+      const t = targetOf(a);
+      if (!t && CSR.debug) CSR.debug.sync();
+      return t;
+    }, a.anchor.row ?? null);
+    if (!el) return false;
+    await dom.scrollToEl(el, 'center');
+    const p = placed.get(id);
+    const flashEls = p ? p.els || [p.el] : [];
     flashEls.forEach((e) => e.classList && e.classList.add('csr-flash'));
     setTimeout(() => flashEls.forEach((e) => e.classList && e.classList.remove('csr-flash')), 1600);
     return true;
@@ -628,7 +642,7 @@
   AN.sorted = function () {
     return AN.all()
       .slice()
-      .sort((x, y) => (x.anchor.msg || 0) - (y.anchor.msg || 0) || (x.anchor.start ?? x.anchor.block ?? 0) - (y.anchor.start ?? y.anchor.block ?? 0));
+      .sort((x, y) => (x.anchor.row ?? x.anchor.msg ?? 0) - (y.anchor.row ?? y.anchor.msg ?? 0) || (x.anchor.start ?? x.anchor.block ?? 0) - (y.anchor.start ?? y.anchor.block ?? 0));
   };
 
   AN.isOrphan = (a) => !!a._orphan && !placed.has(a.id);

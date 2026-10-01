@@ -149,7 +149,7 @@
     if (r && window.CSS && CSS.highlights && window.Highlight) CSS.highlights.set('csr-tts', new Highlight(r));
     const rect = (r || item.block).getBoundingClientRect();
     if (rect.top < 90 || rect.bottom > window.innerHeight - 140) {
-      item.block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      dom.scrollToEl(item.block, 'center');
       setTimeout(() => {
         const rr = (rangeOf(item) || item.block).getBoundingClientRect();
         CSR.ruler.moveTo(rr.top + rr.height / 2);

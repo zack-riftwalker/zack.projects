@@ -354,6 +354,38 @@
     }
   });
 
+  // ---------- updates ----------
+  const version = chrome.runtime.getManifest().version;
+  const faV = (v) => String(v).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+  function paintUpdate(u) {
+    const when = u && u.checked ? new Date(u.checked).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    $('versionNote').textContent =
+      `نسخه‌ی نصب‌شده: ${faV(version)}` +
+      (u && u.available ? ` — نسخه‌ی ${faV(u.latest)} آماده است` : u && !u.error ? ' — آخرین نسخه است' : '') +
+      (when ? ` (بررسی: ${when})` : '');
+    const show = !!(u && u.available && CSR.compareVersions(u.latest, version) > 0);
+    $('updateBanner').hidden = !show;
+    if (!show) return;
+    $('ubTitle').textContent = `نسخه‌ی تازه‌ی خوانا (${faV(u.latest)}) آماده است`;
+    const notes = $('ubNotes');
+    notes.textContent = '';
+    for (const n of u.notes || []) notes.append(Object.assign(document.createElement('li'), { textContent: n }));
+  }
+  chrome.storage.local.get('update').then((r) => paintUpdate(r.update));
+  $('checkUpdate').addEventListener('click', async () => {
+    $('checkUpdate').textContent = 'در حال بررسی…';
+    const u = await chrome.runtime.sendMessage({ csr: 'checkUpdate' }).catch(() => null);
+    $('checkUpdate').textContent = 'بررسی به‌روزرسانی';
+    paintUpdate(u);
+    if (u && u.error) $('versionNote').textContent = 'اتصال به گیت‌هاب برقرار نشد؛ بعداً دوباره امتحان کن.';
+  });
+  $('ubDownload').addEventListener('click', async () => {
+    const { update } = await chrome.storage.local.get('update');
+    if (update && update.zip) chrome.tabs.create({ url: update.zip });
+  });
+  $('ubHow').addEventListener('click', () => ($('ubSteps').hidden = !$('ubSteps').hidden));
+  $('reloadExt').addEventListener('click', () => chrome.runtime.sendMessage({ csr: 'reloadExtension' }));
+
   $('diagBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     let text;

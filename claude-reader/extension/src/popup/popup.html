@@ -19,6 +19,20 @@
       </label>
     </header>
 
+    <div class="update-banner" id="updateBanner" hidden>
+      <div class="ub-title" id="ubTitle"></div>
+      <ul class="ub-notes" id="ubNotes"></ul>
+      <div class="ub-actions">
+        <button class="btn small" id="ubDownload">دانلود نسخه‌ی جدید</button>
+        <button class="btn ghost small" id="ubHow">چطور نصب کنم؟</button>
+      </div>
+      <ol class="ub-steps" id="ubSteps" hidden>
+        <li>فایل zip را باز کن (Extract).</li>
+        <li>همه‌ی فایل‌های پوشه‌ی <b>khana-extension</b> جدید را روی پوشه‌ی قبلی کپی کن (Replace).</li>
+        <li>اینجا «بارگذاری دوباره‌ی افزونه» را بزن. تب‌های Claude خودشان تازه می‌شوند و یادداشت‌ها سر جایشان می‌مانند.</li>
+      </ol>
+    </div>
+
     <nav class="tabs" role="tablist">
       <button class="tab on" data-tab="type">فونت</button>
       <button class="tab" data-tab="theme">تم</button>
@@ -100,6 +114,14 @@
         <div class="actions">
           <button class="btn" id="openPanel">پنل یادداشت‌های این گفتگو</button>
           <button class="btn ghost" id="openLibrary">کتابخانه‌ی همه‌ی یادداشت‌ها</button>
+        </div>
+
+        <div class="update-box">
+          <div class="row-btns">
+            <button class="btn ghost small" id="checkUpdate">بررسی به‌روزرسانی</button>
+            <button class="btn ghost small" id="reloadExt">بارگذاری دوباره‌ی افزونه</button>
+          </div>
+          <p class="note" id="versionNote"></p>
         </div>
 
         <div class="diag">

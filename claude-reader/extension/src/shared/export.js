@@ -12,7 +12,7 @@
       .slice()
       .sort(
         (x, y) =>
-          (x.anchor.msg || 0) - (y.anchor.msg || 0) ||
+          (x.anchor.row ?? x.anchor.msg ?? 0) - (y.anchor.row ?? y.anchor.msg ?? 0) ||
           (x.anchor.start ?? x.anchor.block ?? 0) - (y.anchor.start ?? y.anchor.block ?? 0)
       );
   }

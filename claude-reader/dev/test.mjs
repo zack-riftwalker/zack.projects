@@ -64,6 +64,16 @@ await context.route('https://api.dictionaryapi.dev/**', (route) =>
   })
 );
 
+// update check: pretend GitHub announces a newer version
+await context.route('https://raw.githubusercontent.com/**', (route) =>
+  route.request().url().includes('/main/')
+    ? route.fulfill({ status: 404, body: 'Not Found' })
+    : route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ version: '9.9.9', zip: 'https://example.com/khana.zip', notes: ['یک قابلیت تازه'] }),
+      })
+);
+
 const page = await context.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -478,6 +488,13 @@ ok(!(await page.locator('#csr-host .pomo-overlay').count()), 'pop-up closes');
 const bg = await popup.evaluate(() => chrome.runtime.sendMessage({ csr: 'pomo', cmd: 'stop' }));
 ok(bg && bg.phase === 'idle', 'background worker handles pomodoro commands');
 
+await popup.locator('.tab[data-tab="tools"]').click();
+await popup.locator('#checkUpdate').click();
+await popup.waitForTimeout(800);
+ok(await popup.locator('#updateBanner').isVisible(), 'update banner shows when a newer version exists');
+ok((await popup.locator('#ubTitle').textContent()).includes('۹.۹.۹'), 'banner names the new version');
+await popup.screenshot({ path: path.join(outDir, '29-popup-update.png') });
+
 await popup.locator('.tab[data-tab="study"]').click();
 await popup.screenshot({ path: path.join(outDir, '20-popup-study.png') });
 await popup.locator('.tab[data-tab="read"]').click();
@@ -593,6 +610,47 @@ const diag = await popup.evaluate(async () => {
 const d = JSON.parse(diag);
 ok(d.mode === 'generic' && d.counts.messages === 2 && d.assistantChain.length > 3, 'diagnostic report describes the page');
 ok(!/ماژول|پایتون|csv/i.test(diag), 'diagnostic report contains no message text');
+
+// ---------------------------------------------------------------------------
+console.log('Virtual list (like current claude.ai): table of contents navigation');
+await page.goto('https://claude.ai/chat/22222222-3333-4444-5555-666666666666');
+await page.waitForSelector('[data-testid="transcript-row"]');
+await page.waitForSelector('#csr-host', { state: 'attached' });
+await page.waitForTimeout(1500);
+const rendered = async () => page.evaluate(() => [...document.querySelectorAll('[data-testid="transcript-row"]')].map((r) => +r.dataset.index));
+ok((await rendered()).length < 24, 'only part of the conversation is rendered (' + (await rendered()).length + ' of 24 rows)');
+await page.keyboard.press('Alt+T');
+await page.waitForTimeout(400);
+const headingTop = (text) =>
+  page.evaluate((text) => {
+    const h = [...document.querySelectorAll('h2, h3')].find((x) => x.textContent.trim() === text);
+    return h ? Math.round(h.getBoundingClientRect().top) : null;
+  }, text);
+await page.locator('#csr-host .toc .toc-title', { hasText: 'مبحث 2: جمع‌بندی' }).click();
+await page.waitForTimeout(900);
+let ht = await headingTop('مبحث 2: جمع‌بندی');
+ok(ht !== null && ht >= 0 && ht < 300, 'TOC click jumps to a rendered section despite scroll corrections (top=' + ht + ')');
+
+// visit the whole conversation once so the TOC learns every section, then go back up
+await page.evaluate(async () => {
+  const sc = document.querySelector('.scroller');
+  for (let i = 0; i < 40; i++) {
+    sc.scrollBy({ top: 500, behavior: 'instant' });
+    await new Promise((r) => setTimeout(r, 60));
+  }
+});
+await page.waitForTimeout(1500);
+await page.evaluate(() => document.querySelector('.scroller').scrollTo({ top: 0, behavior: 'instant' }));
+await page.waitForTimeout(1200);
+ok(!(await rendered()).includes(21), 'the target answer is no longer rendered');
+const lastItem = page.locator('#csr-host .toc .toc-title', { hasText: 'مبحث 11: جمع‌بندی' });
+ok((await lastItem.count()) === 1, 'TOC still lists sections that are not rendered');
+await lastItem.click();
+await page.waitForTimeout(2500);
+ht = await headingTop('مبحث 11: جمع‌بندی');
+ok(ht !== null && ht >= 0 && ht < 320, 'TOC click finds and jumps to a section that was not rendered (top=' + ht + ')');
+await shot('28-virtual-toc');
+await page.keyboard.press('Alt+T');
 
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 

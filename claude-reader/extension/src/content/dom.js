@@ -339,6 +339,101 @@
     return b;
   };
 
+  // ---------------------------------------------------------------------------
+  // Scrolling (Claude's chat is a virtual list: rows are re-rendered and
+  // re-measured while scrolling, which cancels smooth scrolls)
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  dom.wait = wait;
+
+  /** Stable position of a message in the whole conversation: the row index of
+   * Claude's virtual list when there is one. */
+  dom.rowIndex = function (msg) {
+    const row = msg && msg.closest('[data-index]');
+    const n = row ? parseInt(row.getAttribute('data-index'), 10) : NaN;
+    return Number.isFinite(n) ? n : null;
+  };
+
+  function renderedRows() {
+    const out = [];
+    for (const m of document.querySelectorAll('[data-csr-msg]')) {
+      const n = dom.rowIndex(m);
+      if (n != null) out.push(n);
+    }
+    return out;
+  }
+
+  /** Jumps so `el` is at the top (or center) of the screen. Instant jumps with
+   * re-checks, so layout shifts from the virtual list can't undo it. */
+  dom.scrollToEl = async function (el, block = 'start') {
+    if (!el || !el.isConnected) return false;
+    const prevTop = el.style.scrollMarginTop;
+    const prevBottom = el.style.scrollMarginBottom;
+    el.style.scrollMarginTop = '84px';
+    el.style.scrollMarginBottom = '120px';
+    const sc = dom.scrollParent(el);
+    const inPlace = () => {
+      const r = el.getBoundingClientRect();
+      // near the end of the conversation it can't go higher: visible is enough
+      const atEnd = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
+      if (atEnd && r.top >= 0 && r.top < window.innerHeight - 40) return true;
+      return block === 'center'
+        ? r.top < window.innerHeight * 0.7 && r.bottom > window.innerHeight * 0.2
+        : r.top >= 0 && r.top < Math.min(260, window.innerHeight * 0.45);
+    };
+    try {
+      el.scrollIntoView({ block, behavior: 'instant' });
+      // keep correcting until it stays put (rows above may be re-measured)
+      let steady = 0;
+      for (let i = 0; i < 16 && el.isConnected; i++) {
+        await wait(i < 3 ? 70 : 140);
+        if (!el.isConnected) return false;
+        if (inPlace()) {
+          if (++steady >= 3) break;
+        } else {
+          steady = 0;
+          el.scrollIntoView({ block, behavior: 'instant' });
+        }
+      }
+    } finally {
+      el.style.scrollMarginTop = prevTop;
+      el.style.scrollMarginBottom = prevBottom;
+    }
+    return true;
+  };
+
+  /** Finds something that may not be rendered yet: calls `find()`, and if it
+   * returns nothing, scrolls toward virtual-list row `row` until it appears. */
+  dom.seek = async function (find, row) {
+    let el = find();
+    if (el || row == null) return el;
+    const first = document.querySelector('[data-csr-msg]');
+    if (!first) return null;
+    const sc = dom.scrollParent(first);
+    for (let i = 0; i < 60; i++) {
+      const rows = renderedRows();
+      if (!rows.length) return null;
+      const min = Math.min(...rows);
+      const max = Math.max(...rows);
+      if (row >= min && row <= max) {
+        const target = Array.from(document.querySelectorAll('[data-index]')).find((r) => +r.getAttribute('data-index') === row);
+        if (target) target.scrollIntoView({ block: 'start', behavior: 'instant' });
+        for (let k = 0; k < 14 && !el; k++) {
+          await wait(150);
+          el = find();
+        }
+        return el;
+      }
+      const before = sc.scrollTop;
+      sc.scrollBy({ top: (row < min ? -1 : 1) * sc.clientHeight * 0.85, behavior: 'instant' });
+      await wait(110);
+      el = find();
+      if (el) return el;
+      if (sc.scrollTop === before) return null; // reached the end
+    }
+    return null;
+  };
+
   /** Scrollable ancestor of an element (Claude scrolls an inner container). */
   dom.scrollParent = function (el) {
     let cur = el && el.parentElement;

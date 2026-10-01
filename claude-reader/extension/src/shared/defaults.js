@@ -170,6 +170,22 @@
     pomoPattern: 'termeh',
   };
 
+  // Where new versions are announced (public GitHub repo). The newest version
+  // found in any of these files wins.
+  const RAW = 'https://raw.githubusercontent.com/zack-riftwalker/zack.projects';
+  CSR.UPDATE_SOURCES = [`${RAW}/main/claude-reader/update.json`, `${RAW}/claude/brave-franklin-agv173/claude-reader/update.json`];
+
+  /** -1, 0 or 1 for dotted versions like "0.3.10". */
+  CSR.compareVersions = function (a, b) {
+    const x = String(a).split('.').map(Number);
+    const y = String(b).split('.').map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d) return d > 0 ? 1 : -1;
+    }
+    return 0;
+  };
+
   CSR.DEFAULT_TAGS = ['امتحان', 'مهم', 'مرور', 'سؤال', 'تعریف', 'فرمول', 'مثال'];
 
   /** Local date key (YYYY-MM-DD) for study statistics. */

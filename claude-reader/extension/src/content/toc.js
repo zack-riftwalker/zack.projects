@@ -56,34 +56,46 @@
     return conv.progress;
   }
 
+  // Sections seen so far. Claude's chat is a virtual list, so long
+  // conversations only have part of their messages in the page at a time;
+  // sections of rows that aren't rendered stay listed from this cache.
+  let known = new Map();
+
   TOC.build = function () {
     const out = [];
+    const rows = new Set();
     dom.getMessages().forEach((m, mi) => {
+      const row = dom.rowIndex(m) ?? mi;
+      rows.add(row);
+      let ord = 0;
       if (dom.roleOf(m) === 'user') {
         const title = oneLine(m.textContent).slice(0, 90);
-        out.push({ key: `q:${mi}:${hash(title)}`, kind: 'q', level: 0, title, el: m, blocks: [m], words: 0 });
+        out.push({ key: `q:${row}:${hash(title)}`, row, ord, kind: 'q', level: 0, title, el: m, blocks: [m], words: 0 });
         return;
       }
       let cur = null;
       for (const b of topBlocks(m)) {
         if (/^H[1-4]$/.test(b.tagName)) {
           const title = oneLine(b.textContent).slice(0, 90);
-          cur = { key: `h:${mi}:${hash(title)}`, kind: 'h', level: +b.tagName[1], title, el: b, blocks: [], words: 0 };
+          cur = { key: `h:${row}:${hash(title)}`, row, ord: ++ord, kind: 'h', level: +b.tagName[1], title, el: b, blocks: [], words: 0 };
           out.push(cur);
         } else if (!cur) {
           const title = firstSentence(b);
-          cur = { key: `a:${mi}:${hash(title)}`, kind: 'a', level: 5, title, el: b, blocks: [], words: 0 };
+          cur = { key: `a:${row}:${hash(title)}`, row, ord: ++ord, kind: 'a', level: 5, title, el: b, blocks: [], words: 0 };
           out.push(cur);
         }
         cur.blocks.push(b);
         cur.words += words(b);
       }
-      cur = null;
     });
-    // headings with nothing under them (e.g. a title right before a list) keep the next block's words
-    sections = out;
-    return out;
+    // forget cached sections of rows that are rendered now (they may have changed)
+    for (const [k, sec] of known) if (rows.has(sec.row)) known.delete(k);
+    for (const sec of out) known.set(sec.key, sec);
+    sections = [...known.values()].sort((a, b) => a.row - b.row || a.ord - b.ord);
+    return sections;
   };
+
+  const live = (s) => s.blocks[0] && s.blocks[0].isConnected;
 
   const readable = (s) => s.kind !== 'q';
 
@@ -123,16 +135,13 @@
 
   TOC.tick = function () {
     if (!AN.conv()) return;
-    if (!sections.length) TOC.build();
+    if (!sections.length || !sections.some(live) || dom.getMessages().some((m) => !m.isConnected)) TOC.build();
     const p = progress();
     const vh = window.innerHeight;
     let changed = false;
     let cur = null;
     for (const s of sections) {
-      if (!s.blocks[0] || !s.blocks[0].isConnected) {
-        TOC.build();
-        return;
-      }
+      if (!live(s)) continue;
       const r = sectionRect(s);
       if (r.bottom < 0 || r.top > vh) continue;
       if (!cur && r.bottom > vh * 0.3) cur = s;
@@ -165,7 +174,7 @@
         if (r.bottom > 80) {
           if (r.top > window.innerHeight) return;
           const p = progress();
-          p.lastPos = { msg: msgs.indexOf(m), ...dom.makeBlockAnchor(m, b), at: Date.now() };
+          p.lastPos = { msg: msgs.indexOf(m), row: dom.rowIndex(m), ...dom.makeBlockAnchor(m, b), at: Date.now() };
           AN.save();
           return;
         }
@@ -187,7 +196,7 @@
     const vh = window.innerHeight;
     let cur = null;
     for (const s of sections) {
-      if (!s.blocks[0] || !s.blocks[0].isConnected) continue;
+      if (!live(s)) continue;
       const r = sectionRect(s);
       if (r.bottom > vh * 0.3 && r.top < vh) {
         cur = s;
@@ -212,14 +221,19 @@
     return null;
   }
 
-  TOC.resume = function () {
-    const el = findLastPos();
-    if (!el) return CSR.ui.toast('آخرین جای خواندن پیدا نشد');
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  function flash(el) {
     el.classList.add('csr-toc-flash');
     setTimeout(() => el.classList.remove('csr-toc-flash'), 1500);
+  }
+
+  TOC.resume = async function () {
     if (resumeBtn) resumeBtn.remove();
     resumeBtn = null;
+    const p = progress();
+    const el = await dom.seek(findLastPos, p && p.lastPos ? p.lastPos.row : null);
+    if (!el) return CSR.ui.toast('آخرین جای خواندن پیدا نشد');
+    await dom.scrollToEl(el, 'center');
+    flash(el);
   };
 
   /** After opening a conversation: offer to jump back to where you stopped. */
@@ -227,6 +241,8 @@
     dwell = new Map();
     current = null;
     sections = [];
+    known = new Map();
+    lastSig = '';
     if (resumeBtn) resumeBtn.remove();
     resumeBtn = null;
     if (!CSR.settings.resumePrompt) return;
@@ -256,20 +272,24 @@
   // ---------------------------------------------------------------------------
   // panel
 
+  let lastSig = '';
+
   TOC.toggle = function (open) {
     TOC.open = open === undefined ? !TOC.open : !!open;
     CSR.ui.setDockState('toc', TOC.open);
     if (!TOC.open) {
       if (panel) panel.remove();
       panel = null;
+      lastSig = '';
       return;
     }
     TOC.build();
-    render();
+    render(true);
     panel.classList.add('enter');
   };
 
-  /** Rebuild after the page changed (debounced). */
+  /** Rebuild after the page changed (debounced; skipped when nothing visible
+   * changed, so a click on the list is never lost to a re-render). */
   TOC.refresh = function () {
     if (!TOC.open) return;
     clearTimeout(refreshTimer);
@@ -293,20 +313,41 @@
     }
   }
 
-  function go(el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    el.classList.add('csr-toc-flash');
-    setTimeout(() => el.classList.remove('csr-toc-flash'), 1500);
+  /** Jump to a section: find it fresh (Claude may have re-rendered it, or it
+   * may not be rendered at all yet), then scroll there. */
+  async function go(sec) {
+    const find = () => {
+      TOC.build();
+      const f = sections.find((x) => x.key === sec.key);
+      return f && live(f) ? f.el : null;
+    };
+    const el = await dom.seek(find, sec.row);
+    if (!el) return CSR.ui.toast('این بخش الان در صفحه پیدا نشد');
+    await dom.scrollToEl(el, 'start');
+    flash(el);
+    current = sections.find((x) => x.key === sec.key) || null;
+    markCurrent();
   }
+  TOC.go = go;
 
-  function render() {
+  function render(force) {
     const h = CSR.ui.h;
-    const keep = panel ? panel.querySelector('.toc-list')?.scrollTop : 0;
-    if (panel) panel.remove();
     const conv = AN.conv();
     const p = progress();
     const st = TOC.stats();
     const bookmarks = AN.sorted().filter((a) => a.kind === 'bookmark');
+    const sig = [
+      sections.map((x) => x.key + (p && p.read[x.key] ? '+' : '')).join('|'),
+      bookmarks.map((a) => a.id + a.label).join('|'),
+      st.pct,
+      st.leftMin,
+      p && p.lastPos ? 1 : 0,
+      CSR.settings.autoProgress,
+    ].join('#');
+    if (!force && panel && sig === lastSig) return;
+    lastSig = sig;
+    const keep = panel ? panel.querySelector('.toc-list')?.scrollTop : 0;
+    if (panel) panel.remove();
 
     const list = h('div', { class: 'toc-list' });
     if (!conv || !sections.length) {
@@ -318,7 +359,7 @@
         list.append(
           h(
             'button',
-            { class: 'toc-bm', onclick: () => AN.reveal(a.id) || CSR.ui.toast('این نشانک الان در صفحه نیست') },
+            { class: 'toc-bm', onclick: () => AN.reveal(a.id).then((ok) => ok || CSR.ui.toast('این نشانک الان در صفحه نیست')) },
             h('span', { class: 'toc-bm-flag', style: `--c:${CSR.patternById(a.pattern).colors.bg};--f:${CSR.patternById(a.pattern).colors.fg}` }),
             h('span', { dir: 'auto' }, a.label || 'نشانک')
           )
@@ -340,7 +381,7 @@
               onchange: (e) => setRead(s.key, e.target.checked),
             })
           : h('span', { class: 'toc-q' }, '؟'),
-        h('button', { class: 'toc-title', dir: 'auto', onclick: () => go(s.el) }, s.title || '…'),
+        h('button', { class: 'toc-title', dir: 'auto', title: s.title, onclick: () => go(s) }, s.title || '…'),
         readable(s) && s.words ? h('span', { class: 'toc-min' }, fa(Math.max(1, Math.round(s.words / WPM))) + '′') : null
       );
       list.append(item);

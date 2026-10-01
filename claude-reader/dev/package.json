@@ -5,7 +5,8 @@
   "description": "Dev tools for the Khana Claude Reader extension (icons + end-to-end test).",
   "scripts": {
     "icons": "node make-icons.mjs",
-    "test": "node test.mjs"
+    "test": "node test.mjs",
+    "zip": "sh package.sh"
   },
   "devDependencies": {
     "playwright-core": "^1.56.0",
