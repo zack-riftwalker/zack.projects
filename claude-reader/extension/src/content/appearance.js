@@ -315,8 +315,37 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
   // its own, and rows come and go while scrolling. Each one gets marked
   // (with its original width, for the diagnostic report).
 
-  const columnDone = new WeakSet();
+  let columnDone = new WeakSet();
   const columnWidths = new Set(); // max-widths found around answers
+
+  // Claude's layout changes with the room it has (a phone-sized window, an
+  // artifact or file opened beside the chat): wrappers that had no fixed
+  // width before may get one, so look again whenever the chat area resizes.
+  let watched = null;
+  let watchedWidth = 0;
+  let relookTimer = 0;
+  function relook() {
+    clearTimeout(relookTimer);
+    relookTimer = setTimeout(() => {
+      columnDone = new WeakSet();
+      A.markColumn(CSR.dom.getMessages(), CSR.settings);
+    }, 250);
+  }
+  const chatResize = new ResizeObserver(() => {
+    const w = watched ? watched.clientWidth : 0;
+    if (Math.abs(w - watchedWidth) < 2) return;
+    watchedWidth = w;
+    relook();
+  });
+  window.addEventListener('resize', () => CSR.settings && CSR.settings.contentWidth > 0 && relook());
+
+  function watchChatArea(el) {
+    if (el === watched) return;
+    if (watched) chatResize.unobserve(watched);
+    watched = el;
+    watchedWidth = el.clientWidth;
+    chatResize.observe(el);
+  }
 
   function pxMaxWidth(el) {
     const mw = getComputedStyle(el).maxWidth;
@@ -332,8 +361,9 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
         if (w >= 400 && w <= 1100 && accept(w)) el.setAttribute('data-csr-column', Math.round(w) + 'px');
       }
       const o = getComputedStyle(el).overflowY;
-      if (o === 'auto' || o === 'scroll') break;
+      if (o === 'auto' || o === 'scroll') return el;
     }
+    return null;
   }
 
   A.markColumn = function (messages, s) {
@@ -342,7 +372,8 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
     for (const m of messages) {
       if (columnDone.has(m) || CSR.dom.roleOf(m) === 'user') continue;
       columnDone.add(m);
-      markChain(m, (w) => columnWidths.add(Math.round(w)));
+      const area = markChain(m, (w) => columnWidths.add(Math.round(w)));
+      if (area && m.isConnected) watchChatArea(area);
     }
     if (!columnWidths.size) return;
     // your messages: only wrappers as wide as that column (not the bubble itself)

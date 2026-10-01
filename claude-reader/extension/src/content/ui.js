@@ -128,8 +128,11 @@
     const dark = isDark(s);
     host.toggleAttribute('data-dark', dark);
     el.layer.setAttribute('data-side', s.dockSide === 'left' ? 'left' : 'right');
-    el.dock.hidden = !(s.enabled && s.showDock) || !!s.dockCollapsed;
-    el.bubble.hidden = !(s.enabled && s.showDock && s.dockCollapsed);
+    // on a narrow window the dock would cover the start of Persian lines:
+    // show the small circle instead (until it's clicked), without changing the setting
+    const collapsed = !!s.dockCollapsed || (isNarrow() && !openedNarrow);
+    el.dock.hidden = !(s.enabled && s.showDock) || collapsed;
+    el.bubble.hidden = !(s.enabled && s.showDock && collapsed);
     el.dockBtn.highlighter.classList.toggle('on', !!s.highlighterMode);
     el.dockBtn.highlighter.style.setProperty('--sw', swatch(s.activeHighlight));
     el.dockBtn.rtl.setAttribute('data-state', s.rtlMode);
@@ -199,12 +202,27 @@
     '<svg viewBox="0 0 128 128" width="26" height="26" aria-hidden="true"><path d="M64 38c-10-8-24-10-38-8v58c14-2 28 0 38 8 10-8 24-10 38-8V30c-14-2-28 0-38 8z" fill="#fffaf5"/><path d="M64 38v58" stroke="#c2573a" stroke-width="5" stroke-linecap="round"/><rect x="34" y="46" width="22" height="9" rx="3" fill="#ffd43b"/><rect x="72" y="70" width="22" height="9" rx="3" fill="#8ce99a"/></svg>';
   const BUBBLE = 46;
   let bubblePos = null; // {x, y} as fractions of the window
+  const NARROW = 720;
+  const isNarrow = () => window.innerWidth < NARROW;
+  let openedNarrow = false; // dock opened from the circle on a narrow window
+  let wasNarrow = isNarrow();
+  window.addEventListener('resize', () => {
+    if (isNarrow() === wasNarrow) return;
+    wasNarrow = isNarrow();
+    openedNarrow = false;
+    if (CSR.settings) UI.applySettings(CSR.settings);
+  });
+
+  // a spot picked on a wide window means little on a narrow one: there the
+  // circle starts in its corner, and moving it lasts only for this visit
+  let narrowPos = null;
 
   function placeBubble() {
+    const pos = isNarrow() ? narrowPos : bubblePos;
     const maxX = window.innerWidth - BUBBLE - 6;
     const maxY = window.innerHeight - BUBBLE - 6;
-    const x = bubblePos ? bubblePos.x * window.innerWidth : maxX - 12;
-    const y = bubblePos ? bubblePos.y * window.innerHeight : 72;
+    const x = pos ? pos.x * window.innerWidth : maxX - 12;
+    const y = pos ? pos.y * window.innerHeight : 72;
     el.bubble.style.left = Math.max(6, Math.min(maxX, x)) + 'px';
     el.bubble.style.top = Math.max(6, Math.min(maxY, y)) + 'px';
   }
@@ -227,7 +245,9 @@
       if (!drag.moved && Math.hypot(dx, dy) < 5) return;
       drag.moved = true;
       el.bubble.classList.add('dragging');
-      bubblePos = { x: (drag.ox + dx) / window.innerWidth, y: (drag.oy + dy) / window.innerHeight };
+      const p = { x: (drag.ox + dx) / window.innerWidth, y: (drag.oy + dy) / window.innerHeight };
+      if (isNarrow()) narrowPos = p;
+      else bubblePos = p;
       placeBubble();
     });
     const end = () => {
@@ -235,8 +255,14 @@
       const moved = drag.moved;
       drag = null;
       el.bubble.classList.remove('dragging');
-      if (moved) chrome.storage.local.set({ bubblePos });
-      else UI.setCollapsed(false);
+      if (moved) {
+        if (!isNarrow()) chrome.storage.local.set({ bubblePos });
+      }
+      else if (CSR.settings.dockCollapsed) UI.setCollapsed(false);
+      else {
+        openedNarrow = true; // only folded because the window is narrow
+        UI.applySettings(CSR.settings);
+      }
     };
     el.bubble.addEventListener('pointerup', end);
     el.bubble.addEventListener('pointercancel', end);
@@ -250,6 +276,10 @@
   }
 
   UI.setCollapsed = function (on) {
+    if (on && openedNarrow && !CSR.settings.dockCollapsed) {
+      openedNarrow = false; // folding it again on a narrow window
+      UI.applySettings(CSR.settings);
+    }
     CSR.store.patchSettings({ dockCollapsed: !!on });
     if (on) UI.toast('نوار ابزار جمع شد؛ روی دایره کلیک کن تا باز شود، یا بکشش هر جا خواستی');
   };

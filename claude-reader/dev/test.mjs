@@ -733,6 +733,66 @@ ok(cw.rows.length > 1 && cw.rows.every((x) => x === 920), 'rows that appear whil
 ok(cw.composer >= 920, 'the message box lines up with the text (' + cw.composer + ')');
 ok(cw.bubble < 920 * 0.85, 'your own message bubbles are not stretched (' + Math.round(cw.bubble) + ')');
 await shot('29-wide-column');
+
+// the window shrinks to phone size, a side panel opens, the page loads narrow
+const layout = () =>
+  page.evaluate(() => {
+    const sc = document.querySelector('.scroller');
+    const rows = [...document.querySelectorAll('.row-inner')].map((r) => r.getBoundingClientRect());
+    const texts = [...document.querySelectorAll('.row-inner p')].map((p) => p.getBoundingClientRect());
+    return {
+      rows: rows.map((r) => Math.round(r.width)),
+      room: sc.clientWidth,
+      overflow: sc.scrollWidth - sc.clientWidth + (document.documentElement.scrollWidth - innerWidth),
+      outside: texts.filter((t) => t.right > sc.getBoundingClientRect().right + 1 || t.left < sc.getBoundingClientRect().left - 1).length,
+    };
+  });
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(900);
+let lay = await layout();
+ok(lay.overflow <= 0 && lay.outside === 0 && lay.rows.every((x) => x <= lay.room), `phone-sized window: text fits, no sideways scrolling (room ${lay.room}, rows ${lay.rows.join(',')}, overflow ${lay.overflow})`);
+await shot('29b-phone-width');
+const dockShown = async () => [await page.locator('#csr-host .dock').isVisible(), await page.locator('#csr-host .bubble').isVisible()];
+ok(JSON.stringify(await dockShown()) === '[false,true]', 'phone-sized window: the toolbar folds into the small circle so it does not cover the text');
+const bub = await page.locator('#csr-host .bubble').boundingBox();
+ok(bub.x > 390 - 46 - 30 && bub.y < 120, 'the circle sits in its corner on a narrow window (' + Math.round(bub.x) + ',' + Math.round(bub.y) + ')');
+await page.locator('#csr-host .bubble').click();
+await page.waitForTimeout(300);
+ok(JSON.stringify(await dockShown()) === '[true,false]', 'clicking the circle still opens the toolbar');
+await page.setViewportSize({ width: 1280, height: 860 });
+await page.waitForTimeout(900);
+cw = await widths();
+ok(cw.rows.every((x) => x === 920), 'back to a wide window: the chosen width again (' + cw.rows.join(',') + ')');
+ok(JSON.stringify(await dockShown()) === '[true,false]', 'wide window: the toolbar is back as before');
+await page.evaluate(() => window.__panel(true));
+await page.waitForTimeout(900);
+lay = await layout();
+ok(lay.overflow <= 0 && lay.outside === 0 && lay.rows.every((x) => x <= lay.room), `side panel open: text shrinks to fit next to it (room ${lay.room}, rows ${lay.rows.join(',')})`);
+await shot('29c-side-panel');
+await page.evaluate(() => window.__panel(false));
+await page.waitForTimeout(900);
+cw = await widths();
+ok(cw.rows.every((x) => x === 920), 'side panel closed: the chosen width again (' + cw.rows.join(',') + ')');
+// opened on a phone-sized window first (Claude's column has no fixed width there), then widened
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto('https://claude.ai/chat/22222222-3333-4444-5555-666666666666');
+await page.waitForSelector('[data-testid="transcript-row"]');
+await page.waitForTimeout(1500);
+await page.setViewportSize({ width: 1280, height: 860 });
+await page.waitForTimeout(1200);
+cw = await widths();
+ok(cw.rows.length && cw.rows.every((x) => x === 920), 'page opened narrow, then widened: the chosen width applies (' + cw.rows.join(',') + ')');
+// opened with the side panel already open, then closed
+await page.evaluate(() => window.__panel(true));
+await page.reload();
+await page.waitForSelector('[data-testid="transcript-row"]');
+await page.waitForTimeout(1200);
+await page.evaluate(() => window.__panel(true));
+await page.waitForTimeout(1200);
+await page.evaluate(() => window.__panel(false));
+await page.waitForTimeout(1200);
+cw = await widths();
+ok(cw.rows.length && cw.rows.every((x) => x === 920), 'panel open first, then closed: the chosen width applies (' + cw.rows.join(',') + ')');
 await setWidth(0);
 await page.waitForTimeout(500);
 cw = await widths();

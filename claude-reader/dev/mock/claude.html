@@ -56,6 +56,15 @@
       /* virtual list: each row limits its own width, like the current claude.ai */
       .column.feed { max-width: none; }
       .row-inner { max-width: 736px; margin: 0 auto; }
+      /* side panel next to the chat, like an artifact / file preview */
+      .artifact-panel { flex: 0 0 46%; border-left: 1px solid hsl(var(--border-300)); background: hsl(var(--bg-000)); padding: 16px; overflow: auto; }
+      .app.split .row-inner { max-width: 600px; }
+      /* phone-sized window: no sidebar, the column limit changes */
+      @media (max-width: 760px) {
+        .app > nav, .app > aside { display: none; }
+        .row-inner { max-width: none; }
+        .artifact-panel { display: none; }
+      }
       .v3 .scroll-area { flex: 1; overflow-y: auto; background: #1a1a19; } /* hard-coded: no variable */
       .v3.light .scroll-area { background: #f4f2ec; }
       .v3 .transcript { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; display: flex; flex-direction: column; gap: 18px; }
@@ -227,6 +236,10 @@
         const scRef = React.useRef(null);
         const heights = React.useRef({});
         const [range, setRange] = React.useState([0, 5]);
+        const [panel, setPanel] = React.useState(false);
+        React.useEffect(() => {
+          window.__panel = setPanel;
+        }, []);
         const [, setTick] = React.useState(0);
         const est = (i) => heights.current[i] || 420;
         const recompute = () => {
@@ -288,14 +301,15 @@
         }
         return e(
           'div',
-          { className: 'app' },
+          { className: 'app' + (panel ? ' split' : '') },
           e('aside', { style: { width: 230, padding: 16 } }, e('b', null, 'Claude')),
           e(
             'main',
             { className: 'scroller', ref: scRef, style: { scrollBehavior: 'smooth' } },
             e('div', { className: 'column feed', role: 'feed', 'aria-label': 'Chat messages' }, e('div', { style: { height: before } }), rows, e('div', { style: { height: after } })),
             e('div', { className: 'composer' }, e('div', { className: 'ProseMirror', contentEditable: true, suppressContentEditableWarning: true }, e('p', null)))
-          )
+          ),
+          panel && e('section', { className: 'artifact-panel' }, e('h3', null, 'notes.md'), e('p', null, 'پیش‌نمایش فایل یا آزمون'))
         );
       }
 
