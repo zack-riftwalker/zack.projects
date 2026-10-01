@@ -33,6 +33,14 @@
       .standard-markdown ol { list-style: decimal; padding-left: 1.75rem; }
       .standard-markdown blockquote { border-left: 4px solid hsl(var(--border-300)); padding-left: 1rem; }
       pre { background: hsl(var(--bg-300)); padding: 12px; border-radius: 8px; overflow-x: auto; }
+      /* icons drawn with an icon font, like the artifact cards / tool rows of claude.ai */
+      @font-face { font-family: "Anthropic Glyphs"; src: local("DejaVu Sans"); }
+      .glyph { font-family: "Anthropic Glyphs"; }
+      .artifact-card { display: flex; gap: 10px; align-items: center; border: 1px solid hsl(var(--border-300)); border-radius: 10px; padding: 10px; font-family: system-ui, sans-serif; }
+      .tool-row { font-family: system-ui, sans-serif; font-size: 14px; color: hsl(var(--text-500)); }
+      /* code block whose colors are fixed inline (syntax theme for dark mode) */
+      .code-wrap { background: hsl(var(--bg-300)); border-radius: 8px; }
+      .code-wrap pre { background: transparent; }
       code { font-family: ui-monospace, monospace; font-size: .9em; }
       table { border-collapse: collapse; } td, th { border: 1px solid hsl(var(--border-300)); padding: 4px 8px; }
       .actions button { font-size: 12px; }
@@ -80,6 +88,10 @@
                 ['p', 'In English: useEffect lets you synchronize a component with an external system, such as a network request or a browser API.'],
                 ['table', [['حالت', 'زمان اجرا'], ['[]', 'فقط یک بار'], ['[a, b]', 'وقتی a یا b عوض شود']]],
                 ['ol', ['کامپوننت رندر می‌شود.', 'DOM به‌روزرسانی می‌شود.', 'useEffect اجرا می‌شود.']],
+                ['tools', 'Read a file, created a file, ran a command'],
+                ['artifact', 'آزمون فصل ۲: آماده‌سازی درس'],
+                ['pre-dark', 'این متن را Claude داخل بلوک کد نوشته و باید خوانا بماند.\nخط دوم همین متن.'],
+                ['p-faint', 'این جمله با رنگ ثابتِ روشن نوشته شده است.'],
               ],
             },
             { role: 'user', text: 'مرسی! یک مثال واقعی هم بزن.' },
@@ -115,6 +127,16 @@
         if (tag === 'pre') return e('div', null, e('div', { className: 'code-head' }, e('span', null, 'javascript'), e('button', null, 'Copy')), e('pre', null, e('code', null, content)));
         if (tag === 'table') return e('div', null, e('table', null, e('tbody', null, content.map((r, i) => e('tr', { key: i }, r.map((c, j) => e(i ? 'td' : 'th', { key: j }, c)))))));
         if (tag === 'blockquote') return e('blockquote', null, e('p', null, content));
+        if (tag === 'tools') return e('div', { className: 'tool-row' }, content + ' ', e('span', { className: 'glyph chev' }, '9'));
+        if (tag === 'artifact')
+          return e(
+            'div',
+            { className: 'artifact-card' },
+            e('span', { className: 'glyph doc' }, '\uE10A'),
+            e('div', null, e('div', { className: 'artifact-title' }, content), e('div', { className: 'artifact-meta' }, 'Artifact · ', e('span', { className: 'glyph lock' }, '\uE0F2'), ' Only you ', e('span', { className: 'emo' }, '📚')))
+          );
+        if (tag === 'pre-dark') return e('div', { className: 'code-wrap' }, e('div', { className: 'code-head' }, e('span', null, 'text')), e('pre', null, e('code', { style: { color: 'rgb(171, 178, 191)' } }, content)));
+        if (tag === 'p-faint') return e('p', null, e('span', { className: 'faint', style: { color: '#ece6d6' } }, content));
         return e(tag, null, e(Inline, { text: content }));
       }
 

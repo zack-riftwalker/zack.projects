@@ -45,7 +45,8 @@
     A.markColumn(messages, s);
     let waiting = false;
     if (s.enabled) waiting = AN.sync(messages, isStable, forceAll);
-    CSR.themeFix.sync(messages, todo, isStable);
+    if (A.markGlyphs(messages, todo, isStable)) waiting = true;
+    if (CSR.themeFix.sync(messages, todo, isStable)) waiting = true;
     CSR.focus.refresh(forceAll || todo.length > 0);
     if (forceAll || todo.length) CSR.toc.refresh();
     dirty.clear();
@@ -113,6 +114,8 @@
       scheduleSync(true, 0);
     } else if (prev.rtlMode !== s.rtlMode || prev.contentWidth !== s.contentWidth) {
       scheduleSync(true, 0);
+    } else {
+      scheduleSync(false, 60); // e.g. another theme: text contrast is measured again
     }
   });
 

@@ -138,6 +138,12 @@ ok(dirs.some(([t, d, s]) => s.startsWith('In English') && d === 'ltr'), 'English
 ok(dirs.some(([t, d]) => t === 'UL' && d === 'rtl'), 'Persian list is RTL (bullets on the right)');
 const preDir = await page.evaluate(() => getComputedStyle(document.querySelector('.font-claude-response pre')).direction);
 ok(preDir === 'ltr', 'code block stays LTR');
+const prose = await page.evaluate(() => {
+  const c = document.querySelector('.code-wrap code');
+  return { dir: getComputedStyle(c).direction, font: getComputedStyle(c).fontFamily };
+});
+ok(prose.dir === 'rtl', 'Persian prose inside a code block reads right to left');
+ok(prose.font.startsWith('"CSR Fa vazirmatn"') && prose.font.includes('monospace'), 'its Persian letters use the Persian font, the rest stays monospace: ' + prose.font);
 const mirrored = await page.evaluate(() => {
   const p = [...document.querySelectorAll('.standard-markdown > p')].find((x) => x.dir === 'rtl');
   const cs = getComputedStyle(p);
@@ -156,6 +162,13 @@ const fontOk = await page.evaluate(() => {
 ok(fontOk, 'Vazirmatn renders despite strict font-src CSP');
 const family = await page.evaluate(() => getComputedStyle(document.querySelector('.standard-markdown p')).fontFamily);
 ok(family.includes('CSR Fa vazirmatn'), 'message paragraphs use the Persian font stack');
+const glyphs = await page.evaluate(() => [...document.querySelectorAll('.glyph')].map((g) => getComputedStyle(g).fontFamily));
+ok(glyphs.length === 3 && glyphs.every((f) => f.startsWith('"Anthropic Glyphs"')), "Claude's icon-font glyphs keep their font (no empty boxes): " + glyphs.join(' | '));
+ok(
+  await page.evaluate(() => ['.artifact-title', '.artifact-meta', '.tool-row'].every((s) => getComputedStyle(document.querySelector(s)).fontFamily.includes('CSR Fa vazirmatn'))),
+  'text next to the icons still uses the chosen font'
+);
+ok(await page.evaluate(() => document.querySelector('.emo').hasAttribute('data-csr-keepfont')), 'an emoji on its own keeps its font');
 await shot('01-rtl-font');
 
 // ---------------------------------------------------------------------------
@@ -457,6 +470,33 @@ const themed = await page.evaluate(() => ({
 ok(themed.mode === 'dark', 'dark theme switches Claude to dark mode');
 ok(themed.bg === 'rgb(31, 26, 20)', 'theme background applied (' + themed.bg + ')');
 ok(themed.size === '19px', 'font size applied (' + themed.size + ')');
+/** WCAG contrast of an element's text against what is really behind it. */
+const contrastOf = (sel) =>
+  page.evaluate((sel) => {
+    const parse = (c) => {
+      const m = c.match(/[\d.]+/g).map(Number);
+      return { r: m[0], g: m[1], b: m[2], a: m[3] === undefined ? 1 : m[3] };
+    };
+    const L = ({ r, g, b }) => {
+      const f = (c) => ((c /= 255) <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    const el = document.querySelector(sel);
+    const layers = [];
+    for (let e = el; e; e = e.parentElement) {
+      const c = parse(getComputedStyle(e).backgroundColor);
+      if (c.a > 0) {
+        layers.push(c);
+        if (c.a >= 1) break;
+      }
+    }
+    let bg = { r: 255, g: 255, b: 255 };
+    for (const c of layers.reverse()) bg = { r: c.r * c.a + bg.r * (1 - c.a), g: c.g * c.a + bg.g * (1 - c.a), b: c.b * c.a + bg.b * (1 - c.a) };
+    const a = L(parse(getComputedStyle(el).color));
+    const b = L(bg);
+    return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 10) / 10;
+  }, sel);
+ok((await contrastOf('.code-wrap code')) >= 4.5, 'dark theme: code block text readable (' + (await contrastOf('.code-wrap code')) + ':1)');
 await page.locator('.standard-markdown h2').first().scrollIntoViewIfNeeded();
 await shot('09-dark-theme');
 
@@ -469,6 +509,23 @@ await popup.locator('.tab[data-tab="theme"]').click();
 await popup.locator('.theme', { hasText: 'کاغذی' }).click();
 await popup.waitForTimeout(500);
 ok(await page.evaluate(() => document.documentElement.getAttribute('data-mode') === 'light'), 'light theme restores light mode');
+await page.waitForTimeout(400);
+for (const name of ['کاغذی', 'سپیا']) {
+  if (name !== 'کاغذی') {
+    await popup.locator('.theme', { hasText: name }).click();
+    await page.waitForTimeout(900);
+  }
+  const code = await contrastOf('.code-wrap code');
+  const faint = await contrastOf('.faint');
+  ok(code >= 4.5, `${name}: code block with fixed light-gray text is readable (${code}:1)`);
+  ok(faint >= 4.5, `${name}: text with a fixed light color is readable (${faint}:1)`);
+  ok((await contrastOf('.standard-markdown p')) >= 7, `${name}: normal text untouched and dark`);
+  ok((await page.locator('[data-csr-paint^="code"]').count()) === 1, `${name}: only the unreadable code block was repainted`);
+}
+await page.locator('.code-wrap').scrollIntoViewIfNeeded();
+await shot('10-sepia-code-block');
+await popup.locator('.theme', { hasText: 'کاغذی' }).click();
+await page.waitForTimeout(500);
 
 // pomodoro pop-up: simulate the moment the worker ends a focus phase
 await popup.evaluate(async () => {

@@ -9,8 +9,12 @@ html[data-csr-font] :is(.font-claude-response, .font-claude-message, [data-csr-m
 html[data-csr-font][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) {
   font-family: var(--csr-font-user) !important;
 }
-html[data-csr-font] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) :not(pre, code, kbd, samp, pre *, code *, .katex, .katex *, svg, svg *, [data-csr-ui], [data-csr-ui] *),
-html[data-csr-font][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) :not(pre, code, kbd, samp, pre *, code *, svg, svg *) {
+/* Icons must keep Claude's own font: some of them (artifact cards, tool rows,
+ * the lock of "Only you"…) are glyphs of an icon font and turn into empty
+ * boxes in any other font. [data-csr-keepfont] is set by appearance.js on
+ * elements found to use an icon font or to hold only symbols. */
+html[data-csr-font] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) :not(pre, code, kbd, samp, pre *, code *, .katex, .katex *, svg, svg *, [data-csr-ui], [data-csr-ui] *, button, button *, [role="button"], [role="button"] *, [data-csr-keepfont], [data-csr-keepfont] *, [class*="icon" i], [class*="icon" i] *, [data-icon], span[aria-hidden="true"], i[aria-hidden="true"]),
+html[data-csr-font][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) :not(pre, code, kbd, samp, pre *, code *, svg, svg *, button, button *, [role="button"], [role="button"] *, [data-csr-keepfont], [data-csr-keepfont] *, [class*="icon" i], [class*="icon" i] *, [data-icon], span[aria-hidden="true"], i[aria-hidden="true"]) {
   font-family: inherit !important;
 }
 
@@ -18,7 +22,7 @@ html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-m
 html[data-csr-size][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) {
   font-size: var(--csr-size) !important;
 }
-html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(p, li, span, a, strong, b, em, i, u, s, del, blockquote, td, th, dd, dt, div):not(pre *, code *, .katex *, [data-csr-ui] *) {
+html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(p, li, span, a, strong, b, em, i, u, s, del, blockquote, td, th, dd, dt, div):not(pre *, code *, .katex *, [data-csr-ui] *, button, button *, [role="button"], [role="button"] *, [data-csr-keepfont], [data-csr-keepfont] *, [class*="icon" i], [class*="icon" i] *, [data-icon]) {
   font-size: inherit !important;
 }
 html[data-csr-size] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"]) h1 { font-size: 1.55em !important; }
@@ -43,7 +47,7 @@ html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-csr
 html[data-csr-weight][data-csr-user] :is([data-testid="user-message"], [data-csr-msg="user"]) {
   font-weight: var(--csr-weight) !important;
 }
-html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(p, li, span, td, blockquote, div, a, em, i, dd, dt) {
+html[data-csr-weight] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(p, li, span, td, blockquote, div, a, em, i, dd, dt):not(button *, [role="button"] *, [data-csr-keepfont], [data-csr-keepfont] *, [class*="icon" i], [class*="icon" i] *, [data-icon]) {
   font-weight: inherit !important;
 }
 
@@ -81,6 +85,19 @@ html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-csr-ms
   direction: ltr;
   text-align: left !important;
   unicode-bidi: isolate;
+}
+/* Persian prose inside a code block (see appearance.js processRtl) */
+html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) pre[data-csr-prose] {
+  direction: rtl;
+  text-align: start !important;
+  unicode-bidi: plaintext; /* each line follows its own language */
+}
+html[data-csr-rtl] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) pre[data-csr-prose] :is(code, kbd, samp) {
+  direction: rtl;
+  unicode-bidi: normal; /* not isolated, so the lines above see the text */
+}
+html[data-csr-font] :is(.font-claude-response, .font-claude-message, [data-csr-msg="assistant"], :is([data-testid="user-message"], [data-csr-msg="user"])) :is(pre[data-csr-prose], pre[data-csr-prose] *) {
+  font-family: var(--csr-font-mono-fa) !important;
 }
 html[data-csr-rtl] .katex-display {
   direction: ltr;
@@ -398,4 +415,26 @@ html[data-csr-theme] [data-csr-paint="surface"] {
   background-color: var(--csr-t-surface) !important;
   color: var(--csr-t-text) !important;
   border-color: var(--csr-t-border) !important;
+}
+
+/* text that measured unreadable on the theme (theme.js, fixContrast) */
+html[data-csr-theme] [data-csr-paint="code-dark"] {
+  background-color: var(--csr-t-code-dark) !important;
+  color: #e4e4e4 !important;
+}
+html[data-csr-theme] [data-csr-paint="code-light"] {
+  background-color: var(--csr-t-code-light) !important;
+  color: #1d1d1d !important;
+}
+html[data-csr-theme] [data-csr-paint^="code"] :not(.csr-m) {
+  background-color: transparent !important;
+}
+html[data-csr-theme] [data-csr-ink="text"] {
+  color: var(--csr-t-text) !important;
+}
+html[data-csr-theme] [data-csr-ink="dark"] {
+  color: #161616 !important;
+}
+html[data-csr-theme] [data-csr-ink="light"] {
+  color: #f2f2f2 !important;
 }

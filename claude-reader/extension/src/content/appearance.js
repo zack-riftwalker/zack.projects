@@ -68,6 +68,8 @@
     faceRules.set(family, rule);
   }
 
+  const LATIN_RANGE = 'U+0000-024F, U+0300-036F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF';
+
   /** Returns {first, after}: families to put before and after the Latin font. */
   function persianStack(s) {
     const f = CSR.PERSIAN_FONTS.find((x) => x.id === s.persianFont) || CSR.PERSIAN_FONTS[0];
@@ -81,7 +83,11 @@
     if (!name) return { first: '', after: '' };
     const fam = 'CSR Fa local ' + name;
     registerLocal(name, fam, CSR.ARABIC_RANGE);
-    return { first: q(fam), after: q(name) };
+    // its Latin letters too, but never its emoji/symbol slots: some older
+    // Persian fonts draw boxes there instead of leaving them to the emoji font
+    const latin = 'CSR Fa latin ' + name;
+    registerLocal(name, latin, LATIN_RANGE);
+    return { first: q(fam), after: q(latin) };
   }
 
   function latinStack(s) {
@@ -97,6 +103,13 @@
     return name ? q(name) : '';
   }
 
+  /** Persian font for the Persian letters of code blocks; the rest stays monospace. */
+  function monoStack(s) {
+    const fa = persianStack(s).first;
+    const safety = s.persianFont === 'default' ? '' : q('CSR Fa vazirmatn');
+    return [...new Set([fa, safety].filter(Boolean)), 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'].join(', ');
+  }
+
   function fontStack(s, claudeVar, generic) {
     const fa = persianStack(s);
     const la = latinStack(s);
@@ -106,6 +119,79 @@
     if (safety) registerBundled('vazirmatn', 'CSR Fa vazirmatn', CSR.ARABIC_RANGE);
     return [fa.first, la, fa.after, safety, `var(${claudeVar}, ${generic})`].filter(Boolean).join(', ');
   }
+
+  // ---------------------------------------------------------------------------
+  // Icon glyphs. Claude draws some icons (artifact cards, tool rows, the lock
+  // of "Only you"…) as characters of an icon font. Those elements are marked
+  // with data-csr-keepfont so the font override in page.css leaves them alone.
+
+  const PUA = /[\uE000-\uF8FF]|[\uDB80-\uDBFF][\uDC00-\uDFFF]/;
+  const WORDY = /[\p{L}\p{N}\u0600-\u06FF]/u;
+  const ICON_FONT = /icon|symbol|glyph|awesome|material|phosphor|lucide|fontello|tabler|remix|feather|emoji/i;
+  const NO_GLYPH = 'pre, code, kbd, samp, .katex, svg, [data-csr-ui], [data-csr-wrap], [data-csr-keepfont]';
+  const ARABIC = /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+  const glyphScanned = new WeakSet();
+
+  const firstFamily = (ff) => ff.split(',')[0].trim().replace(/["']/g, '').toLowerCase();
+
+  /** Marks symbol-only elements; returns short one-word elements to check by font. */
+  function scanGlyphs(msg) {
+    const out = [];
+    const done = new Set();
+    const w = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      const el = n.parentElement;
+      const own = n.nodeValue.trim();
+      if (!el || !own || el.closest(NO_GLYPH)) continue;
+      const t = el.textContent.trim();
+      // an icon-font character (maybe in the same text as its label)
+      if (PUA.test(own)) {
+        if (t.length <= 80) el.setAttribute('data-csr-keepfont', '');
+        continue;
+      }
+      if (done.has(el)) continue;
+      done.add(el);
+      // the whole element must be short, not just this text
+      if (t.length > 40 || /\s/.test(t)) continue;
+      if (!WORDY.test(t)) el.setAttribute('data-csr-keepfont', ''); // symbols / emoji only
+      else if (!ARABIC.test(t)) out.push({ msg, el, t });
+    }
+    return out;
+  }
+
+  /** Called from the sync loop. Returns true if a message still needs a look
+   * once it stops changing. */
+  A.markGlyphs = function (messages, changed, isStable) {
+    if (!CSR.settings.enabled) return false;
+    let pending = false;
+    const cands = [];
+    for (const m of messages) {
+      if (glyphScanned.has(m) && !changed.includes(m)) continue;
+      if (!isStable(m)) {
+        glyphScanned.delete(m); // look again once it settles
+        pending = true;
+        continue;
+      }
+      glyphScanned.add(m);
+      cands.push(...scanGlyphs(m));
+    }
+    if (!cands.length) return pending;
+    // read Claude's own fonts, with ours switched off for a moment
+    const html = document.documentElement;
+    const had = html.hasAttribute('data-csr-font');
+    if (had) html.removeAttribute('data-csr-font');
+    try {
+      const base = new Map();
+      for (const { msg, el, t } of cands) {
+        if (!base.has(msg)) base.set(msg, firstFamily(getComputedStyle(msg).fontFamily));
+        const fam = firstFamily(getComputedStyle(el).fontFamily);
+        if (ICON_FONT.test(fam) || (fam !== base.get(msg) && t.length <= 2)) el.setAttribute('data-csr-keepfont', '');
+      }
+    } finally {
+      if (had) html.setAttribute('data-csr-font', '');
+    }
+    return pending;
+  };
 
   // ---------------------------------------------------------------------------
   // Theme
@@ -150,7 +236,7 @@
     return `
 ${target} { ${claudeVars(t)}
   --csr-t-bg: ${t.bg}; --csr-t-text: ${t.text}; --csr-t-heading: ${t.heading || t.text};
-  --csr-t-link: ${t.link || t.text}; --csr-t-accent: ${t.accent || t.link || t.text}; ${CSR.themeFix.baseVars(t)} }
+  --csr-t-link: ${t.link || t.text}; --csr-t-accent: ${t.accent || t.link || t.text}; ${CSR.themeFix.baseVars(t)} ${CSR.themeFix.codeVars(t)} }
 ${CSR.themeFix.varCss(t)}
 html[data-csr-theme], html[data-csr-theme] body { background-color: ${t.bg} !important; color-scheme: ${t.dark ? 'dark' : 'light'}; }
 html[data-csr-theme] :is(${MSG}, ${USER}) { color: var(--csr-t-text) !important; }
@@ -185,7 +271,8 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
     setAttr(html, 'data-csr-user', on && s.applyToUser);
     if (fontOn) {
       css.push(`:root { --csr-font-assistant: ${fontStack(s, '--font-claude-response', 'serif')};
-        --csr-font-user: ${fontStack(s, '--font-user-message', 'sans-serif')}; }`);
+        --csr-font-user: ${fontStack(s, '--font-user-message', 'sans-serif')};
+        --csr-font-mono-fa: ${monoStack(s)}; }`);
     }
 
     setAttr(html, 'data-csr-size', on && s.fontSize > 0);
@@ -248,6 +335,13 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
   /** Word-based direction guess: a Persian paragraph that contains several
    * English terms is still RTL; an English paragraph with one Persian word is LTR. */
   A.detectDir = function (text) {
+    const share = rtlShare(text);
+    if (share === null) return null;
+    return share >= 0.3 ? 'rtl' : 'ltr';
+  };
+
+  /** Share of right-to-left words, or null when there are no words. */
+  function rtlShare(text) {
     let rtl = 0;
     let ltr = 0;
     const words = text.slice(0, 3000).split(/\s+/);
@@ -255,11 +349,8 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
       if (RTL_CHAR.test(w)) rtl++;
       else if (LTR_CHAR.test(w)) ltr++;
     }
-    if (!rtl && !ltr) return null;
-    if (!rtl) return 'ltr';
-    if (!ltr) return 'rtl';
-    return rtl / (rtl + ltr) >= 0.3 ? 'rtl' : 'ltr';
-  };
+    return rtl + ltr ? rtl / (rtl + ltr) : null;
+  }
 
   const NO_DIR_TEXT = 'pre, code, kbd, samp, .katex, math, [data-csr-ui], button, svg';
 
@@ -352,11 +443,19 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
       const dir = mode === 'force' ? 'rtl' : A.detectDir(proseText(el));
       if (dir) setDir(el, dir);
     }
+    // Persian prose that Claude put in a code block reads right to left; real
+    // code (even with Persian comments) stays left to right
+    for (const pre of msg.querySelectorAll('pre')) {
+      if (pre.closest(SEL.ui)) continue;
+      const prose = (rtlShare(pre.textContent) || 0) >= 0.6;
+      if (prose !== pre.hasAttribute('data-csr-prose')) pre.toggleAttribute('data-csr-prose', prose);
+    }
   };
 
   A.clearRtl = function (root) {
     const scope = root || document;
     if (root && root.hasAttribute('data-csr-dir')) clearDir(root);
     scope.querySelectorAll('[data-csr-dir]').forEach(clearDir);
+    scope.querySelectorAll('[data-csr-prose]').forEach((e) => e.removeAttribute('data-csr-prose'));
   };
 })();

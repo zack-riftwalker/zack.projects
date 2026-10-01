@@ -6,7 +6,9 @@
  *    them in the same format they use (hex, rgb(), "H S% L%" channels, oklch…).
  * 2. Fallback that needs no variables at all: repaints the reading area
  *    (the containers around the messages, user bubbles, cards inside answers).
- * 3. Switches Claude's own light/dark mode, whichever mechanism it uses. */
+ * 3. Fixes text that still ends up unreadable (e.g. code blocks colored for
+ *    Claude's dark mode, on a light theme) by measuring the real contrast.
+ * 4. Switches Claude's own light/dark mode, whichever mechanism it uses. */
 (function () {
   const CSR = globalThis.CSR;
   const dom = CSR.dom;
@@ -167,7 +169,7 @@
         const c = Math.abs(d);
         if (c < 0.25) continue; // text meant for colored buttons
         const strong = v.name.match(/heading|title|000/i) ? t.heading || t.text : t.text;
-        hex = C.mix(strong, t.bg, clamp(1 - c / cmax, 0, 0.55));
+        hex = C.mix(strong, t.bg, clamp(1 - c / cmax, 0, 0.45));
       } else {
         hex = C.mix(t.bg, t.text, 0.18);
       }
@@ -181,7 +183,7 @@
   // 2. repaint the reading area
 
   const SURFACE_SEL = 'div, section, aside, details, summary, figure, table, thead, tbody, tr, th, td, blockquote, header, footer';
-  const scanned = new WeakSet();
+  let scanned = new WeakSet();
 
   let checked = new WeakSet();
 
@@ -218,22 +220,38 @@
     }
   }
 
-  /** Called from the sync loop while a theme is active. */
+  /** Called from the sync loop while a theme is active. Returns true if a
+   * message still needs a look once it stops changing. */
   TF.sync = function (messages, changed, isStable) {
     const t = CSR.settings.enabled ? CSR.resolveTheme(CSR.settings) : null;
-    if (!t || !messages.length) return;
+    if (!t) inkKey = ''; // when a theme comes back, everything is measured again
+    if (!t || !messages.length) return false;
     if (!vars) {
       discover(messages);
       CSR.appearance.apply(CSR.settings); // now with the discovered variables
     }
     syncInner(t.dark ? 'dark' : 'light');
     paintChain(messages);
-    for (const m of messages) {
-      if ((changed.includes(m) || !scanned.has(m)) && isStable(m)) {
-        scanned.add(m);
-        paintInside(m);
-      }
+    const key = JSON.stringify(t);
+    if (key !== inkKey) {
+      // another theme: every contrast decision has to be made again
+      inkKey = key;
+      clearInk(document);
+      scanned = new WeakSet();
     }
+    let pending = false;
+    for (const m of messages) {
+      if (scanned.has(m) && !changed.includes(m)) continue;
+      if (!isStable(m)) {
+        scanned.delete(m); // look again once it settles
+        pending = true;
+        continue;
+      }
+      scanned.add(m);
+      paintInside(m);
+      fixContrast(m, t);
+    }
+    return pending;
   };
 
   TF.reset = function () {
@@ -249,7 +267,134 @@
   };
 
   // ---------------------------------------------------------------------------
-  // 3. Claude's own light/dark mode
+  // 3. readable text. Some colors are hard-coded (code blocks highlighted for
+  //    Claude's dark mode, colored labels…) and can land on our background
+  //    with almost no contrast. Measure what is really on screen and fix that.
+
+  let inkKey = '';
+  const rgbCache = new Map();
+  function rgbOf(css) {
+    let c = rgbCache.get(css);
+    if (c === undefined) {
+      const m = css.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)$/);
+      c = m ? { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : m[5] ? m[4] / 100 : +m[4] } : toRgb(css);
+      if (rgbCache.size > 500) rgbCache.clear();
+      rgbCache.set(css, c);
+    }
+    return c;
+  }
+
+  const over = (top, under) => ({
+    r: top.r * top.a + under.r * (1 - top.a),
+    g: top.g * top.a + under.g * (1 - top.a),
+    b: top.b * top.a + under.b * (1 - top.a),
+    a: 1,
+  });
+  const ratio = (x, y) => {
+    const a = lum(x);
+    const b = lum(y);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  };
+
+  /** The solid color behind an element's text (its own background composed
+   * over its ancestors'), or null when a gradient/image makes it unknown. */
+  function backdrop(el, memo) {
+    if (memo.has(el)) return memo.get(el);
+    let res;
+    const cs = getComputedStyle(el);
+    const c = rgbOf(cs.backgroundColor);
+    const parent = el.parentElement;
+    if (cs.backgroundImage !== 'none' && !(c && c.a > 0.95)) res = null;
+    else if (!parent) res = c && c.a > 0.5 ? { ...c, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
+    else if (c && c.a > 0.95) res = { ...c, a: 1 };
+    else {
+      const under = backdrop(parent, memo);
+      res = under && c && c.a > 0.02 ? over(c, under) : under;
+    }
+    memo.set(el, res);
+    return res;
+  }
+
+  const LOW_TEXT = 2; // below this, text is hard to read
+  const LOW_CODE = 2.2;
+  const SKIP_INK = 'svg, [data-csr-ui], .katex-mathml';
+
+  /** Elements holding visible text inside `root`, with their text length. */
+  function textHolders(root) {
+    const out = new Map();
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let budget = 3000;
+    for (let n = w.nextNode(); n && budget > 0; n = w.nextNode()) {
+      const len = n.nodeValue.trim().length;
+      if (!len) continue;
+      let el = n.parentElement;
+      while (el && el.hasAttribute('data-csr-wrap') && el !== root) el = el.parentElement; // our highlight spans
+      if (!el || el.closest(SKIP_INK)) continue;
+      budget--;
+      out.set(el, (out.get(el) || 0) + len);
+    }
+    return out;
+  }
+
+  /** {fg, bg} as seen on screen, or null for text that isn't drawn normally. */
+  function colorsOf(el, memo) {
+    const cs = getComputedStyle(el);
+    if (cs.visibility !== 'visible') return null;
+    const fg = rgbOf(cs.color);
+    if (!fg || fg.a < 0.15) return null; // transparent text (gradient "shimmer" labels…)
+    if (cs.webkitTextFillColor && cs.webkitTextFillColor !== cs.color) return null;
+    const bg = backdrop(el, memo);
+    if (!bg) return null;
+    return { fg: fg.a < 1 ? over(fg, bg) : fg, bg };
+  }
+
+  function clearInk(root) {
+    root.querySelectorAll('[data-csr-ink]').forEach((e) => e.removeAttribute('data-csr-ink'));
+    root.querySelectorAll('[data-csr-paint^="code"]').forEach((e) => e.removeAttribute('data-csr-paint'));
+  }
+
+  function fixContrast(msg, t) {
+    clearInk(msg);
+    // 1. code blocks whose text mostly can't be read: give them a background
+    //    that suits their colors (keeps the syntax highlighting)
+    let memo = new Map();
+    for (const pre of msg.querySelectorAll('pre')) {
+      if (pre.closest('[data-csr-ui]')) continue;
+      let total = 0;
+      let low = 0;
+      let light = 0;
+      for (const [el, len] of textHolders(pre)) {
+        const c = colorsOf(el, memo);
+        if (!c) continue;
+        total += len;
+        if (ratio(c.fg, c.bg) < LOW_CODE) {
+          low += len;
+          if (lum(c.fg) > 0.35) light += len;
+        }
+      }
+      if (total && low / total > 0.4) pre.setAttribute('data-csr-paint', light * 2 >= low ? 'code-dark' : 'code-light');
+    }
+    // 2. any text left that is still hard to read gets a readable color
+    memo = new Map();
+    const themeText = C.hexToRgb(t.text);
+    for (const [el] of textHolders(msg)) {
+      const c = colorsOf(el, memo);
+      if (!c || ratio(c.fg, c.bg) >= LOW_TEXT) continue;
+      let ink = 'text';
+      if (ratio(themeText, c.bg) < 3) ink = ratio({ r: 20, g: 20, b: 20 }, c.bg) >= ratio({ r: 242, g: 242, b: 242 }, c.bg) ? 'dark' : 'light';
+      el.setAttribute('data-csr-ink', ink);
+    }
+  }
+
+  /** Colors for the code-block repaint. */
+  TF.codeVars = function (t) {
+    const dark = t.dark ? C.mix(t.bg, '#000000', 0.45) : C.mix('#25272c', t.text, 0.12);
+    const light = t.dark ? C.mix(t.text, '#ffffff', 0.55) : C.mix(t.bg, '#ffffff', 0.55);
+    return `--csr-t-code-dark: ${dark}; --csr-t-code-light: ${light};`;
+  };
+
+  // ---------------------------------------------------------------------------
+  // 4. Claude's own light/dark mode
 
   let flips = 0;
   let flipWindow = 0;
