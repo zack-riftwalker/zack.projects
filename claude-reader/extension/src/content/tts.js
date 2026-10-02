@@ -144,7 +144,7 @@
       if (window.CSS && CSS.highlights) CSS.highlights.delete('csr-tts');
       return;
     }
-    item.block.setAttribute('data-csr-tts-block', '');
+    if (!dom.isProtected(item.block)) item.block.setAttribute('data-csr-tts-block', '');
     const r = rangeOf(item);
     if (r && window.CSS && CSS.highlights && window.Highlight) CSS.highlights.set('csr-tts', new Highlight(r));
     const rect = (r || item.block).getBoundingClientRect();

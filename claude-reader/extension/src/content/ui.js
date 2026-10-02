@@ -1282,6 +1282,10 @@
         if (m && !t.closest('a')) {
           const a = AN.get(m.getAttribute('data-csr-id'));
           if (a) openMarkPopover(a, m.getBoundingClientRect(), false);
+        } else if (!m && dom.isProtected(t) && !(t.closest && t.closest('a'))) {
+          // painted marks (Notion) have no element: find the one under the click
+          const id = AN.paintedAt(e.clientX, e.clientY);
+          if (id) openMarkPopover(AN.get(id), AN.rectOf(id), false);
         }
       },
       true

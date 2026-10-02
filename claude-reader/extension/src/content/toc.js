@@ -244,6 +244,16 @@
   }
 
   function flash(el) {
+    if (dom.isProtected(el)) {
+      // the page's editor owns it: flash a painted highlight instead
+      if (window.CSS && CSS.highlights && window.Highlight) {
+        const r = document.createRange();
+        r.selectNodeContents(el);
+        CSS.highlights.set('csr-flash', new Highlight(r));
+        setTimeout(() => CSS.highlights.delete('csr-flash'), 1500);
+      }
+      return;
+    }
     el.classList.add('csr-toc-flash');
     setTimeout(() => el.classList.remove('csr-toc-flash'), 1500);
   }

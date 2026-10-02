@@ -116,6 +116,17 @@
     return Array.from(document.querySelectorAll('div.ProseMirror, ' + SEL.editor)).find((e) => !e.closest(SEL.ui) && !e.closest('[data-csr-msg]')) || null;
   };
 
+  /** Text whose DOM belongs to the page's own editor and must not be
+   * touched (Notion's text blocks undo any outside change): marks are
+   * painted over it instead, and nothing gets attributes inside it. */
+  dom.PROTECTED = NOTION ? '[data-content-editable-root]' : '';
+  dom.isProtected = (node) => {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return !!(dom.PROTECTED && el && el.closest(dom.PROTECTED));
+  };
+  /** `el`, or the protected container around it (to insert things next to). */
+  dom.outsideProtected = (el) => (dom.PROTECTED && el.closest(dom.PROTECTED)) || el;
+
   /** 1–4 for a heading block (an <h1>–<h4>, or a block wrapping one), else 0. */
   dom.headingLevel = function (el) {
     let m = /^H([1-6])$/.exec(el.tagName);

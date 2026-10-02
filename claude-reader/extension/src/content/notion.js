@@ -176,8 +176,9 @@
   }
 
   /** A question bubble: on a line of its own (its parent adds no text),
-   * tinted or outlined, rounded, clearly narrower than the list and closer
-   * to its end (right) side. Not a button, not a Notion block. */
+   * tinted or outlined, rounded, hugging the end (right) side of the text
+   * column `L` and clearly indented from its start. Not a button, not a
+   * Notion block. */
   function isBubble(e, L, row) {
     if (e.closest(BUTTON)) return false;
     if (e.closest('[data-block-id]') || e.querySelector('[data-block-id]')) return false;
@@ -185,8 +186,10 @@
     if (own <= 0) return false;
     if (e !== row && e.parentElement && ownText(e.parentElement) - own > 2) return false; // inline in a paragraph
     const r = e.getBoundingClientRect();
-    if (r.width < 10 || r.width > L.width * 0.88) return false;
-    if (L.right - r.right > r.left - L.left) return false;
+    if (r.width < 10) return false;
+    const startGap = r.left - L.left;
+    const endGap = L.right - r.right;
+    if (startGap < Math.max(24, L.width * 0.05) || endGap > startGap) return false;
     const cs = getComputedStyle(e);
     if (parseFloat(cs.borderTopLeftRadius) < 4 && parseFloat(cs.borderBottomLeftRadius) < 4) return false;
     return alphaOf(cs.backgroundColor) > 0.03 || parseFloat(cs.borderTopWidth) > 0;
@@ -204,7 +207,7 @@
 
   const BLOCKISH = '[data-block-id], p, li, h1, h2, h3, h4, pre, table';
   /** A few characters beside a question (a time, "Edited") or only buttons. */
-  const isMeta = (el) => ownText(el) <= 0 || (ownText(el) <= 20 && !el.querySelector(BLOCKISH));
+  const isMeta = (el) => ownText(el) <= 0 || (ownText(el) <= 30 && !el.querySelector(BLOCKISH));
   const onlyMeta = (parent, except) => Array.from(parent.children).every((c) => c === except || isMeta(c));
 
   const roles = new WeakMap(); // row -> {sig, list: [{el, role}]}
@@ -236,8 +239,11 @@
     const out = [];
     if (c) {
       const L = c.list.getBoundingClientRect();
-      for (const row of rowsOf(c, L)) {
-        const parts = split(row, L);
+      const rows = rowsOf(c, L);
+      // the text column: the rows' extent (the scrolling list may be much wider)
+      const U = columnOf(rows) || L;
+      for (const row of rows) {
+        const parts = split(row, U);
         // a chat starts with a question: short rows before it are labels ("Today")
         if (!out.length && parts.every((m) => m.role === 'assistant') && ownText(row) <= 40) continue;
         for (const m of parts) out.push(m);
@@ -258,6 +264,18 @@
   };
 
   dom.composer = () => (N.chat ? N.chat.input : null);
+
+  function columnOf(rows) {
+    let left = Infinity;
+    let right = -Infinity;
+    for (const r of rows) {
+      const b = r.getBoundingClientRect();
+      if (!b.width) continue;
+      left = Math.min(left, b.left);
+      right = Math.max(right, b.right);
+    }
+    return right > left ? { left, right, width: right - left } : null;
+  }
 
   // Same idea for "is the user typing here?": text inside a chat message
   // counts as text to read; the chat box, pages and everything else as typing.
@@ -287,7 +305,7 @@
    * first question asked in it (Notion's chat panel keeps the page address). */
   dom.getConversationId = function () {
     for (const [k, v] of new URLSearchParams(location.search)) {
-      if (/^(t|thread|thread_?id|chat|chat_?id|conversation)$/i.test(k) && /^[0-9a-f-]{16,}$/i.test(v)) return 'notion-' + v.replace(/-/g, '').toLowerCase();
+      if (/^(t|thread|thread_?id|chat|chat_?id|conversation)$/i.test(k) && /^[\w-]{8,}$/.test(v)) return 'notion-' + v.replace(/-/g, '').toLowerCase();
     }
     return N.firstUser ? 'notion-' + hash(N.firstUser) : null;
   };
@@ -327,6 +345,7 @@
       if (attrs.size > 60) break;
     }
     const rows = rowsOf(c, L);
+    const U = columnOf(rows) || L;
     // what in the first rows looks a bit like a bubble (tinted / rounded)
     const looks = [];
     for (const row of rows.slice(0, 4)) {
@@ -337,7 +356,7 @@
         const cs = getComputedStyle(e);
         const r = e.getBoundingClientRect();
         if (alphaOf(cs.backgroundColor) > 0.03 || parseFloat(cs.borderTopLeftRadius) >= 4) {
-          found.push(`d${d} ${e.tagName.toLowerCase()} w${Math.round((r.width / L.width) * 100)}% gapL${Math.round(r.left - L.left)} gapR${Math.round(L.right - r.right)} r${parseFloat(cs.borderTopLeftRadius)} a${alphaOf(cs.backgroundColor).toFixed(2)} own${ownText(e)}/${e.parentElement ? ownText(e.parentElement) : 0}${e.closest('[data-block-id]') ? ' inBlock' : ''}${isBubble(e, L, row) ? ' BUBBLE' : ''}`);
+          found.push(`d${d} ${e.tagName.toLowerCase()} w${Math.round((r.width / U.width) * 100)}% gapL${Math.round(r.left - U.left)} gapR${Math.round(U.right - r.right)} r${parseFloat(cs.borderTopLeftRadius)} a${alphaOf(cs.backgroundColor).toFixed(2)} own${ownText(e)}/${e.parentElement ? ownText(e.parentElement) : 0}${e.closest('[data-block-id]') ? ' inBlock' : ''}${isBubble(e, U, row) ? ' BUBBLE' : ''}`);
         }
         if (d < 12) for (const k of e.children) if (textLen(k)) queue.push([k, d + 1]);
       }
@@ -352,7 +371,7 @@
       path,
       attrs: [...attrs].slice(0, 60),
       blocks: c.list.querySelectorAll('[data-block-id]').length,
-      rows: rows.slice(0, 12).map((r) => desc(r) + ' → ' + split(r, L).map((m) => m.role[0]).join('')),
+      rows: rows.slice(0, 12).map((r) => desc(r) + ' → ' + split(r, U).map((m) => m.role[0]).join('')),
       bubbles: looks,
     };
   };

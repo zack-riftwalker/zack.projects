@@ -69,6 +69,28 @@
 - حافظه‌ی هر چت جداست. اگر آدرس صفحه شناسه‌ی چت را داشته باشد با همان ذخیره می‌شود، وگرنه با اولین سؤالی که در آن چت پرسیده‌ای. در کتابخانه با نام «Notion AI: …» دیده می‌شود.
 - تم فقط پنل چت را رنگ می‌کند و حالت روشن/تیره‌ی خود Notion عوض نمی‌شود.
 - نوار ابزار روی Notion اول به شکل دایره‌ی کوچک سمت چپ است تا روی پنل چت نیفتد. روی دایره بزن تا باز شود.
+- متن پاسخ‌های Notion AI با سیستم ویرایش خود Notion ساخته می‌شود؛ افزونه داخل آن هیچ تغییری نمی‌دهد و هایلایت‌ها را **روی** متن نقاشی می‌کند (CSS Custom Highlight API). رنگ‌ها، زیرخط و خط‌خورده دقیق دیده می‌شوند؛ پررنگ با سایه‌ی نازک، کج به‌صورت زیرخط‌چین، کادر به‌صورت خط بالا و پایین و یادداشت با زیرخط نقطه‌چین نارنجی نشان داده می‌شود.
+
+اگر Notion ظاهرش را عوض کرد و چیزی کار نکرد، ساختار چت (بدون نیاز به افزونه) این‌طور گرفته می‌شود: چت را باز کن، F12 ← Console و این را اجرا کن؛ فایل `notion-chat-structure.html` دانلود می‌شود. `dev/notion-dump-to-mock.mjs` آن را به یک صفحه‌ی آزمایشی بی‌نام تبدیل می‌کند (متن‌ها با حروف بی‌معنی عوض می‌شوند).
+
+```js
+(() => {
+  const root = document.querySelector('[data-agent-chat-survey-shortcut-scope]') || document.querySelector('[data-csr-chatroot]') || document.body;
+  const props = ['display', 'position', 'overflow-y', 'background-color', 'border-radius', 'border-top-width', 'direction', 'text-align', 'color', 'font-family', 'user-select'];
+  const clone = root.cloneNode(true);
+  const src = [root, ...root.querySelectorAll('*')];
+  const dst = [clone, ...clone.querySelectorAll('*')];
+  src.forEach((el, i) => {
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    dst[i].setAttribute('data-cs', props.map((p) => p + ':' + cs.getPropertyValue(p)).join(';') + `;box:${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}`);
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([clone.outerHTML], { type: 'text/html' }));
+  a.download = 'notion-chat-structure.html';
+  a.click();
+})();
+```
 
 ### گزارش عیب‌یابی
 

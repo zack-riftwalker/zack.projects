@@ -224,7 +224,7 @@
 
   function paintInside(msg) {
     for (const e of msg.querySelectorAll(SURFACE_SEL)) {
-      if (e.hasAttribute('data-csr-paint') || e.isContentEditable || e.closest('pre, code, .katex, [data-csr-ui]') || e.querySelector('pre')) continue;
+      if (e.hasAttribute('data-csr-paint') || e.isContentEditable || dom.isProtected(e) || e.closest('pre, code, .katex, [data-csr-ui]') || e.querySelector('pre')) continue;
       if (opaqueBg(e)) e.setAttribute('data-csr-paint', 'surface');
     }
   }
@@ -374,7 +374,7 @@
     //    that suits their colors (keeps the syntax highlighting)
     let memo = new Map();
     for (const pre of msg.querySelectorAll('pre')) {
-      if (pre.closest('[data-csr-ui]')) continue;
+      if (pre.closest('[data-csr-ui]') || dom.isProtected(pre)) continue;
       let total = 0;
       let low = 0;
       let light = 0;
@@ -393,6 +393,7 @@
     memo = new Map();
     const themeText = C.hexToRgb(t.text);
     for (const [el] of textHolders(msg)) {
+      if (dom.isProtected(el)) continue; // the page's editor owns it; page.css colors it instead
       const c = colorsOf(el, memo);
       if (!c || ratio(c.fg, c.bg) >= LOW_TEXT) continue;
       let ink = 'text';

@@ -142,7 +142,7 @@
     for (let n = w.nextNode(); n; n = w.nextNode()) {
       const el = n.parentElement;
       const own = n.nodeValue.trim();
-      if (!el || !own || el.closest(NO_GLYPH)) continue;
+      if (!el || !own || el.closest(NO_GLYPH) || CSR.dom.isProtected(el)) continue;
       const t = el.textContent.trim();
       // an icon-font character (maybe in the same text as its label)
       if (PUA.test(own)) {
@@ -237,7 +237,8 @@
     const ROOT = 'html[data-csr-theme] [data-csr-chatroot]';
     const target = scoped ? ROOT : 'html[data-csr-theme], html[data-csr-theme] [data-theme], html[data-csr-theme] [data-mode]';
     const page = scoped
-      ? `${ROOT} { background-color: ${t.bg} !important; color: ${t.text}; color-scheme: ${t.dark ? 'dark' : 'light'}; }`
+      ? `${ROOT} { background-color: ${t.bg} !important; color: ${t.text}; color-scheme: ${t.dark ? 'dark' : 'light'}; }
+${ROOT} [data-csr-msg] :is(${CSR.dom.PROTECTED || '[data-csr-none]'}) :not(a, a *, code, code *, pre, pre *) { color: var(--csr-t-text) !important; }`
       : `html[data-csr-theme], html[data-csr-theme] body { background-color: ${t.bg} !important; color-scheme: ${t.dark ? 'dark' : 'light'}; }`;
     return `
 ${target} { ${scoped ? '' : claudeVars(t)}
@@ -508,6 +509,7 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
     }
     let blocks = Array.from(msg.querySelectorAll(DIR_BLOCKS)).filter((el) => {
       if (el.closest(SEL.ui)) return false;
+      if (CSR.dom.isProtected(el)) return false; // Notion sets the direction of its blocks itself
       if (el.closest('pre')) return false;
       // paragraphs/headings in list items and tables follow their list/table
       if (/^(P|H\d)$/.test(el.tagName)) {
@@ -517,7 +519,7 @@ html[data-csr-theme] :is(${MSG}, ${USER}) blockquote { border-color: var(--csr-t
       return true;
     });
     // plain user messages without any block element
-    if (!blocks.length) blocks = [msg];
+    if (!blocks.length && !msg.querySelector(CSR.dom.PROTECTED || ':not(*)')) blocks = [msg];
     for (const el of blocks) {
       const dir = mode === 'force' ? 'rtl' : A.detectDir(proseText(el));
       if (dir) setDir(el, dir);

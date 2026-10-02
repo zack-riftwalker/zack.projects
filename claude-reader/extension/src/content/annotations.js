@@ -116,6 +116,75 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Painted marks. Where the page's own editor owns the text (Notion), marks
+  // are painted over it with the CSS Custom Highlight API instead of being
+  // wrapped in elements: the page's DOM never changes, so there is nothing
+  // for its editor to undo. (Styles are in page.css, ::highlight(csr-…).)
+
+  const painted = new Map(); // id -> { ranges, keys }
+  let paintTimer = 0;
+
+  function paintKeys(a) {
+    if (a.kind === 'block') return ['csr-p-block-' + (a.style === 'important' ? 'important' : 'quote')];
+    const st = a.style || {};
+    const k = [];
+    if (st.hl) k.push('csr-hl-' + st.hl);
+    if (st.color) k.push('csr-tc-' + st.color);
+    if (st.bold) k.push('csr-p-b');
+    if (st.code) k.push('csr-p-code');
+    const deco = (st.underline ? 'u' : '') + (st.strike ? 's' : '') + (st.box ? 'o' : '') + (st.italic ? 'i' : '');
+    if (deco) k.push('csr-p-' + deco);
+    if (a.note && a.note.trim()) k.push('csr-p-note');
+    return k;
+  }
+
+  function repaint() {
+    clearTimeout(paintTimer);
+    paintTimer = 0;
+    if (!globalThis.CSS || !CSS.highlights || !globalThis.Highlight) return;
+    const groups = new Map();
+    for (const [, p] of painted) {
+      for (const key of p.keys) {
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(...p.ranges);
+      }
+    }
+    for (const key of [...CSS.highlights.keys()]) if (/^csr-(hl|tc|p)-/.test(key) && !groups.has(key)) CSS.highlights.delete(key);
+    for (const [key, ranges] of groups) CSS.highlights.set(key, new Highlight(...ranges));
+  }
+  const repaintSoon = () => paintTimer || (paintTimer = setTimeout(repaint, 0));
+
+  const paintMode = (node) => dom.isProtected(node);
+
+  function paint(a, ranges, extra) {
+    const p = { ranges, keys: paintKeys(a), text: ranges.map((r) => r.toString()).join(''), ...extra };
+    painted.set(a.id, p);
+    placed.set(a.id, p);
+    repaintSoon();
+    return p;
+  }
+
+  /** The painted mark under a point (painted marks have no element to click). */
+  AN.paintedAt = function (x, y) {
+    if (!painted.size) return null;
+    const pos = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+    if (!pos) return null;
+    for (const [id, p] of painted) {
+      if (AN.get(id)?.kind !== 'mark') continue;
+      if (p.ranges.some((r) => r.isPointInRange(pos.startContainer, pos.startOffset) && !(r.endContainer === pos.startContainer && r.endOffset === pos.startOffset))) return id;
+    }
+    return null;
+  };
+
+  /** Where a painted mark is on screen. */
+  AN.rectOf = function (id) {
+    const p = placed.get(id);
+    if (p && p.ranges) return p.ranges[0].getBoundingClientRect();
+    const el = AN.elementFor(id);
+    return el ? el.getBoundingClientRect() : null;
+  };
+
+  // ---------------------------------------------------------------------------
   // Rendering helpers
 
   function markClasses(a) {
@@ -202,6 +271,7 @@
   function isPlacedOk(a) {
     const p = placed.get(a.id);
     if (!p) return false;
+    if (p.ranges) return p.ranges.every((r) => r.startContainer.isConnected && r.endContainer.isConnected) && p.ranges.map((r) => r.toString()).join('') === p.text;
     if (p.els) return p.els.length > 0 && p.els.every((el) => el.isConnected);
     if (!p.el || !p.el.isConnected) return false;
     if (a.kind === 'block') return p.el.getAttribute('data-csr-block-id') === a.id;
@@ -213,7 +283,10 @@
     const p = placed.get(a.id);
     placed.delete(a.id);
     if (!p) return;
-    if (p.els) {
+    if (p.ranges) {
+      painted.delete(a.id);
+      repaintSoon();
+    } else if (p.els) {
       dom.unwrap(p.els.filter((el) => el.isConnected));
     } else if (p.el) {
       if (a.kind === 'block') {
@@ -234,6 +307,8 @@
   AN.unplaceAll = function () {
     for (const a of AN.all()) unplace(a);
     placed.clear();
+    painted.clear();
+    repaint();
   };
 
   /** Returns 'ok', 'wait' (target message still changing) or 'missing'. */
@@ -248,6 +323,15 @@
         const index = ctx.index(msg);
         const loc = dom.locateText(index, a.anchor);
         if (!loc || loc.score < -5) continue;
+        const startNode = dom.offsetsToRange(index, loc.start, Math.min(loc.end, loc.start + 1));
+        if (startNode && paintMode(startNode.startContainer)) {
+          const range = dom.offsetsToRange(index, loc.start, loc.end);
+          if (!range) continue;
+          paint(a, [range]);
+          a.anchor.start = loc.start;
+          a.anchor.end = loc.end;
+          return 'ok';
+        }
         const els = dom.wrapOffsets(index, loc.start, loc.end, () => document.createElement('span'));
         ctx.invalidate(msg);
         if (!els.length) continue;
@@ -266,14 +350,21 @@
         const el = dom.locateBlock(msg, a.anchor);
         if (!el) continue;
         if (a.kind === 'block') {
-          el.setAttribute('data-csr-block', a.style);
-          el.setAttribute('data-csr-block-id', a.id);
-          placed.set(a.id, { el });
+          if (paintMode(el)) {
+            const r = document.createRange();
+            r.selectNodeContents(el);
+            paint(a, [r], { block: el });
+          } else {
+            el.setAttribute('data-csr-block', a.style);
+            el.setAttribute('data-csr-block-id', a.id);
+            placed.set(a.id, { el });
+          }
         } else {
           const d = a.kind === 'bookmark' ? makeBookmark(a, el.tagName === 'LI', el) : makeDivider(a, el.tagName === 'LI');
-          if (a.anchor.pos === 'before') el.before(d);
-          else el.after(d);
-          placed.set(a.id, { el: d, anchor: el });
+          const at = dom.outsideProtected(el); // never inside the page editor's text
+          if (a.anchor.pos === 'before') at.before(d);
+          else at.after(d);
+          placed.set(a.id, { el: d, anchor: at });
         }
         return 'ok';
       }
@@ -362,6 +453,14 @@
     conv.annotations.push(a);
   }
 
+  function overlaps(r, range) {
+    try {
+      return !r.collapsed && range.comparePoint(r.startContainer, r.startOffset) <= 0 && r.comparePoint(range.startContainer, range.startOffset) <= 0;
+    } catch (e) {
+      return false; // a range whose text is gone
+    }
+  }
+
   /** Marks whose wrappers intersect the given range. */
   AN.marksInRange = function (range) {
     const out = [];
@@ -369,6 +468,7 @@
       if (a.kind !== 'mark') continue;
       const p = placed.get(a.id);
       if (p && p.els && p.els.some((el) => el.isConnected && range.intersectsNode(el))) out.push(a);
+      else if (p && p.ranges && p.ranges.some((r) => overlaps(r, range))) out.push(a);
     }
     return out;
   };
@@ -386,6 +486,15 @@
       style: { ...style },
       note: note || '',
     };
+    if (paintMode(s.range.startContainer)) {
+      const range = dom.offsetsToRange(index, off.start, off.end);
+      if (!range) return null;
+      push(a);
+      paint(a, [range]);
+      s.sel.removeAllRanges();
+      AN.save();
+      return a;
+    }
     const els = dom.wrapOffsets(index, off.start, off.end, () => document.createElement('span'));
     if (!els.length) return null;
     push(a);
@@ -439,6 +548,10 @@
     a.updated = Date.now();
     const p = placed.get(id);
     if (p && p.els) decorateMark(a, p.els);
+    else if (p && p.ranges) {
+      p.keys = paintKeys(a);
+      repaintSoon();
+    }
     AN.save();
   };
 
@@ -449,6 +562,10 @@
     a.updated = Date.now();
     const p = placed.get(id);
     if (a.kind === 'mark' && p && p.els) decorateMark(a, p.els);
+    else if (a.kind === 'mark' && p && p.ranges) {
+      p.keys = paintKeys(a);
+      repaintSoon();
+    }
     AN.save();
   };
 
@@ -499,8 +616,9 @@
     if (i1 < i0) [i0, i1] = [i1, i0];
     let targets = all.slice(i0, i1 + 1);
     targets = targets.filter((t) => !targets.some((o) => o !== t && o.contains(t)));
+    const paintedBlock = (el) => [...painted].find(([, p]) => p.block === el)?.[0];
     const existing = targets.map((el) => {
-      const id = el.getAttribute('data-csr-block-id');
+      const id = el.getAttribute('data-csr-block-id') || paintedBlock(el);
       return id ? AN.get(id) : null;
     });
     const allOn = existing.every((a) => a && a.style === style);
@@ -510,9 +628,15 @@
       if (!allOn) {
         const a = { id: CSR.uid('b'), kind: 'block', style, anchor: { ...baseAnchor(msg), ...dom.makeBlockAnchor(msg, el) } };
         push(a);
-        el.setAttribute('data-csr-block', style);
-        el.setAttribute('data-csr-block-id', a.id);
-        placed.set(a.id, { el });
+        if (paintMode(el)) {
+          const r = document.createRange();
+          r.selectNodeContents(el);
+          paint(a, [r], { block: el });
+        } else {
+          el.setAttribute('data-csr-block', style);
+          el.setAttribute('data-csr-block-id', a.id);
+          placed.set(a.id, { el });
+        }
       }
     });
     s.sel.removeAllRanges();
@@ -532,9 +656,10 @@
     };
     push(a);
     const d = makeDivider(a, block.tagName === 'LI');
-    if (pos === 'before') block.before(d);
-    else block.after(d);
-    placed.set(a.id, { el: d, anchor: block });
+    const at = dom.outsideProtected(block);
+    if (pos === 'before') at.before(d);
+    else at.after(d);
+    placed.set(a.id, { el: d, anchor: at });
     AN.save();
     return a;
   };
@@ -550,9 +675,10 @@
     };
     push(a);
     const b = makeBookmark(a, block.tagName === 'LI', block);
-    if (pos === 'before') block.before(b);
-    else block.after(b);
-    placed.set(a.id, { el: b, anchor: block });
+    const at = dom.outsideProtected(block);
+    if (pos === 'before') at.before(b);
+    else at.after(b);
+    placed.set(a.id, { el: b, anchor: at });
     AN.save();
     return a;
   };
@@ -623,13 +749,14 @@
   AN.elementFor = function (id) {
     const p = placed.get(id);
     if (!p) return null;
+    if (p.ranges) return p.block || p.ranges[0].startContainer.parentElement;
     return p.els ? p.els[0] : p.el;
   };
 
   function targetOf(a) {
     const p = placed.get(a.id);
     if (!p) return null;
-    const el = p.els ? p.els[0] : a.kind === 'drawing' ? p.msg : p.el;
+    const el = p.ranges ? AN.elementFor(a.id) : p.els ? p.els[0] : a.kind === 'drawing' ? p.msg : p.el;
     return el && el.isConnected ? el : null;
   }
 
@@ -654,6 +781,14 @@
     // false: a newer jump took over (fine), or Claude re-rendered it mid-jump
     if (!(await dom.scrollToEl(el, 'center'))) return el.isConnected;
     const p = placed.get(id);
+    if (p && p.ranges) {
+      // painted: flash it as a highlight of its own
+      if (globalThis.CSS && CSS.highlights) {
+        CSS.highlights.set('csr-flash', new Highlight(...p.ranges));
+        setTimeout(() => CSS.highlights.delete('csr-flash'), 1600);
+      }
+      return true;
+    }
     const flashEls = p ? p.els || [p.el] : [];
     flashEls.forEach((e) => e.classList && e.classList.add('csr-flash'));
     setTimeout(() => flashEls.forEach((e) => e.classList && e.classList.remove('csr-flash')), 1600);

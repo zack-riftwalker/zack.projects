@@ -14,6 +14,7 @@ mkdirSync(outDir, { recursive: true });
 
 const MOCK = readFileSync(path.join(here, 'mock', 'claude.html'), 'utf8');
 const NOTION_MOCK = readFileSync(path.join(here, 'mock', 'notion.html'), 'utf8');
+const NOTION_REAL = readFileSync(path.join(here, 'mock', 'notion-real.html'), 'utf8');
 const FILES = {
   '/__mock/react.js': path.join(here, 'node_modules/react/umd/react.production.min.js'),
   '/__mock/react-dom.js': path.join(here, 'node_modules/react-dom/umd/react-dom.production.min.js'),
@@ -42,7 +43,11 @@ await context.route('https://claude.ai/**', (route) => {
 });
 
 await context.route('https://www.notion.so/**', (route) =>
-  route.fulfill({ body: NOTION_MOCK, contentType: 'text/html', headers: { 'content-security-policy': CSP } })
+  route.fulfill({
+    body: new URL(route.request().url()).pathname === '/real' ? NOTION_REAL : NOTION_MOCK,
+    contentType: 'text/html',
+    headers: { 'content-security-policy': CSP },
+  })
 );
 
 // dictionary APIs: fixed answers so the test doesn't depend on the network
@@ -1035,7 +1040,7 @@ ok(await page.evaluate(() => [...document.querySelectorAll('.a-part p')].every((
 await select('بازخورد سریع');
 await page.locator('#csr-host .sel-toolbar .swatch').first().click();
 await page.waitForTimeout(300);
-ok((await page.locator('.a-part .csr-hl-yellow').count()) === 1, 'highlight in the deeply nested chat');
+ok(await page.evaluate(() => CSS.highlights.has('csr-hl-yellow') && [...CSS.highlights.get('csr-hl-yellow')].some((r) => r.toString() === 'بازخورد سریع')), 'highlight in the deeply nested chat (painted over Notion’s text block)');
 const nreport = JSON.parse(
   await popup.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ url: 'https://www.notion.so/*' });
@@ -1052,6 +1057,72 @@ ok(
 );
 ok(!/مدیریت|بازخورد|Study Notes|Study-Notes/.test(JSON.stringify(nreport)), 'the report holds no message text or page names');
 await shot('41-notion-deep');
+
+// the structure of a real notion.so AI chat (anonymised dump), with Notion's
+// behaviour: its text blocks undo any change made inside them from outside
+console.log('Notion AI chat: real page structure');
+/** How many clearly yellow pixels are painted over a range of text. */
+const yellowOver = async (rect) => {
+  const png = await page.screenshot({ clip: { x: rect.x, y: rect.y, width: Math.max(2, rect.w), height: Math.max(2, rect.h) } });
+  return popup.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = 'data:image/png;base64,' + b64;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const x = c.getContext('2d');
+    x.drawImage(img, 0, 0);
+    const d = x.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 180 && d[i + 2] < 120) n++;
+    return n / (d.length / 4);
+  }, png.toString('base64'));
+};
+const paintedRect = (text) =>
+  page.evaluate((text) => {
+    const h = CSS.highlights.get('csr-hl-yellow');
+    const r = h && [...h].find((x) => x.toString() === text);
+    if (!r) return null;
+    const b = r.getBoundingClientRect();
+    return { x: b.left, y: b.top, w: b.width, h: b.height };
+  }, text);
+const notionMarks = () => page.evaluate(() => document.querySelectorAll('[data-content-editable-root] [data-csr-wrap], [data-content-editable-root] [data-csr-dir], [data-content-editable-root] [data-csr-ink], [data-content-editable-root] [data-csr-paint], [data-content-editable-root] [data-csr-keepfont], [data-content-editable-root] [data-csr-block]').length);
+await page.goto('https://www.notion.so/real?t=4be1c0de5ac1a7f0f0e1d2c3b4a59687');
+await page.waitForSelector('[data-agent-chat-survey-shortcut-scope]');
+await page.waitForTimeout(1800);
+ok((await rolesNow()) === 'user,assistant,user,assistant', 'real structure: questions (a long one with a file attached) and answers told apart: ' + (await rolesNow()));
+const snippet = await page.evaluate(() => {
+  const leaf = document.querySelector('[data-csr-msg="assistant"] [data-content-editable-root] [data-content-editable-leaf]');
+  leaf.scrollIntoView({ block: 'center' });
+  return leaf.textContent.slice(0, 12);
+});
+await page.waitForTimeout(300);
+await select(snippet);
+await page.locator('#csr-host .sel-toolbar .swatch').first().click();
+await page.waitForTimeout(1200);
+let pr = await paintedRect(snippet);
+ok(!!pr && (await yellowOver(pr)) > 0.4, 'highlight on an answer is painted over the text');
+ok((await page.evaluate(() => window.__reverted)) === 0 && (await notionMarks()) === 0, 'nothing was written inside Notion’s text blocks (so it has nothing to undo)');
+await page.mouse.click(pr.x + pr.w / 2, pr.y + pr.h / 2);
+await page.waitForTimeout(300);
+ok(await page.locator('#csr-host .popover').isVisible(), 'clicking a painted highlight opens its menu');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(700);
+await page.reload();
+await page.waitForSelector('[data-agent-chat-survey-shortcut-scope]');
+await page.waitForTimeout(1800);
+await page.evaluate(() => document.querySelector('[data-csr-msg="assistant"] [data-content-editable-root] [data-content-editable-leaf]').scrollIntoView({ block: 'center' }));
+await page.waitForTimeout(300);
+pr = await paintedRect(snippet);
+ok(!!pr && (await yellowOver(pr)) > 0.4, 'after reloading, the highlight is painted again');
+await setTheme('sepia');
+await page.waitForTimeout(1200);
+ok((await contrastOf('[data-csr-msg="assistant"] [data-content-editable-leaf]')) >= 4.5, 'sepia theme: answer text readable (' + (await contrastOf('[data-csr-msg="assistant"] [data-content-editable-leaf]')) + ':1)');
+ok((await page.evaluate(() => window.__reverted)) === 0 && (await notionMarks()) === 0, 'theme, font and right-to-left still write nothing inside the text blocks');
+await shot('42-notion-real');
+await setTheme('paper');
+await page.waitForTimeout(400);
 
 ok(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 
