@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.dropUnlessResumed
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -212,6 +213,10 @@ fun MadarRoot(vm: MadarViewModel, versionName: String, onDarkTheme: (Boolean) ->
                         onBack = back,
                         onSave = { school ->
                             vm.saveSchool(school) { id ->
+                                // The save finishes later; if the user already left this screen, don't navigate.
+                                if (!backStackEntry.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                                    return@saveSchool
+                                }
                                 if (school.id == 0L) {
                                     // Natural next step after a new school: add its classes.
                                     nav.navigate(EditClassRoute(schoolId = id)) {

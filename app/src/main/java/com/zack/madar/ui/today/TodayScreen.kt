@@ -282,7 +282,9 @@ private fun TodayClassCard(overview: ClassOverview, onOpen: () -> Unit, onLog: (
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(c.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val number = if (logged != null) overview.stats.lastSessionNumber else overview.stats.nextSessionNumber
+                // A canceled log today means today's session didn't happen: the next number is still ahead.
+                val heldToday = overview.todaySessions.any { it.status == SessionStatus.HELD }
+                val number = if (heldToday) overview.stats.lastSessionNumber else overview.stats.nextSessionNumber
                 Text(
                     "جلسه‌ی ${PersianFormat.digits(number)} · ${overview.school?.name.orEmpty()}",
                     style = MaterialTheme.typography.bodySmall,
@@ -290,10 +292,12 @@ private fun TodayClassCard(overview: ClassOverview, onOpen: () -> Unit, onLog: (
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val topic = logged?.topic?.takeIf { it.isNotBlank() } ?: overview.lastHeld?.topic
+                // Only label a topic «امروز» when it was actually logged today; otherwise it's the previous session's.
+                val todayTopic = logged?.topic?.takeIf { it.isNotBlank() }
+                val topic = todayTopic ?: overview.lastHeld?.takeIf { it.id != logged?.id }?.topic
                 if (!topic.isNullOrBlank()) {
                     Text(
-                        (if (logged != null) "امروز: " else "قبلی: ") + topic,
+                        (if (todayTopic != null) "امروز: " else "قبلی: ") + topic,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -354,13 +358,14 @@ private fun FreeDayCard(state: AppState) {
 
 private fun nextTeachingDay(state: AppState): Pair<LocalDate, List<Long>>? {
     val snapshot = state.snapshot
+    // Plans and holidays don't change across the 21-day scan, so build them once per class.
+    val plans = snapshot.activeClasses.map { c ->
+        Triple(c.id, c.plan(snapshot.school(c.schoolId)), snapshot.daysOffFor(c.schoolId))
+    }
     for (offset in 1L..21L) {
         val date = state.today.plusDays(offset)
-        val classes = snapshot.activeClasses.filter { c ->
-            ScheduleCalculator.isScheduled(c.plan(snapshot.school(c.schoolId)), date) &&
-                date !in snapshot.daysOffFor(c.schoolId)
-        }
-        if (classes.isNotEmpty()) return date to classes.map { it.id }
+        val classes = plans.filter { (_, plan, daysOff) -> ScheduleCalculator.isScheduled(plan, date) && date !in daysOff }
+        if (classes.isNotEmpty()) return date to classes.map { it.first }
     }
     return null
 }

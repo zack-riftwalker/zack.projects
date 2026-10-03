@@ -87,6 +87,10 @@ interface DayOffDao {
     @Query("SELECT * FROM days_off ORDER BY epochDay")
     fun observeAll(): Flow<List<DayOff>>
 
+    /** `IS` so a null [schoolId] matches the global (all-schools) holiday. */
+    @Query("SELECT * FROM days_off WHERE epochDay = :epochDay AND schoolId IS :schoolId LIMIT 1")
+    suspend fun find(epochDay: Long, schoolId: Long?): DayOff?
+
     @Insert
     suspend fun insert(dayOff: DayOff): Long
 

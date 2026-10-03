@@ -9,7 +9,6 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.zack.madar.MadarApp
 import com.zack.madar.data.backup.BackupCodec
-import com.zack.madar.data.db.DayOff
 import com.zack.madar.data.db.School
 import com.zack.madar.data.db.SchoolClass
 import com.zack.madar.data.db.Session
@@ -74,7 +73,10 @@ class MadarViewModel(
 
     fun runUndo(message: UiMessage) {
         val action = message.action ?: return
-        viewModelScope.launch { action() }
+        viewModelScope.launch {
+            // The data the undo refers to may have changed meanwhile (e.g. the class's school was deleted).
+            if (runCatching { action() }.isFailure) say("بازگردانی ممکن نشد")
+        }
     }
 
     fun refreshToday() = clock.refresh()
@@ -193,15 +195,8 @@ class MadarViewModel(
 
     fun toggleDayOff(date: LocalDate, schoolId: Long?) {
         viewModelScope.launch {
-            val existing = state.value.snapshot.daysOff
-                .firstOrNull { it.epochDay == date.toEpochDay() && it.schoolId == schoolId }
-            if (existing != null) {
-                repo.deleteDayOff(existing)
-                say("تعطیلی برداشته شد")
-            } else {
-                repo.addDayOff(DayOff(epochDay = date.toEpochDay(), schoolId = schoolId))
-                say("تعطیل ثبت شد؛ جلسه‌های این روز شمرده نمی‌شوند")
-            }
+            val added = repo.toggleDayOff(date.toEpochDay(), schoolId)
+            say(if (added) "تعطیل ثبت شد؛ جلسه‌های این روز شمرده نمی‌شوند" else "تعطیلی برداشته شد")
         }
     }
 

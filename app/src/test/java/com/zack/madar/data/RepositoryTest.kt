@@ -90,6 +90,18 @@ class RepositoryTest {
     }
 
     @Test
+    fun togglingADayOffAddsThenRemovesIt() = runTest {
+        val schoolId = seed()
+        assertTrue(repo.toggleDayOff(start, null))
+        assertTrue(repo.toggleDayOff(start, schoolId))
+        assertEquals(2, repo.snapshot.first().daysOff.size)
+
+        // The global holiday is matched separately from the school-specific one.
+        assertEquals(false, repo.toggleDayOff(start, null))
+        assertEquals(listOf<Long?>(schoolId), repo.snapshot.first().daysOff.map { it.schoolId })
+    }
+
+    @Test
     fun backupRoundTripReplacesEverything() = runTest {
         seed()
         val cls = repo.snapshot.first().classes.first()

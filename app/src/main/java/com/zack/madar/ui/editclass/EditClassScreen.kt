@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -88,9 +89,12 @@ fun EditClassScreen(
     onAdd: (template: SchoolClass, names: List<Pair<String, String>>) -> Unit,
     onUpdate: (SchoolClass) -> Unit,
 ) {
+    // Form fields are seeded once from the stored class, so wait for the data (e.g. after process restore).
+    if (!state.loaded) return
     val existing = state.snapshot.classes.firstOrNull { it.id == classId }
-    val isNew = existing == null
+    val isNew = classId == 0L
     val schools = state.snapshot.schools
+    var submitted by remember { mutableStateOf(false) }
 
     var schoolId by rememberSaveable {
         mutableLongStateOf(existing?.schoolId ?: initialSchoolId.takeIf { id -> schools.any { it.id == id } } ?: schools.firstOrNull()?.id ?: 0L)
@@ -115,10 +119,13 @@ fun EditClassScreen(
     val daysError = weekdays.isEmpty
 
     fun save() {
+        // Editing a class that no longer exists must not silently re-create it; a second tap must not add twice.
+        if (submitted || (!isNew && existing == null)) return
         if (namesError || daysError || school == null) {
             showErrors = true
             return
         }
+        submitted = true
         val template = (existing ?: SchoolClass(schoolId = schoolId, name = "", symbol = "", trackingStartEpochDay = startDay)).copy(
             schoolId = schoolId,
             grade = grade.trim(),
@@ -254,7 +261,7 @@ fun EditClassScreen(
                     if (showErrors && daysError) {
                         Text("حداقل یک روز را انتخاب کن", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
-                    SchedulePreview(state, weekdays, LocalDate.ofEpochDay(startDay))
+                    SchedulePreview(state, weekdays)
                 }
 
                 FormCard("نقطه‌ی شروع") {
@@ -325,11 +332,12 @@ private fun lastSubject(state: AppState): String = state.snapshot.classes.lastOr
 
 /** Live answer to "so how many sessions is that this month?" while the form is edited. */
 @Composable
-private fun SchedulePreview(state: AppState, weekdays: WeekdaySet, trackingStart: LocalDate) {
+private fun SchedulePreview(state: AppState, weekdays: WeekdaySet) {
     if (weekdays.isEmpty) return
     val month = state.month
+    // The whole month is counted regardless of the tracking start, so the plan starts at the month's first day.
     val stats = ScheduleCalculator.monthStats(
-        ClassPlan(weekdays, minOf(trackingStart, month.first), 0),
+        ClassPlan(weekdays, month.first, 0),
         emptyList(),
         emptySet(),
         month,

@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,8 +72,11 @@ fun EditSchoolScreen(
     onSave: (School) -> Unit,
     onDelete: (School) -> Unit,
 ) {
+    // Form fields are seeded once from the stored school, so wait for the data (e.g. after process restore).
+    if (!state.loaded) return
     val existing = state.snapshot.school(schoolId)
-    val isNew = existing == null
+    val isNew = schoolId == 0L
+    var submitted by remember { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf(existing?.name.orEmpty()) }
     var weekdays by rememberSaveable { mutableIntStateOf(existing?.weekdays ?: 0) }
     var colorIndex by rememberSaveable {
@@ -86,10 +90,13 @@ fun EditSchoolScreen(
     val color = schoolColor(colorIndex)
 
     fun save() {
+        // The save is async; a second tap meanwhile would insert the school twice.
+        if (submitted || (!isNew && existing == null)) return
         if (nameError || daysError) {
             showErrors = true
             return
         }
+        submitted = true
         val base = existing ?: School(name = "", colorIndex = 0, weekdays = 0)
         onSave(base.copy(name = name.trim(), colorIndex = colorIndex, weekdays = weekdays))
     }

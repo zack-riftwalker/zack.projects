@@ -69,6 +69,13 @@ fun CalendarScreen(
         .groupBy({ it.first }, { it.second })
     val daysOff = state.snapshot.daysOff.groupBy { it.date }
 
+    // The day list is built from the shown month only, so keep the selection inside it.
+    fun showMonth(newOffset: Int) {
+        offset = newOffset
+        val shown = calendar.shift(state.month, newOffset)
+        selectedDay = (if (state.today in shown) state.today else shown.first).toEpochDay()
+    }
+
     LabBackground(Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = Color.Transparent,
@@ -102,8 +109,8 @@ fun CalendarScreen(
                         Column(Modifier.padding(12.dp)) {
                             MonthSwitcher(
                                 title = PersianFormat.monthTitle(month),
-                                onPrevious = { offset-- },
-                                onNext = { offset++ },
+                                onPrevious = { showMonth(offset - 1) },
+                                onNext = { showMonth(offset + 1) },
                             )
                             MonthGrid(
                                 month = month,

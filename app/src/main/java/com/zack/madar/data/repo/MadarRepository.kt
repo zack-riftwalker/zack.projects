@@ -103,6 +103,21 @@ class MadarRepository(private val db: MadarDatabase) {
 
     suspend fun deleteDayOff(dayOff: DayOff) = daysOff.delete(dayOff)
 
+    /**
+     * Adds the holiday if it isn't there, otherwise removes it; returns true when added.
+     * Checked inside the transaction so quick repeated taps can't stack duplicate rows.
+     */
+    suspend fun toggleDayOff(epochDay: Long, schoolId: Long?): Boolean = db.withTransaction {
+        val existing = daysOff.find(epochDay, schoolId)
+        if (existing != null) {
+            daysOff.delete(existing)
+            false
+        } else {
+            daysOff.insert(DayOff(epochDay = epochDay, schoolId = schoolId))
+            true
+        }
+    }
+
     // Backup
 
     suspend fun replaceAll(data: Snapshot) = db.withTransaction {

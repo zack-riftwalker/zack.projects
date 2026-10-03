@@ -107,7 +107,8 @@ fun MonthGrid(
     val weeks = cells.chunked(7)
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth()) {
+        // Same 4dp gaps as the week rows below, so each label sits over its column.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             for (day in WeekdaySet.IRANIAN_WEEK) {
                 Text(
                     PersianFormat.weekdayInitial(day),
