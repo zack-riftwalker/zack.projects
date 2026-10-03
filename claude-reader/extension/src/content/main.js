@@ -13,6 +13,7 @@
   await UI.init();
   UI.applySettings(CSR.settings);
   CSR.study.init();
+  CSR.usage.init();
   AN.onChange(() => UI.refreshPanel());
 
   // ---------------------------------------------------------------------------
@@ -99,6 +100,7 @@
     UI.applySettings(s);
     CSR.ruler.applySettings(s);
     CSR.study.applySettings(s);
+    CSR.usage.applySettings(s);
     if (prev.focusHideUser !== s.focusHideUser) CSR.focus.refresh(true);
     if (prev.autoProgress !== s.autoProgress) CSR.toc.refresh();
     if (prev.enabled !== s.enabled) {

@@ -42,6 +42,30 @@ await context.route('https://claude.ai/**', (route) => {
   return route.fulfill({ body: MOCK, contentType: 'text/html', headers: { 'content-security-policy': CSP } });
 });
 
+// Claude's own usage endpoint (Settings → Usage): a percentage the test can change
+let usagePct = 20;
+const usageCalls = [];
+await context.route('https://claude.ai/api/**', (route) => {
+  const p = new URL(route.request().url()).pathname;
+  usageCalls.push(p);
+  if (p === '/api/organizations') return route.fulfill({ contentType: 'application/json', body: JSON.stringify([{ uuid: 'org-api', capabilities: ['api'] }, { uuid: 'org-chat', capabilities: ['chat', 'claude_pro'] }]) });
+  if (p === '/api/organizations/org-chat/usage') {
+    const soon = new Date(Date.now() + (2 * 60 + 15) * 60000).toISOString();
+    const week = new Date(Date.now() + 3 * 86400000).toISOString();
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        five_hour: { utilization: usagePct, resets_at: soon },
+        seven_day: { utilization: 41, resets_at: week },
+        seven_day_opus: { utilization: 0, resets_at: null },
+        seven_day_sonnet: { utilization: 12, resets_at: week },
+        extra_usage: null,
+      }),
+    });
+  }
+  return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+});
+
 await context.route('https://www.notion.so/**', (route) =>
   route.fulfill({
     body: new URL(route.request().url()).pathname === '/real' ? NOTION_REAL : NOTION_MOCK,
@@ -461,6 +485,32 @@ await page.waitForTimeout(800);
 const pillText = await page.locator('#csr-host .study-pill').textContent();
 ok(/[۰-۹]{2}:[۰-۹]{2}/.test(pillText) && pillText.includes('مطالعه'), 'pomodoro running: ' + pillText);
 await shot('18-study-card');
+
+// Claude usage: read with the page's login, refreshed after each answer
+ok(usageCalls.includes('/api/organizations/org-chat/usage'), 'usage read for the chat organization');
+const usagePill = page.locator('#csr-host .usage-pill');
+ok(await usagePill.isVisible(), 'usage pill visible next to the study pill');
+let up = await usagePill.textContent();
+ok(up.includes('۲۰٪') && up.includes('هفته ۴۱٪'), 'usage pill shows the 5-hour and weekly use: ' + up);
+const before5h = usageCalls.length;
+usagePct = 23;
+await page.evaluate(() => window.__stream('پاسخ تازه در حال نوشتن', false));
+await page.waitForTimeout(1500);
+await page.evaluate(() => window.__stream('پاسخ تازه کامل شد.', true));
+await page.waitForTimeout(3600);
+ok(usageCalls.length > before5h, 'usage read again after the answer finished');
+up = await usagePill.textContent();
+ok(up.includes('۲۳٪') && up.includes('+۳٪'), 'pill shows the new use and what the answer cost: ' + up);
+await usagePill.click();
+ok(await page.locator('#csr-host .usage-card').isVisible(), 'usage card opens');
+ok(!(await page.locator('#csr-host .study-card').count()), 'opening it closes the study card');
+ok((await page.locator('#csr-host .usage-card .usage-row').count()) === 3, 'unused per-model windows are left out (5-hour, weekly, Sonnet)');
+const usageText = await page.locator('#csr-host .usage-card').textContent();
+ok(usageText.includes('آخرین پاسخ: حدود ۳٪') && /۲ ساعت و ۱[۴۵] دقیقه دیگر/.test(usageText), 'card shows the last answer and when the window resets');
+ok(/۲ روز و ۲۳ ساعت دیگر|۳ روز دیگر/.test(usageText), 'weekly reset counted in days');
+await page.waitForTimeout(300);
+await shot('18b-usage-card');
+await page.locator('#csr-host .usage-card .tool-btn[title="بستن"]').click();
 
 // ---------------------------------------------------------------------------
 console.log('Theme & settings (via popup page)');

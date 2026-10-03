@@ -138,7 +138,7 @@
     const h = CSR.ui.h;
     if (!pill) {
       pill = h('button', { class: 'study-pill', title: 'زمان مطالعه و پومودورو', onclick: () => S.toggleCard() });
-      CSR.ui.layer().append(pill);
+      CSR.ui.pillBar().prepend(pill);
     }
     pill.textContent = '';
     if (pomo.phase !== 'idle') {
@@ -161,6 +161,7 @@
       card = null;
       return;
     }
+    if (CSR.usage) CSR.usage.toggleCard(false);
     renderCard();
   };
 

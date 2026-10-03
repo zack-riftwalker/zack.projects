@@ -1084,11 +1084,16 @@ svg {
 }
 
 /* ---------- study timer ---------- */
-.study-pill {
+.pill-bar {
   position: fixed;
   bottom: 18px;
   right: 16px;
   z-index: 31;
+  display: flex;
+  gap: 8px;
+}
+.study-pill,
+.usage-pill {
   gap: 7px;
   padding: 5px 12px 5px 10px;
   border-radius: 999px;
@@ -1099,15 +1104,16 @@ svg {
   opacity: 0.8;
   transition: opacity 0.2s;
 }
-.study-pill:hover {
+.study-pill:hover,
+.usage-pill:hover {
   opacity: 1;
 }
-.layer[data-side="left"] .study-pill,
-.layer[data-site="notion"] .study-pill {
+.layer[data-side="left"] .pill-bar,
+.layer[data-site="notion"] .pill-bar {
   right: auto;
   left: 16px;
 }
-:host([data-panel]) .layer[data-side="right"] .study-pill {
+:host([data-panel]) .layer[data-side="right"] .pill-bar {
   right: 386px;
 }
 .pill-dot {
@@ -1127,7 +1133,8 @@ svg {
 .pill-phase {
   color: var(--muted);
 }
-.study-card {
+.study-card,
+.usage-card {
   position: fixed;
   bottom: 62px;
   right: 16px;
@@ -1144,12 +1151,81 @@ svg {
   gap: 8px;
   animation: pop 0.15s ease-out;
 }
-.layer[data-side="left"] .study-card {
+.layer[data-side="left"] .study-card,
+.layer[data-side="left"] .usage-card {
   right: auto;
   left: 16px;
 }
-.study-card > :not(header) {
+.study-card > :not(header),
+.usage-card > :not(header) {
   margin-inline: 14px;
+}
+
+/* ---------- Claude usage ---------- */
+.usage-card .panel-title {
+  flex: 1;
+}
+.usage-card.still {
+  animation: none;
+}
+.usage-pill.stale .pill-time {
+  opacity: 0.6;
+}
+.usage-pill.flash {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.usage-delta {
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  animation: pop 0.2s ease-out;
+}
+.usage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.usage-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+}
+.usage-top b {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-bar {
+  height: 7px;
+  border-radius: 99px;
+  background: var(--hover);
+  overflow: hidden;
+}
+.usage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.4s;
+}
+.usage-last {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.usage-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.usage-foot a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.usage-foot a:hover {
+  text-decoration: underline;
 }
 .study-now {
   font-weight: 800;

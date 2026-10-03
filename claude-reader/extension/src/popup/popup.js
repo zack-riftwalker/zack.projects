@@ -220,7 +220,7 @@
   paintSw();
 
   // ---------- study tab ----------
-  for (const key of ['showTimer', 'pomoAutoBreak', 'pomoAutoFocus', 'pomoSound', 'pomoNotify', 'autoProgress', 'resumePrompt', 'focusHideUser', 'focusFullscreen', 'dictDblclick']) {
+  for (const key of ['showTimer', 'showUsage', 'pomoAutoBreak', 'pomoAutoFocus', 'pomoSound', 'pomoNotify', 'autoProgress', 'resumePrompt', 'focusHideUser', 'focusFullscreen', 'dictDblclick']) {
     $(key).checked = !!s[key];
     $(key).addEventListener('change', (e) => {
       s[key] = e.target.checked;

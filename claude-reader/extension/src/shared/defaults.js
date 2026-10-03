@@ -162,6 +162,7 @@
     resumePrompt: true,
     // study timer & pomodoro (minutes)
     showTimer: true,
+    showUsage: true,
     pomoFocus: 25,
     pomoShort: 5,
     pomoLong: 15,

@@ -73,6 +73,7 @@
     next: svg('<path d="m5 5 10 7-10 7z" fill="currentColor"/><path d="M19 5v14"/>'),
     skip: svg('<path d="m5 4 10 8-10 8z" fill="currentColor"/><path d="M19 5v14"/>'),
     minimize: svg('<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="m14 10 7-7"/><path d="m3 21 7-7"/>'),
+    refresh: svg('<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>'),
     moreV: svg('<circle cx="12" cy="5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="19" r="1.3" fill="currentColor"/>'),
   };
 
@@ -106,6 +107,14 @@
   UI.h = h;
   UI.ICONS = ICONS;
   UI.layer = () => el.layer;
+  /** Bottom corner row for the small status pills (study time, Claude usage). */
+  UI.pillBar = () => {
+    if (!el.pillBar) {
+      el.pillBar = h('div', { class: 'pill-bar' });
+      el.layer.append(el.pillBar);
+    }
+    return el.pillBar;
+  };
   UI.el = el;
   UI.isDark = () => isDark(CSR.settings);
   UI.setDockState = (key, on) => el.dockBtn && el.dockBtn[key] && el.dockBtn[key].classList.toggle('on', !!on);

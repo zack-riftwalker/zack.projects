@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "خوانا — Claude Reader",
   "short_name": "خوانا",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "خواندن و مطالعه‌ی پاسخ‌های Claude و Notion AI را راحت‌تر کن: فونت فارسی، تم، راست‌چین اصولی، هایلایت، یادداشت، مداد و خط جداکننده.",
   "minimum_chrome_version": "111",
   "icons": {
@@ -77,6 +77,7 @@
         "src/content/dict.js",
         "src/content/translate.js",
         "src/content/study.js",
+        "src/content/usage.js",
         "src/content/diag.js",
         "src/content/main.js"
       ],
