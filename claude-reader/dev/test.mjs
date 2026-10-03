@@ -622,6 +622,29 @@ await popup.screenshot({ path: path.join(outDir, '20-popup-study.png') });
 await popup.locator('.tab[data-tab="read"]').click();
 await popup.screenshot({ path: path.join(outDir, '21-popup-read.png') });
 
+// usage tab: full reading here, and a switch for the pill on the page
+await popup.locator('.tab[data-tab="usage"]').click();
+await popup.waitForTimeout(400);
+ok((await popup.locator('#usageList .usage-row').count()) === 3, 'popup usage tab lists the windows');
+ok((await popup.locator('#usageList').textContent()).includes('۲۳٪'), 'popup shows the same percent as the page');
+ok((await popup.locator('#usageLast').textContent()).includes('آخرین پاسخ'), 'popup shows what the last answer cost');
+usagePct = 30;
+await popup.locator('#usageRefresh').click();
+await popup.waitForTimeout(1200);
+ok((await popup.locator('#usageList').textContent()).includes('۳۰٪'), 'refresh in the popup reads again through the Claude tab');
+ok((await page.locator('#csr-host .usage-pill').textContent()).includes('۳۰٪'), 'the page pill follows');
+await popup.screenshot({ path: path.join(outDir, '20b-popup-usage.png') });
+await popup.locator('#showUsage').uncheck();
+await page.waitForTimeout(600);
+ok(!(await page.locator('#csr-host .usage-pill').count()), 'unticked: no usage pill on the page');
+usagePct = 31;
+await popup.locator('#usageRefresh').click();
+await popup.waitForTimeout(1200);
+ok((await popup.locator('#usageList').textContent()).includes('۳۱٪'), 'still read (and shown in the popup) while hidden on the page');
+await popup.locator('#showUsage').check();
+await page.waitForTimeout(600);
+ok(await page.locator('#csr-host .usage-pill').isVisible(), 'ticked again: pill is back');
+
 // library
 const lib = await context.newPage();
 await lib.goto(`chrome-extension://${extId}/src/library/library.html`);

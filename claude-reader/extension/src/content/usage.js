@@ -16,22 +16,9 @@
   const KEY = 'usage';
   const STREAMING = CSR.SEL.streaming + ', button[aria-label="Stop response"]';
   const PERIOD = 5 * 60 * 1000;
-  const fa = (n) => Number(n).toLocaleString('fa-IR');
-  const faPct = (n) => fa(Math.round(n)) + '٪';
-
-  const LABELS = {
-    five_hour: 'جلسه‌ی ۵ ساعته',
-    seven_day: 'هفتگی (همه‌ی مدل‌ها)',
-    seven_day_opus: 'هفتگی Opus',
-    seven_day_sonnet: 'هفتگی Sonnet',
-    seven_day_oauth_apps: 'هفتگی برنامه‌های متصل',
-    extra_usage: 'اعتبار اضافه',
-  };
-  const label = (key) =>
-    LABELS[key] ||
-    (/^seven_day_(.+)/.test(key) ? 'هفتگی ' + key.slice(10).replace(/_/g, ' ') : /five_hour/.test(key) ? '۵ ساعته ' + key.replace(/five_hour_?/, '') : key.replace(/_/g, ' '));
-  const rank = (key) => (key === 'five_hour' ? 0 : key === 'seven_day' ? 1 : 2);
-  const color = (pct) => (pct >= 85 ? '#e03131' : pct >= 60 ? '#f08c00' : '#2f9e44');
+  const F = CSR.usageFmt;
+  const { label, rank, color } = F;
+  const faPct = F.pct;
 
   let org = null;
   let busy = null;
@@ -43,7 +30,10 @@
   let flashUntil = 0;
   let ticks = 0;
 
-  const on = () => !!(CSR.settings && CSR.settings.enabled && CSR.settings.showUsage && !CSR.dead && CSR.alive());
+  // readings keep going while the pill is hidden, so the popup's usage tab
+  // (and "what the last answer cost") stays current
+  const reading = () => !!(CSR.settings && CSR.settings.enabled && !CSR.dead && CSR.alive());
+  const on = () => reading() && !!CSR.settings.showUsage;
 
   // ---------------------------------------------------------------------------
   // reading
@@ -90,11 +80,11 @@
     return out.sort((a, b) => rank(a.key) - rank(b.key));
   }
 
-  const main = (d) => (d && d.windows && d.windows[0]) || null;
+  const main = F.main;
 
   /** Fetch a fresh reading. `why === 'answer'` also records what the last answer cost. */
   U.refresh = function (why) {
-    if (!on()) return Promise.resolve(null);
+    if (!reading()) return Promise.resolve(null);
     if (busy) return busy;
     busy = (async () => {
       try {
@@ -110,9 +100,10 @@
         }
         U.data = data;
         U.error = null;
-        if (CSR.alive()) await chrome.storage.local.set({ [KEY]: data });
+        if (CSR.alive()) await chrome.storage.local.set({ [KEY]: data, usageError: null });
       } catch (e) {
         U.error = e.status === 401 || e.status === 403 ? 'auth' : 'fail';
+        if (CSR.alive()) chrome.storage.local.set({ usageError: { at: Date.now(), error: U.error } }).catch(() => {});
         if (e.status === 403 || e.status === 404) org = null;
       } finally {
         lastFetch = Date.now();
@@ -129,7 +120,7 @@
   // when to read
 
   function tick() {
-    if (!on()) return;
+    if (!reading()) return;
     const now = !!document.querySelector(STREAMING);
     if (now && !streaming) baseline = main(U.data); // an answer started
     if (!now && streaming) {
@@ -146,6 +137,13 @@
     if (document.visibilityState === 'visible' && Date.now() - lastFetch > 60000) U.refresh();
   });
 
+  // the popup's usage tab asks for a fresh reading
+  chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+    if (!msg || msg.csr !== 'usageRefresh') return;
+    U.refresh().then(() => reply({ data: U.data, error: U.error }));
+    return true; // reply comes later
+  });
+
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes[KEY] || !changes[KEY].newValue) return;
     U.data = changes[KEY].newValue; // read by another tab
@@ -160,25 +158,6 @@
     const len = 2 * Math.PI * r;
     return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="${stroke}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${c}" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${len}" stroke-dashoffset="${len * (1 - pct / 100)}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>`;
   }
-
-  function resetText(w) {
-    if (!w.resetsAt) return '';
-    const left = w.resetsAt - Date.now();
-    if (left <= 0) return 'به‌زودی صفر می‌شود';
-    const weekly = left > 24 * 3600 * 1000;
-    const when = new Date(w.resetsAt).toLocaleString('fa-IR', weekly ? { weekday: 'long', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
-    return `صفر می‌شود: ${when} (${until(left)} دیگر)`;
-  }
-
-  /** "۲ روز و ۵ ساعت" for the weekly windows, "۲ ساعت و ۱۵ دقیقه" below a day. */
-  function until(ms) {
-    const hours = Math.floor(ms / 3600000);
-    if (hours < 24) return CSR.faDuration(ms / 1000);
-    const days = Math.floor(hours / 24);
-    return hours % 24 ? `${fa(days)} روز و ${fa(hours % 24)} ساعت` : `${fa(days)} روز`;
-  }
-
-  const deltaText = (d) => (d < 1 ? 'کمتر از ۱٪' : 'حدود ' + faPct(d));
 
   function summary(d) {
     return d.windows.map((w) => `${label(w.key)}: ${faPct(w.pct)}`).join(' · ');
@@ -240,28 +219,20 @@
             { class: 'usage-row' },
             h('div', { class: 'usage-top' }, h('span', null, label(w.key)), h('b', { style: `color:${color(w.pct)}` }, faPct(w.pct))),
             h('div', { class: 'usage-bar' }, h('span', { style: `width:${w.pct}%;background:${color(w.pct)}` })),
-            w.resetsAt ? h('div', { class: 'hint' }, resetText(w)) : null
+            w.resetsAt ? h('div', { class: 'hint' }, F.resetText(w)) : null
           )
         );
       }
       if (d.delta != null && main(d)) {
-        body.push(h('div', { class: 'usage-last' }, `آخرین پاسخ: ${deltaText(d.delta)} از ${label(main(d).key)}`));
+        body.push(h('div', { class: 'usage-last' }, `آخرین پاسخ: ${F.delta(d.delta)} از ${label(main(d).key)}`));
       }
     }
     if (U.error && !(d && d.windows)) {
-      body.push(
-        h(
-          'div',
-          { class: 'hint' },
-          U.error === 'auth'
-            ? 'برای دیدن مصرف باید در claude.ai وارد حسابت شده باشی.'
-            : 'خواندن مصرف از Claude ممکن نشد. شاید Claude این بخش را تغییر داده باشد؛ صفحه‌ی Usage خود Claude را ببین.'
-        )
-      );
+      body.push(h('div', { class: 'hint' }, F.errorText(U.error)));
     } else if (!d) {
       body.push(h('div', { class: 'hint' }, 'در حال خواندن…'));
     }
-    const ago = d && d.at ? (Date.now() - d.at < 60000 ? 'همین الان' : CSR.faDuration((Date.now() - d.at) / 1000) + ' پیش') : '';
+    const ago = F.ago(d && d.at);
     const next = h(
       'div',
       { class: 'usage-card', onmousedown: (e) => e.target.closest('a') || e.preventDefault() },
@@ -291,7 +262,7 @@
 
   U.applySettings = function () {
     paint();
-    if (on() && (!U.data || Date.now() - lastFetch > PERIOD)) U.refresh();
+    if (reading() && (!U.data || Date.now() - lastFetch > PERIOD)) U.refresh();
   };
 
   U.init = async function () {

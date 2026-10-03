@@ -518,3 +518,48 @@ h3:first-child {
   padding-top: 8px;
   border-top: 1px dashed var(--line);
 }
+
+/* ---------- Claude usage ---------- */
+.usage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.usage-head h3 {
+  margin: 0;
+}
+.usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.usage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.usage-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.usage-top b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-bar {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--hover);
+  overflow: hidden;
+}
+.usage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+.usage-last {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}

@@ -40,6 +40,7 @@
       <button class="tab" data-tab="tools">ابزارها</button>
       <button class="tab" data-tab="study">مطالعه</button>
       <button class="tab" data-tab="read">خواندن</button>
+      <button class="tab" data-tab="usage">مصرف</button>
     </nav>
 
     <main id="main">
@@ -157,7 +158,6 @@
       <section data-panel="study" hidden>
         <h3>زمان مطالعه و پومودورو</h3>
         <label class="check"><input type="checkbox" id="showTimer" /> نمایش زمان مطالعه پایین صفحه</label>
-        <label class="check"><input type="checkbox" id="showUsage" /> نمایش مصرف Claude (سهمیه‌ی ۵ ساعته و هفتگی) کنار آن؛ بعد از هر پاسخ به‌روز می‌شود</label>
         <div class="grid4">
           <label>مطالعه<input type="number" id="pomoFocus" min="1" max="180" /></label>
           <label>استراحت<input type="number" id="pomoShort" min="1" max="60" /></label>
@@ -183,6 +183,19 @@
       </section>
 
       <!-- reading tools: ruler, bookmarks, tts, dictionary -->
+      <!-- Claude usage -->
+      <section data-panel="usage" hidden>
+        <div class="usage-head">
+          <h3>مصرف Claude</h3>
+          <button class="btn ghost small" id="usageRefresh">به‌روزرسانی</button>
+        </div>
+        <div class="usage-list" id="usageList"></div>
+        <p class="usage-last" id="usageLast" hidden></p>
+        <p class="note" id="usageNote"></p>
+        <label class="check"><input type="checkbox" id="showUsage" /> روی صفحه‌ی Claude هم نشان بده (دایره‌ی کوچک پایین صفحه، کنار زمان مطالعه)</label>
+        <p class="note">خاموش هم باشد، مصرف بعد از هر پاسخ خوانده می‌شود و همین‌جا می‌بینی. عددها همان صفحه‌ی Usage خود Claude است.</p>
+        <div class="row-btns"><button class="btn ghost small" id="usageOpen">صفحه‌ی Usage در Claude</button></div>
+      </section>
       <section data-panel="read" hidden>
         <h3>خط‌کش خواندن</h3>
         <div class="patterns" id="rulerPattern"></div>
@@ -219,6 +232,7 @@
     <script src="../shared/storage.js"></script>
     <script src="../shared/fonts-page.js"></script>
     <script src="../shared/patterns.js"></script>
+    <script src="../shared/usage-format.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

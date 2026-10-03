@@ -360,6 +360,90 @@
     save();
   });
 
+  // ---------- Claude usage ----------
+  // The reading itself happens in a claude.ai tab (with the page's own login);
+  // here it's shown from storage, and "refresh" asks such a tab for a new one.
+  const UF = CSR.usageFmt;
+  let usageErr = null;
+  function paintUsage(d) {
+    const list = $('usageList');
+    list.textContent = '';
+    const windows = (d && d.windows) || [];
+    for (const w of windows) {
+      const row = document.createElement('div');
+      row.className = 'usage-row';
+      const top = document.createElement('div');
+      top.className = 'usage-top';
+      const name = document.createElement('span');
+      name.textContent = UF.label(w.key);
+      const val = document.createElement('b');
+      val.textContent = UF.pct(w.pct);
+      val.style.color = UF.color(w.pct);
+      top.append(name, val);
+      const bar = document.createElement('div');
+      bar.className = 'usage-bar';
+      const fill = document.createElement('span');
+      fill.style.width = w.pct + '%';
+      fill.style.background = UF.color(w.pct);
+      bar.append(fill);
+      row.append(top, bar);
+      if (w.resetsAt) {
+        const r = document.createElement('div');
+        r.className = 'note';
+        r.textContent = UF.resetText(w);
+        row.append(r);
+      }
+      list.append(row);
+    }
+    const main = UF.main(d);
+    $('usageLast').hidden = !(main && d.delta != null);
+    if (main && d.delta != null) $('usageLast').textContent = `آخرین پاسخ: ${UF.delta(d.delta)} از ${UF.label(main.key)}`;
+    $('usageNote').textContent = windows.length
+      ? 'به‌روزرسانی: ' + UF.ago(d.at) + (usageErr ? ' (آخرین تلاش ناموفق بود)' : '')
+      : usageErr
+        ? UF.errorText(usageErr)
+        : 'هنوز خوانده نشده. یک تب claude.ai باز کن (بعد از هر پاسخ خودش به‌روز می‌شود).';
+  }
+  async function refreshUsage() {
+    const btn = $('usageRefresh');
+    btn.disabled = true;
+    btn.textContent = 'در حال خواندن…';
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://claude.ai/*' });
+      tabs.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0) || (b.lastAccessed || 0) - (a.lastAccessed || 0));
+      let r = null;
+      for (const t of tabs) {
+        r = await chrome.tabs.sendMessage(t.id, { csr: 'usageRefresh' }).catch(() => null);
+        if (r) break;
+      }
+      if (!r) $('usageNote').textContent = 'برای خواندن مصرف یک تب claude.ai باز کن (اگر باز است، یک بار رفرشش کن).';
+      else {
+        usageErr = r.error;
+        paintUsage(r.data);
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'به‌روزرسانی';
+    }
+  }
+  chrome.storage.local.get(['usage', 'usageError']).then((r) => {
+    usageErr = r.usageError ? r.usageError.error : null;
+    paintUsage(r.usage);
+    const fresh = r.usage && Date.now() - r.usage.at < 60000;
+    if (!fresh && !document.querySelector('section[data-panel="usage"]').hidden) refreshUsage();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes.usageError) usageErr = changes.usageError.newValue ? changes.usageError.newValue.error : null;
+    if (changes.usage || changes.usageError) chrome.storage.local.get('usage').then((r) => paintUsage(r.usage));
+  });
+  $('usageRefresh').addEventListener('click', refreshUsage);
+  document.querySelector('.tab[data-tab="usage"]').addEventListener('click', async () => {
+    const { usage } = await chrome.storage.local.get('usage');
+    if (!usage || Date.now() - usage.at > 60000) refreshUsage();
+  });
+  $('usageOpen').addEventListener('click', () => chrome.tabs.create({ url: 'https://claude.ai/settings/usage' }));
+
   // ---------- updates ----------
   const version = chrome.runtime.getManifest().version;
   const faV = (v) => String(v).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
