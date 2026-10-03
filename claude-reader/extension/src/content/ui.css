@@ -864,6 +864,17 @@ svg {
   flex: none;
   cursor: pointer;
 }
+.toc-unseen {
+  width: 13px;
+  height: 13px;
+  margin: 0 1px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px dashed var(--muted);
+}
+.toc-item.unseen .toc-title {
+  opacity: 0.85;
+}
 .toc-q {
   width: 15px;
   height: 15px;

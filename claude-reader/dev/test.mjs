@@ -18,6 +18,7 @@ const NOTION_REAL = readFileSync(path.join(here, 'mock', 'notion-real.html'), 'u
 const FILES = {
   '/__mock/react.js': path.join(here, 'node_modules/react/umd/react.production.min.js'),
   '/__mock/react-dom.js': path.join(here, 'node_modules/react-dom/umd/react-dom.production.min.js'),
+  '/__mock/conversations.js': path.join(here, 'mock', 'conversations.js'),
 };
 const CONV = '/chat/11111111-2222-3333-4444-555555555555';
 const OTHER = '/chat/99999999-8888-7777-6666-555555555555';
@@ -42,12 +43,47 @@ await context.route('https://claude.ai/**', (route) => {
   return route.fulfill({ body: MOCK, contentType: 'text/html', headers: { 'content-security-policy': CSP } });
 });
 
+// The mock's conversations, also served as Claude's own copy of them (its API)
+const MOCKDATA = new Function(readFileSync(path.join(here, 'mock', 'conversations.js'), 'utf8') + '; return { CONVS, VCONVS };')();
+const toMarkdown = (blocks) =>
+  blocks
+    .map(([tag, c]) => {
+      if (/^h[1-6]$/.test(tag)) return '#'.repeat(+tag[1]) + ' ' + c;
+      if (tag === 'ul') return c.map((x) => '- ' + x).join('\n');
+      if (tag === 'ol') return c.map((x, i) => `${i + 1}. ${x}`).join('\n');
+      if (tag === 'pre' || tag === 'pre-dark') return '```\n' + c + '\n```';
+      if (tag === 'blockquote') return '> ' + c;
+      if (tag === 'table') return c.map((r) => '| ' + r.join(' | ') + ' |').join('\n');
+      return c;
+    })
+    .join('\n\n');
+const apiMessages = (id) => {
+  const list = MOCKDATA.VCONVS[id] || (MOCKDATA.CONVS[id] && MOCKDATA.CONVS[id].messages);
+  if (!list) return null;
+  // two branches, like after editing a question: only the current one counts
+  const msgs = [];
+  let parent = '00000000-0000-4000-8000-000000000000';
+  list.forEach((m, i) => {
+    const uuid = `m-${i}`;
+    msgs.push({ uuid, index: i, parent_message_uuid: parent, sender: m.role === 'user' ? 'human' : 'assistant', text: '', content: [{ type: 'text', text: m.role === 'user' ? m.text : toMarkdown(m.blocks) }] });
+    parent = uuid;
+  });
+  msgs.push({ uuid: 'old-branch', index: 1, parent_message_uuid: 'm-0', sender: 'assistant', text: 'ریشه‌ی کنار گذاشته‌شده', content: [] });
+  return { uuid: id, current_leaf_message_uuid: parent, chat_messages: msgs };
+};
+let apiDown = false;
+
 // Claude's own usage endpoint (Settings → Usage): a percentage the test can change
 let usagePct = 20;
 const usageCalls = [];
 await context.route('https://claude.ai/api/**', (route) => {
   const p = new URL(route.request().url()).pathname;
   usageCalls.push(p);
+  const conv = /^\/api\/organizations\/org-chat\/chat_conversations\/([\w-]+)$/.exec(p);
+  if (conv) {
+    const body = !apiDown && apiMessages(conv[1]);
+    return body ? route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) }) : route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+  }
   if (p === '/api/organizations') return route.fulfill({ contentType: 'application/json', body: JSON.stringify([{ uuid: 'org-api', capabilities: ['api'] }, { uuid: 'org-chat', capabilities: ['chat', 'claude_pro'] }]) });
   if (p === '/api/organizations/org-chat/usage') {
     const soon = new Date(Date.now() + (2 * 60 + 15) * 60000).toISOString();
@@ -775,6 +811,51 @@ await page.locator('#csr-host .toc .toc-title', { hasText: 'مبحث 2: جمع�
 await page.waitForTimeout(900);
 let ht = await headingTop('مبحث 2: جمع‌بندی');
 ok(ht !== null && ht >= 0 && ht < 300, 'TOC click jumps to a rendered section despite scroll corrections (top=' + ht + ')');
+
+// Claude's own copy of the conversation lists what was never rendered, too
+const neverSeen = page.locator('#csr-host .toc .toc-title', { hasText: 'مبحث 9: جمع‌بندی' });
+ok(!(await rendered()).includes(17) && (await neverSeen.count()) === 1, 'TOC lists a section that was never rendered');
+ok((await page.locator('#csr-host .toc .toc-item.k-q').count()) === 12, 'TOC lists every question of the conversation (12)');
+await neverSeen.click();
+await page.waitForTimeout(2500);
+ht = await headingTop('مبحث 9: جمع‌بندی');
+ok(ht !== null && ht >= 0 && ht < 320, 'TOC click scrolls to a never-rendered section and finds it (top=' + ht + ')');
+const seenItem = page.locator('#csr-host .toc .toc-item', { hasText: 'مبحث 9: جمع‌بندی' });
+ok((await seenItem.locator('.toc-check').count()) === 1, 'once seen, the section can be ticked');
+const tocTitlesOf = () => page.locator('#csr-host .toc .toc-title').allTextContents();
+
+// switching to another long conversation: the old one stays on screen for a moment
+await page.evaluate(() => {
+  const sc = document.querySelector('.scroller');
+  sc.scrollTop = sc.scrollHeight; // reading the end of a long conversation
+});
+await page.waitForTimeout(1500);
+await page.evaluate(() => window.__vnav('/chat/33333333-4444-5555-6666-777777777777'));
+await page.waitForTimeout(1100); // address changed, old messages still showing
+await page.waitForTimeout(2200); // new conversation is in
+let titles = await tocTitlesOf();
+ok(!titles.some((t) => t.includes('مبحث')), 'after switching, nothing of the previous conversation is in the TOC');
+ok(titles.filter((t) => t.includes('کتاب زیست را خلاصه کن')).length === 8 && titles.some((t) => t.includes('نکته‌های فصل 1')), 'the TOC lists the whole new conversation');
+await page.locator('#csr-host .toc .toc-title', { hasText: 'فصل 1 کتاب زیست' }).click();
+await page.waitForTimeout(2500);
+const qTop = await page.evaluate(() => {
+  const q = [...document.querySelectorAll('[data-testid="user-message"]')].find((x) => x.textContent.includes('فصل 1 کتاب زیست'));
+  return q ? Math.round(q.getBoundingClientRect().top) : null;
+});
+ok(qTop !== null && qTop >= 0 && qTop < 400, 'jump to the first question from the end of the conversation (top=' + qTop + ')');
+
+// …and without Claude's copy (its API failing), a switch still leaves no traces
+apiDown = true;
+await page.evaluate(() => window.__vnav('/chat/22222222-3333-4444-5555-666666666666'));
+await page.waitForTimeout(3600);
+titles = await tocTitlesOf();
+ok(titles.length > 0 && !titles.some((t) => t.includes('زیست') || t.includes('فصل')), 'without the API: no sections of the previous conversation either (' + titles.length + ')');
+apiDown = false;
+await page.goto('https://claude.ai/chat/22222222-3333-4444-5555-666666666666');
+await page.waitForSelector('[data-testid="transcript-row"]');
+await page.waitForTimeout(1500);
+await page.keyboard.press('Alt+T');
+await page.waitForTimeout(400);
 
 // visit the whole conversation once so the TOC learns every section, then go back up
 await page.evaluate(async () => {

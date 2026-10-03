@@ -500,6 +500,40 @@
     return null;
   };
 
+  /** Like seek(), for when the row isn't known: `where()` says which way the
+   * target is from what's rendered now (-1 above, 1 below, 0 should be in
+   * view, null unknown) and the list is scrolled that way until `find()`
+   * returns it. Resolves false when a newer jump took over. */
+  dom.seekBy = async function (find, where) {
+    let el = find();
+    if (el) return el;
+    const first = document.querySelector('[data-csr-msg]');
+    if (!first) return null;
+    const me = ++jump;
+    const sc = dom.scrollParent(first);
+    for (let i = 0; i < 80; i++) {
+      if (me !== jump) return false;
+      const dir = where();
+      if (!dir) {
+        // in view (or no idea): give the page a moment to render it
+        for (let k = 0; k < 6 && !el; k++) {
+          await wait(150);
+          if (me !== jump) return false;
+          el = find();
+        }
+        return el;
+      }
+      const before = sc.scrollTop;
+      sc.scrollBy({ top: dir * sc.clientHeight * 0.85, behavior: 'instant' });
+      await wait(110);
+      if (me !== jump) return false;
+      el = find();
+      if (el) return el;
+      if (sc.scrollTop === before) return null; // reached the end
+    }
+    return null;
+  };
+
   /** Scrollable ancestor of an element (Claude scrolls an inner container). */
   dom.scrollParent = function (el) {
     let cur = el && el.parentElement;

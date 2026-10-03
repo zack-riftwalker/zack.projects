@@ -20,7 +20,6 @@
   const { label, rank, color } = F;
   const faPct = F.pct;
 
-  let org = null;
   let busy = null;
   let lastFetch = 0;
   let streaming = false;
@@ -37,34 +36,6 @@
 
   // ---------------------------------------------------------------------------
   // reading
-
-  async function getJson(path) {
-    const r = await fetch(path, { credentials: 'include', headers: { accept: 'application/json' } });
-    if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { status: r.status });
-    return r.json();
-  }
-
-  async function orgFromList() {
-    const list = await getJson('/api/organizations');
-    const arr = Array.isArray(list) ? list : [];
-    const pick = arr.find((o) => (o.capabilities || []).includes('chat')) || arr[0];
-    if (!pick || !pick.uuid) throw Object.assign(new Error('no organization'), { status: 404 });
-    return pick.uuid;
-  }
-
-  const cookieOrg = () => (document.cookie.match(/(?:^|;\s*)lastActiveOrg=([0-9a-f-]{36})/i) || [])[1] || null;
-
-  async function readUsage() {
-    const fromCookie = !org && cookieOrg();
-    org = org || fromCookie || (await orgFromList());
-    try {
-      return await getJson(`/api/organizations/${org}/usage`);
-    } catch (e) {
-      if (!fromCookie) throw e;
-      org = await orgFromList(); // the cookie pointed at another organization
-      return getJson(`/api/organizations/${org}/usage`);
-    }
-  }
 
   /** The windows Claude reports, in a fixed order. Utilization is a percentage. */
   function parse(json) {
@@ -88,7 +59,7 @@
     if (busy) return busy;
     busy = (async () => {
       try {
-        const windows = parse(await readUsage());
+        const windows = parse(await CSR.claudeApi.orgGet('usage'));
         if (!windows.length) throw Object.assign(new Error('no usage windows'), { status: 0 });
         const prev = U.data || {};
         const data = { at: Date.now(), windows, delta: prev.delta == null ? null : prev.delta, deltaAt: prev.deltaAt || 0 };
@@ -104,7 +75,6 @@
       } catch (e) {
         U.error = e.status === 401 || e.status === 403 ? 'auth' : 'fail';
         if (CSR.alive()) chrome.storage.local.set({ usageError: { at: Date.now(), error: U.error } }).catch(() => {});
-        if (e.status === 403 || e.status === 404) org = null;
       } finally {
         lastFetch = Date.now();
         busy = null;
