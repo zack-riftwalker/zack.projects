@@ -103,3 +103,18 @@ interface DayOffDao {
     @Query("DELETE FROM days_off")
     suspend fun deleteAll()
 }
+
+@Dao
+interface SlotDao {
+    @Query("SELECT * FROM class_slots ORDER BY dayOfWeek, period, id")
+    fun observeAll(): Flow<List<ClassSlot>>
+
+    @Query("SELECT * FROM class_slots WHERE classId = :classId")
+    suspend fun forClass(classId: Long): List<ClassSlot>
+
+    @Insert
+    suspend fun insertAll(slots: List<ClassSlot>)
+
+    @Query("DELETE FROM class_slots WHERE classId = :classId")
+    suspend fun deleteForClass(classId: Long)
+}

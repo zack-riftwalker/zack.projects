@@ -7,7 +7,9 @@ import com.zack.madar.domain.schedule.ScheduleCalculator
 import com.zack.madar.domain.schedule.SessionRecord
 import com.zack.madar.domain.schedule.SessionStatus
 import com.zack.madar.domain.schedule.SlotState
-import com.zack.madar.domain.schedule.WeekdaySet
+import com.zack.madar.domain.schedule.SchoolWeek
+import com.zack.madar.domain.schedule.WeekRepeat
+import com.zack.madar.domain.schedule.WeeklySlot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -25,7 +27,7 @@ class ScheduleCalculatorTest {
     private val today = LocalDate.of(2026, 10, 3) // Saturday, 11 Mehr 1405
     private val mehr = JalaliMonthCalendar.monthOf(today)
     private val plan = ClassPlan(
-        weekdays = WeekdaySet.of(SATURDAY, TUESDAY),
+        slots = listOf(WeeklySlot(SATURDAY, 1), WeeklySlot(TUESDAY, 3)),
         trackingStart = LocalDate.of(2026, 9, 23),
         priorSessions = 3,
     )
@@ -135,5 +137,42 @@ class ScheduleCalculatorTest {
         assertEquals("امروز", PersianFormat.relativeDay(today, today, mehr.kind))
         assertEquals("سه‌شنبه ۱۴ مهر", PersianFormat.relativeDay(LocalDate.of(2026, 10, 6), today, mehr.kind))
         assertEquals("12", PersianFormat.toAsciiDigits("۱۲"))
+    }
+
+    @Test
+    fun schoolWeeksAlternateFromFirstOfMehr() {
+        // 1 Mehr 1405 is Wednesday 2026-09-23, so week 1 runs Sat 19 Sep – Fri 25 Sep.
+        assertTrue(SchoolWeek.isOdd(LocalDate.of(2026, 9, 23)))
+        assertTrue(SchoolWeek.isOdd(LocalDate.of(2026, 9, 19)))
+        assertFalse(SchoolWeek.isOdd(LocalDate.of(2026, 9, 26)))
+        assertTrue(SchoolWeek.isOdd(today))
+        assertFalse(SchoolWeek.isOdd(today, flip = true))
+        assertFalse(SchoolWeek.isOdd(LocalDate.of(2026, 10, 10)))
+    }
+
+    @Test
+    fun alternatingWeeksCountOnlyMatchingWeeks() {
+        // Saturday every week, Tuesday only in odd weeks: Tue 6 Oct and Tue 20 Oct.
+        val alternating = plan.copy(slots = listOf(WeeklySlot(SATURDAY, 1), WeeklySlot(TUESDAY, 3, WeekRepeat.ODD)))
+        val stats = ScheduleCalculator.monthStats(alternating, emptyList(), emptySet(), mehr, today)
+        assertEquals(6, stats.plannedThisMonth)
+        assertEquals(5, stats.remaining)
+        assertEquals(listOf(LocalDate.of(2026, 9, 26)), stats.missed)
+
+        val flipped = ScheduleCalculator.monthStats(alternating.copy(flipParity = true), emptyList(), emptySet(), mehr, today)
+        // Now the even weeks have Tuesday: 29 Sep and 13 Oct.
+        assertEquals(6, flipped.plannedThisMonth)
+        assertEquals(listOf(LocalDate.of(2026, 9, 26), LocalDate.of(2026, 9, 29)), flipped.missed)
+    }
+
+    @Test
+    fun twoSessionsOnOneDayNeedTwoLogs() {
+        val double = plan.copy(slots = listOf(WeeklySlot(SATURDAY, 1), WeeklySlot(SATURDAY, 2)))
+        val logs = listOf(held(9, 26), held(9, 26), held(10, 3))
+        val stats = ScheduleCalculator.monthStats(double, logs, emptySet(), mehr, today)
+        assertEquals(8, stats.plannedThisMonth)
+        assertEquals(3, stats.heldThisMonth)
+        assertTrue(stats.hasPendingToday)
+        assertEquals(5, stats.remaining)
     }
 }

@@ -1,14 +1,19 @@
 package com.zack.madar.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.zack.madar.domain.schedule.ClassPlan
+import com.zack.madar.domain.schedule.SchoolWeek
 import com.zack.madar.domain.schedule.SessionRecord
 import com.zack.madar.domain.schedule.SessionStatus
+import com.zack.madar.domain.schedule.WeekRepeat
 import com.zack.madar.domain.schedule.WeekdaySet
+import com.zack.madar.domain.schedule.WeeklySlot
 import kotlinx.serialization.Serializable
+import java.time.DayOfWeek
 import java.time.LocalDate
 
 @Serializable
@@ -21,6 +26,9 @@ data class School(
     /** [WeekdaySet] bits: the days the teacher is at this school. */
     val weekdays: Int,
     val sortOrder: Int = 0,
+    /** This school numbers odd/even weeks the other way round, see [SchoolWeek.isOdd]. */
+    @ColumnInfo(defaultValue = "0")
+    val flipParity: Boolean = false,
 ) {
     val weekdaySet: WeekdaySet get() = WeekdaySet(weekdays)
 }
@@ -43,7 +51,7 @@ data class SchoolClass(
     /** Grade/level, used to suggest topics from sibling classes, e.g. «هفتم». */
     val grade: String = "",
     val subject: String = "",
-    /** [WeekdaySet] bits when this class differs from its school; null inherits the school's days. */
+    /** Unused since schema v2 (the timetable lives in [ClassSlot]); kept so old rows and backups still load. */
     val weekdaysOverride: Int? = null,
     /** Sessions taught before the teacher started tracking this class in the app. */
     val priorSessions: Int = 0,
@@ -54,10 +62,35 @@ data class SchoolClass(
 ) {
     val trackingStart: LocalDate get() = LocalDate.ofEpochDay(trackingStartEpochDay)
 
-    fun weekdays(school: School?): WeekdaySet =
-        weekdaysOverride?.let(::WeekdaySet) ?: school?.weekdaySet ?: WeekdaySet.NONE
+    fun plan(school: School?, slots: List<ClassSlot>) = ClassPlan(
+        slots = slots.map { it.toWeeklySlot() },
+        trackingStart = trackingStart,
+        priorSessions = priorSessions,
+        flipParity = school?.flipParity ?: false,
+    )
+}
 
-    fun plan(school: School?) = ClassPlan(weekdays(school), trackingStart, priorSessions)
+/** One entry of a class's weekly timetable: day, period (زنگ) and odd/even weeks. */
+@Serializable
+@Entity(
+    tableName = "class_slots",
+    foreignKeys = [
+        ForeignKey(SchoolClass::class, ["id"], ["classId"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [Index("classId")],
+)
+data class ClassSlot(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val classId: Long,
+    /** ISO day of week, 1 = Monday … 7 = Sunday. */
+    val dayOfWeek: Int,
+    /** زنگ, starting at 1. */
+    val period: Int,
+    val repeat: WeekRepeat = WeekRepeat.EVERY,
+) {
+    val day: DayOfWeek get() = DayOfWeek.of(dayOfWeek)
+
+    fun toWeeklySlot() = WeeklySlot(day, period, repeat)
 }
 
 @Serializable

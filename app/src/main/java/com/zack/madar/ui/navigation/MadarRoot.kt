@@ -47,6 +47,7 @@ import com.zack.madar.ui.school.EditSchoolScreen
 import com.zack.madar.ui.settings.SettingsScreen
 import com.zack.madar.ui.theme.MadarTheme
 import com.zack.madar.ui.theme.isDarkTheme
+import com.zack.madar.ui.timetable.TimetableScreen
 import com.zack.madar.ui.today.TodayScreen
 import kotlinx.serialization.Serializable
 import kotlin.reflect.KClass
@@ -56,6 +57,8 @@ import kotlin.reflect.KClass
 @Serializable object ClassesRoute
 
 @Serializable object CalendarRoute
+
+@Serializable object TimetableRoute
 
 @Serializable object SettingsRoute
 
@@ -69,6 +72,7 @@ private data class Tab(val route: Any, val type: KClass<*>, val label: String, @
 
 private val tabs = listOf(
     Tab(TodayRoute, TodayRoute::class, "امروز", R.drawable.ic_atom),
+    Tab(TimetableRoute, TimetableRoute::class, "برنامه", R.drawable.ic_timetable),
     Tab(ClassesRoute, ClassesRoute::class, "کلاس‌ها", R.drawable.ic_elements),
     Tab(CalendarRoute, CalendarRoute::class, "تقویم", R.drawable.ic_month),
 )
@@ -160,6 +164,18 @@ fun MadarRoot(vm: MadarViewModel, versionName: String, onDarkTheme: (Boolean) ->
                         onEditSchool = { nav.navigate(EditSchoolRoute(it)) },
                     )
                 }
+                composable<TimetableRoute> {
+                    TimetableScreen(
+                        state = state,
+                        onOpenClass = { nav.navigate(ClassDetailRoute(it)) },
+                        onEditClasses = {
+                            nav.navigate(ClassesRoute) {
+                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                            }
+                        },
+                    )
+                }
                 composable<CalendarRoute> {
                     CalendarScreen(
                         state = state,
@@ -198,8 +214,8 @@ fun MadarRoot(vm: MadarViewModel, versionName: String, onDarkTheme: (Boolean) ->
                             vm.addClasses(template, names)
                             back()
                         },
-                        onUpdate = {
-                            vm.updateClass(it)
+                        onUpdate = { cls, timetable ->
+                            vm.updateClass(cls, timetable)
                             back()
                         },
                     )

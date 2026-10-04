@@ -14,8 +14,8 @@ android {
         applicationId = "com.zack.madar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -35,6 +35,11 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    sourceSets {
+        // Room's exported schemas, read by the Robolectric migration test (debug builds only).
+        getByName("debug").assets.srcDir("$projectDir/schemas")
     }
 
     testOptions {

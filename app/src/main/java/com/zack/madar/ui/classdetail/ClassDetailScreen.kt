@@ -61,6 +61,7 @@ import com.zack.madar.data.db.Session
 import com.zack.madar.domain.format.PersianFormat
 import com.zack.madar.domain.schedule.ScheduleCalculator
 import com.zack.madar.domain.schedule.SessionStatus
+import com.zack.madar.domain.schedule.WeekRepeat
 import com.zack.madar.ui.AppState
 import com.zack.madar.ui.ClassOverview
 import com.zack.madar.ui.components.ElementTile
@@ -215,6 +216,22 @@ private fun ClassDetailContent(
                     }
                     Spacer(Modifier.height(10.dp))
                     OrbitLegend(color)
+                    val weekly = state.snapshot.slotsOf(overview.id).sortedWith(compareBy({ (it.dayOfWeek + 1) % 7 }, { it.period }))
+                    if (weekly.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "برنامه: " + weekly.joinToString(" · ") { slot ->
+                                "${PersianFormat.weekdayName(slot.day)} زنگ ${PersianFormat.digits(slot.period)}" +
+                                    when (slot.repeat) {
+                                        WeekRepeat.EVERY -> ""
+                                        WeekRepeat.ODD -> " (فرد)"
+                                        WeekRepeat.EVEN -> " (زوج)"
+                                    }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -380,7 +397,7 @@ private fun LastTopicCard(
                     Text(last.notes, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (!overview.stats.isLoggedToday && overview.stats.isScheduledToday) {
+            if (overview.stats.hasPendingToday) {
                 Spacer(Modifier.height(10.dp))
                 FilledTonalButton(onClick = { onLog(state.today) }) { Text("ثبت جلسه‌ی امروز") }
             }

@@ -33,6 +33,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -54,6 +57,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.zack.madar.data.db.School
 import com.zack.madar.domain.format.PersianFormat
+import com.zack.madar.domain.schedule.SchoolWeek
 import com.zack.madar.domain.schedule.WeekdaySet
 import com.zack.madar.ui.AppState
 import com.zack.madar.ui.components.ElementTile
@@ -79,6 +83,7 @@ fun EditSchoolScreen(
     var submitted by remember { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf(existing?.name.orEmpty()) }
     var weekdays by rememberSaveable { mutableIntStateOf(existing?.weekdays ?: 0) }
+    var flipParity by rememberSaveable { mutableStateOf(existing?.flipParity ?: false) }
     var colorIndex by rememberSaveable {
         mutableIntStateOf(existing?.colorIndex ?: (state.snapshot.schools.size % SchoolPalette.groups.size))
     }
@@ -98,7 +103,7 @@ fun EditSchoolScreen(
         }
         submitted = true
         val base = existing ?: School(name = "", colorIndex = 0, weekdays = 0)
-        onSave(base.copy(name = name.trim(), colorIndex = colorIndex, weekdays = weekdays))
+        onSave(base.copy(name = name.trim(), colorIndex = colorIndex, weekdays = weekdays, flipParity = flipParity))
     }
 
     LabBackground(Modifier.fillMaxSize()) {
@@ -148,10 +153,30 @@ fun EditSchoolScreen(
                                 if (showErrors && daysError) {
                                     "حداقل یک روز را انتخاب کن"
                                 } else {
-                                    "کلاس‌های این مدرسه به‌طور پیش‌فرض همین روزها تشکیل می‌شوند؛ برای هر کلاس می‌شود جدا تغییرش داد."
+                                    "این روزها در جدول زنگ‌های کلاس‌ها پررنگ نشان داده می‌شوند."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (showErrors && daysError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        // Ask about this week rather than about a counting rule: it's what the teacher knows.
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("این هفته در این مدرسه، هفته‌ی…", style = MaterialTheme.typography.titleSmall)
+                            val oddNow = SchoolWeek.isOdd(state.today, flipParity)
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                listOf(true to "فرد", false to "زوج").forEachIndexed { i, (odd, label) ->
+                                    SegmentedButton(
+                                        selected = oddNow == odd,
+                                        onClick = { flipParity = SchoolWeek.isOdd(state.today) != odd },
+                                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                                    ) { Text(label) }
+                                }
+                            }
+                            Text(
+                                "برای کلاس‌هایی که یک هفته در میان جلسه‌ی اضافه دارند. هفته‌ی اول مهر «فرد» حساب می‌شود؛ اگر مدرسه برعکس می‌شمرد، اینجا درستش کن.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }

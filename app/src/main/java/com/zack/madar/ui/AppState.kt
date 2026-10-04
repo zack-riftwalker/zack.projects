@@ -40,7 +40,7 @@ data class AppState(
         val school = snapshot.school(c.schoolId)
         val sessions = snapshot.sessionsOf(c.id)
         val stats = ScheduleCalculator.monthStats(
-            plan = c.plan(school),
+            plan = snapshot.planOf(c),
             sessions = sessions.map { it.toRecord() },
             daysOff = snapshot.daysOffFor(c.schoolId),
             month = month,
@@ -92,7 +92,7 @@ data class ClassOverview(
 ) {
     val id: Long get() = schoolClass.id
     val colorIndex: Int get() = school?.colorIndex ?: 0
-    val needsAttention: Boolean get() = stats.missed.isNotEmpty() || (stats.isScheduledToday && !stats.isLoggedToday)
+    val needsAttention: Boolean get() = stats.missed.isNotEmpty() || stats.hasPendingToday
 }
 
 data class TopicSuggestion(val label: String, val topic: String, val chapter: String, val page: String)

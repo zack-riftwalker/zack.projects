@@ -103,7 +103,7 @@ fun LogSessionForm(
 
     // Quick dates: today plus this class's recent regular days, newest first.
     val quickDates = remember(state.today, cls.id, draft.date) {
-        val plan = cls.plan(overview.school)
+        val plan = state.snapshot.planOf(cls)
         val recent = (0L..14L).map { state.today.minusDays(it) }
             .filter { it == state.today || ScheduleCalculator.isScheduled(plan, it) }
             .take(4)

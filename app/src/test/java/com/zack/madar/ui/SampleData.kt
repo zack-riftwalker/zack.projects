@@ -1,5 +1,6 @@
 package com.zack.madar.ui
 
+import com.zack.madar.data.db.ClassSlot
 import com.zack.madar.data.db.DayOff
 import com.zack.madar.data.db.School
 import com.zack.madar.data.db.SchoolClass
@@ -8,6 +9,7 @@ import com.zack.madar.data.prefs.Settings
 import com.zack.madar.data.prefs.ThemeMode
 import com.zack.madar.data.repo.Snapshot
 import com.zack.madar.domain.schedule.SessionStatus
+import com.zack.madar.domain.schedule.WeekRepeat
 import com.zack.madar.domain.schedule.WeekdaySet
 import java.time.DayOfWeek.MONDAY
 import java.time.DayOfWeek.SATURDAY
@@ -52,8 +54,20 @@ object SampleData {
 
     val daysOff = listOf(DayOff(1, d(10, 13), null, "تعطیل رسمی"))
 
+    private var slotId = 0L
+    private fun slot(classId: Long, day: java.time.DayOfWeek, period: Int, repeat: WeekRepeat = WeekRepeat.EVERY) =
+        ClassSlot(++slotId, classId, day.value, period, repeat)
+
+    val slots = listOf(
+        slot(1, SATURDAY, 1), slot(1, SUNDAY, 2),
+        slot(2, SATURDAY, 2), slot(2, SUNDAY, 1),
+        slot(3, SATURDAY, 3), slot(3, SUNDAY, 3, WeekRepeat.EVEN),
+        slot(4, MONDAY, 1), slot(4, TUESDAY, 2),
+        slot(5, TUESDAY, 1), slot(5, MONDAY, 2, WeekRepeat.ODD),
+    )
+
     fun state(dark: Boolean) = AppState(
-        snapshot = Snapshot(schools, classes, sessions, daysOff),
+        snapshot = Snapshot(schools, classes, sessions, daysOff, slots),
         settings = Settings(theme = if (dark) ThemeMode.DARK else ThemeMode.LIGHT),
         today = today,
         loaded = true,

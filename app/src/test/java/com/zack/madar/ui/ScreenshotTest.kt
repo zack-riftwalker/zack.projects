@@ -20,6 +20,7 @@ import com.zack.madar.ui.logsession.LogSessionForm
 import com.zack.madar.ui.school.EditSchoolScreen
 import com.zack.madar.ui.settings.SettingsScreen
 import com.zack.madar.ui.theme.MadarTheme
+import com.zack.madar.ui.timetable.TimetableScreen
 import com.zack.madar.ui.today.TodayScreen
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -88,13 +89,23 @@ class ScreenshotTest {
     }
 
     @Test
+    fun timetable() = both("10_timetable") { s ->
+        TimetableScreen(s, {}, {})
+    }
+
+    @Test
+    fun editClassTimetable() = both("11_edit_class_timetable") { s ->
+        EditClassScreen(s, classId = 3, initialSchoolId = 1, onBack = {}, onAdd = { _, _ -> }, onUpdate = { _, _ -> })
+    }
+
+    @Test
     fun calendar() = both("06_calendar") { s ->
         CalendarScreen(s, {}, { _, _ -> }, { _, _ -> })
     }
 
     @Test
     fun editClass() = both("07_add_classes") { s ->
-        EditClassScreen(s, classId = 0, initialSchoolId = 2, onBack = {}, onAdd = { _, _ -> }, onUpdate = {})
+        EditClassScreen(s, classId = 0, initialSchoolId = 2, onBack = {}, onAdd = { _, _ -> }, onUpdate = { _, _ -> })
     }
 
     @Test

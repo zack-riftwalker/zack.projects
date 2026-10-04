@@ -1,6 +1,8 @@
 package com.zack.madar.data.backup
 
+import com.zack.madar.data.db.ClassSlot
 import com.zack.madar.data.db.DayOff
+import com.zack.madar.data.db.LegacySlots
 import com.zack.madar.data.db.School
 import com.zack.madar.data.db.SchoolClass
 import com.zack.madar.data.db.Session
@@ -17,10 +19,12 @@ private data class BackupFile(
     val classes: List<SchoolClass>,
     val sessions: List<Session>,
     val daysOff: List<DayOff>,
+    /** Absent in version-1 files, which are converted with [LegacySlots]. */
+    val slots: List<ClassSlot>? = null,
 )
 
 private const val FORMAT = "madar-backup"
-private const val VERSION = 1
+private const val VERSION = 2
 
 class InvalidBackupException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
@@ -42,6 +46,7 @@ object BackupCodec {
                 classes = snapshot.classes,
                 sessions = snapshot.sessions,
                 daysOff = snapshot.daysOff,
+                slots = snapshot.slots,
             ),
         )
 
@@ -62,6 +67,11 @@ object BackupCodec {
         ) {
             throw InvalidBackupException("backup references missing records")
         }
-        return Snapshot(file.schools, file.classes, file.sessions, file.daysOff)
+        val slots = file.slots ?: LegacySlots.derive(
+            file.schools.associate { it.id to it.weekdays },
+            file.classes.map { LegacySlots.LegacyClass(it.id, it.schoolId, it.weekdaysOverride, it.sortOrder) },
+        )
+        if (slots.any { it.classId !in classIds }) throw InvalidBackupException("backup references missing records")
+        return Snapshot(file.schools, file.classes, file.sessions, file.daysOff, slots)
     }
 }

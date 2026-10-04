@@ -1,11 +1,13 @@
 package com.zack.madar.data.repo
 
 import androidx.room.withTransaction
+import com.zack.madar.data.db.ClassSlot
 import com.zack.madar.data.db.DayOff
 import com.zack.madar.data.db.MadarDatabase
 import com.zack.madar.data.db.School
 import com.zack.madar.data.db.SchoolClass
 import com.zack.madar.data.db.Session
+import com.zack.madar.domain.schedule.ClassPlan
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.time.LocalDate
@@ -16,9 +18,15 @@ data class Snapshot(
     val classes: List<SchoolClass> = emptyList(),
     val sessions: List<Session> = emptyList(),
     val daysOff: List<DayOff> = emptyList(),
+    val slots: List<ClassSlot> = emptyList(),
 ) {
     private val schoolsById by lazy { schools.associateBy { it.id } }
     private val sessionsByClass by lazy { sessions.groupBy { it.classId } }
+    private val slotsByClass by lazy { slots.groupBy { it.classId } }
+
+    fun slotsOf(classId: Long): List<ClassSlot> = slotsByClass[classId].orEmpty()
+
+    fun planOf(c: SchoolClass): ClassPlan = c.plan(school(c.schoolId), slotsOf(c.id))
 
     fun school(id: Long): School? = schoolsById[id]
 
@@ -30,8 +38,11 @@ data class Snapshot(
     val activeClasses: List<SchoolClass> get() = classes.filterNot { it.archived }
 }
 
-/** A deleted class together with its sessions, so the deletion can be undone. */
-data class DeletedClass(val schoolClass: SchoolClass, val sessions: List<Session>)
+/** A class to create: its name, tile symbol and weekly timetable. */
+data class NewClass(val name: String, val symbol: String, val slots: List<ClassSlot>)
+
+/** A deleted class together with its sessions and timetable, so the deletion can be undone. */
+data class DeletedClass(val schoolClass: SchoolClass, val sessions: List<Session>, val slots: List<ClassSlot>)
 
 class MadarRepository(private val db: MadarDatabase) {
 
@@ -39,13 +50,15 @@ class MadarRepository(private val db: MadarDatabase) {
     private val classes = db.classDao()
     private val sessions = db.sessionDao()
     private val daysOff = db.dayOffDao()
+    private val slots = db.slotDao()
 
     val snapshot: Flow<Snapshot> = combine(
         schools.observeAll(),
         classes.observeAll(),
         sessions.observeAll(),
         daysOff.observeAll(),
-    ) { s, c, ses, off -> Snapshot(s, c, ses, off) }
+        slots.observeAll(),
+    ) { s, c, ses, off, sl -> Snapshot(s, c, ses, off, sl) }
 
     // Schools
 
@@ -61,24 +74,32 @@ class MadarRepository(private val db: MadarDatabase) {
 
     // Classes
 
-    suspend fun addClasses(template: SchoolClass, names: List<Pair<String, String>>) = db.withTransaction {
+    /** Adds one class per entry; each comes with its own weekly timetable (classId is filled in here). */
+    suspend fun addClasses(template: SchoolClass, entries: List<NewClass>) = db.withTransaction {
         var order = classes.nextSortOrder()
-        classes.insertAll(
-            names.map { (name, symbol) -> template.copy(id = 0, name = name, symbol = symbol, sortOrder = order++) },
-        )
+        for (e in entries) {
+            val id = classes.insert(template.copy(id = 0, name = e.name, symbol = e.symbol, sortOrder = order++))
+            slots.insertAll(e.slots.map { it.copy(id = 0, classId = id) })
+        }
     }
 
-    suspend fun updateClass(schoolClass: SchoolClass) = classes.update(schoolClass)
+    suspend fun updateClass(schoolClass: SchoolClass, timetable: List<ClassSlot>) = db.withTransaction {
+        classes.update(schoolClass)
+        slots.deleteForClass(schoolClass.id)
+        slots.insertAll(timetable.map { it.copy(id = 0, classId = schoolClass.id) })
+    }
 
     suspend fun deleteClass(schoolClass: SchoolClass): DeletedClass = db.withTransaction {
         val owned = sessions.forClass(schoolClass.id)
+        val timetable = slots.forClass(schoolClass.id)
         classes.delete(schoolClass)
-        DeletedClass(schoolClass, owned)
+        DeletedClass(schoolClass, owned, timetable)
     }
 
     suspend fun restoreClass(deleted: DeletedClass) = db.withTransaction {
         classes.insert(deleted.schoolClass)
         sessions.insertAll(deleted.sessions)
+        slots.insertAll(deleted.slots)
     }
 
     // Sessions
@@ -128,5 +149,6 @@ class MadarRepository(private val db: MadarDatabase) {
         classes.insertAll(data.classes)
         sessions.insertAll(data.sessions)
         daysOff.insertAll(data.daysOff)
+        slots.insertAll(data.slots)
     }
 }

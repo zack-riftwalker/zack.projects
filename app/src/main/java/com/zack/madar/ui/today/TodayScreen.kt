@@ -185,7 +185,7 @@ fun TodayScreen(
 
 private fun todaySubtitle(todays: List<ClassOverview>): String? {
     if (todays.isEmpty()) return null
-    val pending = todays.count { !it.stats.isLoggedToday }
+    val pending = todays.count { it.stats.hasPendingToday }
     val schools = todays.mapNotNull { it.school?.name }.distinct().joinToString("، ")
     val status = if (pending == 0) "همه ثبت شد ✓" else "${PersianFormat.digits(pending)} کلاس منتظر ثبت"
     return "$schools · $status"
@@ -305,7 +305,8 @@ private fun TodayClassCard(overview: ClassOverview, onOpen: () -> Unit, onLog: (
                 }
             }
             Spacer(Modifier.width(8.dp))
-            if (logged != null) {
+            // With two sessions on one day, keep offering «ثبت» until both are logged.
+            if (logged != null && !overview.stats.hasPendingToday) {
                 TextButton(onClick = onEdit) {
                     Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Lab.colors.held, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
@@ -360,7 +361,7 @@ private fun nextTeachingDay(state: AppState): Pair<LocalDate, List<Long>>? {
     val snapshot = state.snapshot
     // Plans and holidays don't change across the 21-day scan, so build them once per class.
     val plans = snapshot.activeClasses.map { c ->
-        Triple(c.id, c.plan(snapshot.school(c.schoolId)), snapshot.daysOffFor(c.schoolId))
+        Triple(c.id, snapshot.planOf(c), snapshot.daysOffFor(c.schoolId))
     }
     for (offset in 1L..21L) {
         val date = state.today.plusDays(offset)

@@ -9,12 +9,14 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.zack.madar.MadarApp
 import com.zack.madar.data.backup.BackupCodec
+import com.zack.madar.data.db.ClassSlot
 import com.zack.madar.data.db.School
 import com.zack.madar.data.db.SchoolClass
 import com.zack.madar.data.db.Session
 import com.zack.madar.data.prefs.SettingsRepository
 import com.zack.madar.data.prefs.ThemeMode
 import com.zack.madar.data.repo.MadarRepository
+import com.zack.madar.data.repo.NewClass
 import com.zack.madar.domain.calendar.CalendarKind
 import com.zack.madar.domain.format.PersianFormat
 import com.zack.madar.domain.schedule.SessionStatus
@@ -167,19 +169,19 @@ class MadarViewModel(
         }
     }
 
-    fun addClasses(template: SchoolClass, names: List<Pair<String, String>>) {
+    fun addClasses(template: SchoolClass, names: List<NewClass>) {
         viewModelScope.launch {
             repo.addClasses(template, names)
             say(
-                if (names.size == 1) "کلاس «${names[0].first}» اضافه شد"
+                if (names.size == 1) "کلاس «${names[0].name}» اضافه شد"
                 else "${PersianFormat.digits(names.size)} کلاس اضافه شد",
             )
         }
     }
 
-    fun updateClass(schoolClass: SchoolClass) {
+    fun updateClass(schoolClass: SchoolClass, timetable: List<ClassSlot>) {
         viewModelScope.launch {
-            repo.updateClass(schoolClass)
+            repo.updateClass(schoolClass, timetable)
             say("کلاس ذخیره شد")
         }
     }

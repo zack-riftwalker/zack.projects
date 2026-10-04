@@ -11,15 +11,23 @@ data class SessionRecord(val id: Long, val date: LocalDate, val status: SessionS
 /**
  * How a class meets.
  *
- * @param weekdays the days the class normally meets (inherited from its school unless overridden).
+ * @param slots its weekly timetable entries (day, period, odd/even weeks).
+ * @param flipParity the school counts odd/even weeks the other way round, see [SchoolWeek.isOdd].
  * @param trackingStart the first day the app is responsible for; earlier scheduled days are never "missed".
  * @param priorSessions sessions already taught before the teacher started using the app.
  */
 data class ClassPlan(
-    val weekdays: WeekdaySet,
+    val slots: List<WeeklySlot>,
     val trackingStart: LocalDate,
     val priorSessions: Int,
-)
+    val flipParity: Boolean = false,
+) {
+    /** Regular sessions on [date] by the timetable alone (ignores tracking start and holidays). */
+    fun sessionsOn(date: LocalDate): Int = slots.count { SchoolWeek.runsOn(it, date, flipParity) }
+
+    /** Whether the class ever meets on this weekday, in either week. */
+    fun meetsOnWeekday(date: LocalDate): Boolean = slots.any { it.day == date.dayOfWeek }
+}
 
 enum class SlotState {
     /** Held on a regular day. */
@@ -62,6 +70,9 @@ data class ClassMonthStats(
 ) {
     val nextSessionNumber: Int get() = lastSessionNumber + 1
 
+    /** A session is due today and not logged yet (there may be two on one day). */
+    val hasPendingToday: Boolean get() = slots.any { it.state == SlotState.TODAY }
+
     /** Sessions that make up this month's plan: held + still to come + past days awaiting a log. */
     val plannedThisMonth: Int get() = heldThisMonth + remaining + missed.size
 }
@@ -86,20 +97,30 @@ object ScheduleCalculator {
 
         for (date in month.dates()) {
             val logs = byDate[date].orEmpty()
-            val scheduled = isScheduled(plan, date)
+            val expected = expectedOn(plan, date)
             val held = logs.count { it.status == SessionStatus.HELD }
-            when {
-                held > 0 -> repeat(held) {
-                    val regularDay = date.dayOfWeek in plan.weekdays
-                    slots += MonthSlot(date, if (regularDay) SlotState.HELD else SlotState.EXTRA)
-                }
-                logs.isNotEmpty() -> slots += MonthSlot(date, SlotState.CANCELED)
-                !scheduled -> Unit
-                date in daysOff -> slots += MonthSlot(date, SlotState.DAY_OFF)
-                date.isBefore(today) -> slots += MonthSlot(date, SlotState.MISSED)
-                date == today -> slots += MonthSlot(date, SlotState.TODAY)
-                else -> slots += MonthSlot(date, SlotState.UPCOMING)
+            val canceled = logs.size - held
+
+            if (expected == 0) {
+                // Not a regular day: any held session is a make-up (جبرانی).
+                val regularDay = plan.meetsOnWeekday(date)
+                repeat(held) { slots += MonthSlot(date, if (regularDay) SlotState.HELD else SlotState.EXTRA) }
+                if (held == 0 && canceled > 0) slots += MonthSlot(date, SlotState.CANCELED)
+                continue
             }
+            val heldRegular = minOf(held, expected)
+            val canceledRegular = minOf(canceled, expected - heldRegular)
+            val open = expected - heldRegular - canceledRegular
+            repeat(heldRegular) { slots += MonthSlot(date, SlotState.HELD) }
+            repeat(held - heldRegular) { slots += MonthSlot(date, SlotState.EXTRA) }
+            repeat(canceledRegular) { slots += MonthSlot(date, SlotState.CANCELED) }
+            val openState = when {
+                date in daysOff -> SlotState.DAY_OFF
+                date.isBefore(today) -> SlotState.MISSED
+                date == today -> SlotState.TODAY
+                else -> SlotState.UPCOMING
+            }
+            repeat(open) { slots += MonthSlot(date, openState) }
         }
 
         val todayLogs = sessions.filter { it.date == today }
@@ -112,7 +133,7 @@ object ScheduleCalculator {
             missed = slots.filter { it.state == SlotState.MISSED }.map { it.date },
             upcoming = slots.filter { it.state == SlotState.TODAY || it.state == SlotState.UPCOMING }.map { it.date },
             lastSessionNumber = plan.priorSessions + sessions.count { it.status == SessionStatus.HELD },
-            isScheduledToday = isScheduled(plan, today) && today !in daysOff,
+            isScheduledToday = expectedOn(plan, today) > 0 && today !in daysOff,
             isLoggedToday = todayLogs.isNotEmpty(),
         )
     }
@@ -125,6 +146,9 @@ object ScheduleCalculator {
             .mapIndexed { index, s -> s.id to priorSessions + index + 1 }
             .toMap()
 
-    fun isScheduled(plan: ClassPlan, date: LocalDate): Boolean =
-        date.dayOfWeek in plan.weekdays && !date.isBefore(plan.trackingStart)
+    /** Regular sessions the app expects on [date]: the timetable's count, from the tracking start on. */
+    fun expectedOn(plan: ClassPlan, date: LocalDate): Int =
+        if (date.isBefore(plan.trackingStart)) 0 else plan.sessionsOn(date)
+
+    fun isScheduled(plan: ClassPlan, date: LocalDate): Boolean = expectedOn(plan, date) > 0
 }

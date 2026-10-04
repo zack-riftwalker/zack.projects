@@ -5,12 +5,15 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.zack.madar.data.backup.BackupCodec
 import com.zack.madar.data.backup.InvalidBackupException
+import com.zack.madar.data.db.ClassSlot
 import com.zack.madar.data.db.DayOff
 import com.zack.madar.data.db.MadarDatabase
 import com.zack.madar.data.db.School
 import com.zack.madar.data.db.SchoolClass
 import com.zack.madar.data.db.Session
 import com.zack.madar.data.repo.MadarRepository
+import com.zack.madar.data.repo.NewClass
+import com.zack.madar.domain.schedule.WeekRepeat
 import com.zack.madar.domain.schedule.WeekdaySet
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -49,7 +52,10 @@ class RepositoryTest {
         )
         repo.addClasses(
             SchoolClass(schoolId = schoolId, name = "", symbol = "", grade = "هفتم", trackingStartEpochDay = start),
-            listOf("هفتم ۱" to "۷۰۱", "هفتم ۲" to "۷۰۲"),
+            listOf(
+                NewClass("هفتم ۱", "۷۰۱", listOf(ClassSlot(classId = 0, dayOfWeek = 6, period = 1))),
+                NewClass("هفتم ۲", "۷۰۲", listOf(ClassSlot(classId = 0, dayOfWeek = 6, period = 2, repeat = WeekRepeat.ODD))),
+            ),
         )
         return schoolId
     }
@@ -59,7 +65,9 @@ class RepositoryTest {
         val schoolId = seed()
         val snapshot = repo.snapshot.first()
         assertEquals(listOf("۷۰۱", "۷۰۲"), snapshot.classes.map { it.symbol })
-        assertTrue(snapshot.classes.all { it.schoolId == schoolId && it.weekdaysOverride == null })
+        assertTrue(snapshot.classes.all { it.schoolId == schoolId })
+        val second = snapshot.classes[1]
+        assertEquals(listOf(2 to WeekRepeat.ODD), snapshot.slotsOf(second.id).map { it.period to it.repeat })
         assertEquals(listOf(0, 1), snapshot.classes.map { it.sortOrder })
     }
 
@@ -123,5 +131,47 @@ class RepositoryTest {
     @Test(expected = InvalidBackupException::class)
     fun rejectsForeignJson() {
         BackupCodec.decode("""{"hello": "world"}""")
+    }
+
+    @Test
+    fun deletingAClassRestoresItsTimetableOnUndo() = runTest {
+        seed()
+        val cls = repo.snapshot.first().classes.first()
+        val deleted = repo.deleteClass(cls)
+        assertTrue(repo.snapshot.first().slots.none { it.classId == cls.id })
+        repo.restoreClass(deleted)
+        assertEquals(1, repo.snapshot.first().slotsOf(cls.id).size)
+    }
+
+    @Test
+    fun updatingAClassReplacesItsTimetable() = runTest {
+        seed()
+        val cls = repo.snapshot.first().classes.first()
+        repo.updateClass(
+            cls.copy(name = "هفتم الف"),
+            listOf(
+                ClassSlot(classId = 0, dayOfWeek = 6, period = 3),
+                ClassSlot(classId = 0, dayOfWeek = 2, period = 1, repeat = WeekRepeat.EVEN),
+            ),
+        )
+        val snapshot = repo.snapshot.first()
+        assertEquals("هفتم الف", snapshot.classes.first { it.id == cls.id }.name)
+        assertEquals(setOf(3, 1), snapshot.slotsOf(cls.id).map { it.period }.toSet())
+    }
+
+    @Test
+    fun versionOneBackupGetsTimetableFromWeekdays() {
+        val v1 = """
+            {"format":"madar-backup","version":1,"exportedAt":0,
+             "schools":[{"id":1,"name":"الف","colorIndex":0,"weekdays":96,"sortOrder":0}],
+             "classes":[
+               {"id":1,"schoolId":1,"name":"هفتم ۱","symbol":"۷۰۱","trackingStartEpochDay":20719,"sortOrder":0},
+               {"id":2,"schoolId":1,"name":"هفتم ۲","symbol":"۷۰۲","weekdaysOverride":32,"trackingStartEpochDay":20719,"sortOrder":1}],
+             "sessions":[],"daysOff":[]}
+        """.trimIndent()
+        val snapshot = BackupCodec.decode(v1)
+        // School days 96 = Saturday (bit 5) + Sunday (bit 6); class 2 overrides with Saturday only.
+        assertEquals(setOf(6 to 1, 7 to 1), snapshot.slotsOf(1).map { it.dayOfWeek to it.period }.toSet())
+        assertEquals(listOf(6 to 2), snapshot.slotsOf(2).map { it.dayOfWeek to it.period })
     }
 }
