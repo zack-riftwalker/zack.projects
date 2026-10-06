@@ -380,12 +380,19 @@ export class StoreDb {
     return !!row;
   }
 
-  async recordDiscountCodeRedemption(discountCodeId: number, customerTelegramId: number, orderId: number) {
+  /**
+   * Records the redemption only if the per-customer and max_uses rules still hold — one statement, so two
+   * confirms racing each other (two pending receipts with the same code) can't both get it. true = recorded.
+   */
+  async redeemDiscountCodeAtomic(discountCodeId: number, customerTelegramId: number, orderId: number): Promise<boolean> {
     const r = await this.q(`
     INSERT INTO discount_code_redemptions (discount_code_id, customer_telegram_id, order_id)
-    VALUES (?, ?, ?)
-  `, discountCodeId, customerTelegramId, orderId).run();
-    return { lastInsertRowid: r.meta.last_row_id };
+    SELECT d.id, ?, ? FROM discount_codes d
+    WHERE  d.id = ?
+      AND  NOT EXISTS (SELECT 1 FROM discount_code_redemptions r WHERE r.discount_code_id = d.id AND r.customer_telegram_id = ?)
+      AND  (d.max_uses IS NULL OR (SELECT COUNT(*) FROM discount_code_redemptions r WHERE r.discount_code_id = d.id) < d.max_uses)
+  `, customerTelegramId, orderId, discountCodeId, customerTelegramId).run();
+    return r.meta.changes === 1;
   }
 
   // ─── Store settings ──────────────────────────────────────────────────────

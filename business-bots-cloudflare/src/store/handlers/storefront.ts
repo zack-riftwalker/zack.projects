@@ -484,6 +484,16 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   bot.callbackQuery(/^order_reject_(\d+)$/, (ctx) => handleOrderDecision(ctx, 'rejected'));
 }
 
+const DISCOUNT_REASON_ADMIN: Record<string, string> = {
+  not_found: 'کد حذف شده',
+  inactive: 'کد غیرفعال شده',
+  wrong_product: 'کد برای این محصول نیست',
+  expired: 'کد منقضی شده',
+  max_uses: 'ظرفیت کد پر شده',
+  already_used: 'مشتری قبلاً از این کد استفاده کرده یا ظرفیت پر شده',
+  check_failed: 'بررسی کد ناموفق بود',
+};
+
 /** Shared confirm/reject handler. Double-tap / second-admin safe via decideOrder's status guard. */
 async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rejected') {
   if (!isAdminId(ctx.app.cfg, ctx.from?.id)) return ctx.answerCallbackQuery('⛔️ دسترسی ندارید.');
@@ -515,6 +525,7 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
     return;
   }
 
+  let discountWarning = '';
   if (status === 'confirmed') {
     // Snapshot the product's subscription/warranty terms onto the order now
     // (the catalog item may change later).
@@ -527,31 +538,42 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
     } catch (err: any) {
       console.error('❌ [Storefront] setOrderSubscriptionSnapshot failed for order #' + orderId + ':', err.message);
     }
+
+    if (order.discount_code_id) {
+      // Re-check the code's rules at confirm time (not just at code-entry time), then record the
+      // redemption atomically — two receipts sent with the same code can't both consume it.
+      const revalidation = await validateDiscountCodeForOrder(
+        ctx.app, order.discount_code_id, order.customer_product_id, order.customer_telegram_id,
+      );
+      let reason: string | null = revalidation.ok ? null : revalidation.reason;
+      if (revalidation.ok) {
+        try {
+          if (!(await ctx.app.db.redeemDiscountCodeAtomic(order.discount_code_id, order.customer_telegram_id, order.id))) {
+            reason = 'already_used'; // lost the race to another order with the same code (per-customer or max_uses)
+          }
+        } catch (err: any) {
+          console.error('❌ [Storefront] redeemDiscountCodeAtomic failed:', err.message);
+        }
+      }
+      if (reason) {
+        console.warn(
+          '⚠️ [Storefront] Order #' + orderId + ' confirmed, but its discount code (id ' +
+          order.discount_code_id + ') is no longer valid at confirm time (reason: ' + reason + ') — redemption NOT recorded.',
+        );
+        // The receipt was paid at the discounted price: the admin must know before delivering.
+        discountWarning =
+          '\n⚠️ کد تخفیف این سفارش هنگام تایید دیگر معتبر نبود (' + (DISCOUNT_REASON_ADMIN[reason] ?? reason) + ').' +
+          ' مبلغ پرداخت‌شده با تخفیف: ' + formatPrice(order.price) + ' تومان' +
+          (product ? '؛ قیمت اصلی: ' + formatPrice(product.price) + ' تومان' : '') + '.';
+      }
+    }
   }
 
   const label = status === 'confirmed' ? '✅ تایید شد' : '❌ رد شد';
-  await ctx.answerCallbackQuery(label).catch(() => {});
-  await ctx.editMessageCaption({ caption: originalCaption + '\n\n' + label + ' (توسط ادمین).' }).catch(() => {});
-
-  if (status === 'confirmed' && order.discount_code_id) {
-    // Re-check the code's rules at confirm time, not just at code-entry time.
-    const revalidation = await validateDiscountCodeForOrder(
-      ctx.app, order.discount_code_id, order.customer_product_id, order.customer_telegram_id,
-    );
-    if (revalidation.ok) {
-      try {
-        await ctx.app.db.recordDiscountCodeRedemption(order.discount_code_id, order.customer_telegram_id, order.id);
-      } catch (err: any) {
-        console.error('❌ [Storefront] recordDiscountCodeRedemption failed:', err.message);
-      }
-    } else {
-      console.warn(
-        '⚠️ [Storefront] Order #' + orderId + ' confirmed, but its discount code (id ' +
-        order.discount_code_id + ') is no longer valid at confirm time (reason: ' +
-        revalidation.reason + ') — redemption NOT recorded.',
-      );
-    }
-  }
+  await ctx.answerCallbackQuery(discountWarning
+    ? { text: label + discountWarning, show_alert: true }
+    : label).catch(() => {});
+  await ctx.editMessageCaption({ caption: originalCaption + '\n\n' + label + ' (توسط ادمین).' + discountWarning }).catch(() => {});
 
   const customerMsg = status === 'confirmed'
     ? '✅ پرداخت شما تایید شد! سفارش «' + order.product_name + '» با موفقیت ثبت شد.\n\n' +

@@ -207,3 +207,44 @@ describe('store: discount codes', () => {
     expect(one(t.storeDb, 'SELECT is_active FROM discount_codes').is_active).toBe(1);
   });
 });
+
+describe('store: discount codes at confirm time', () => {
+  function seedCode(t: TestEnv, pid: number, maxUses: number | null = null) {
+    q(t.storeDb, "INSERT INTO discount_codes (code, customer_product_id, discount_type, discount_value, max_uses, expires_at) VALUES ('OFF50', ?, 'percent', 50, ?, '2099-01-01 00:00:00')", pid, maxUses);
+  }
+  const confirmOrder = (t: TestEnv, id: number) =>
+    t.send('store', callbackUpdate(ADMIN, 'order_confirm_' + id, { caption: 'CAP', chatId: ADMIN.id }));
+
+  it('two pending receipts with the same code: only the first confirm consumes it; the admin is warned on the second', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t, { price: 500000 });
+    seedCode(t, pid);
+    await t.send('store', textUpdate(CUSTOMER, '/start'));
+    await buyOnce(t, pid, 'OFF50');
+    await buyOnce(t, pid, 'OFF50'); // code not consumed yet → accepted again
+    expect(q(t.storeDb, 'SELECT price FROM orders ORDER BY id').map((r) => r.price)).toEqual([250000, 250000]);
+
+    await confirmOrder(t, 1);
+    expect(t.tg.of('editMessageCaption').at(-1)!.payload.caption).toBe('CAP\n\n✅ تایید شد (توسط ادمین).');
+    await confirmOrder(t, 2);
+    const caption = t.tg.of('editMessageCaption').at(-1)!.payload.caption;
+    expect(caption).toContain('⚠️ کد تخفیف این سفارش هنگام تایید دیگر معتبر نبود');
+    expect(caption).toContain('قیمت اصلی: ۵۰۰٬۰۰۰ تومان');
+    expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.show_alert).toBe(true);
+    expect(q(t.storeDb, 'SELECT order_id FROM discount_code_redemptions')).toEqual([{ order_id: 1 }]);
+  });
+
+  it('max_uses is never exceeded even when confirms race', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    seedCode(t, pid, 1);
+    for (const c of [11, 12, 13]) {
+      q(t.storeDb, "INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, discount_code_id) VALUES (?, ?, 'P', 1, 1)", c, pid);
+    }
+    const db = t.apps().store!.db;
+    const results = await Promise.all([db.redeemDiscountCodeAtomic(1, 11, 1), db.redeemDiscountCodeAtomic(1, 12, 2)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(q(t.storeDb, 'SELECT * FROM discount_code_redemptions')).toHaveLength(1);
+    expect(await db.redeemDiscountCodeAtomic(1, 13, 3)).toBe(false);
+  });
+});
