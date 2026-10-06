@@ -3,6 +3,8 @@ import type { Env } from './env';
 import { getAppState, setAppState } from './lib/appstate';
 import { tehranParts } from './lib/time';
 import { processBroadcastBatch } from './store/broadcast';
+import { notifyAll } from './monshi/handlers/common';
+import { buildDigest } from './monshi/services/digest';
 import { checkStalledOrders, sendReminders } from './store/scheduler';
 
 const REMINDER_HOUR_TEHRAN = 11;
@@ -36,7 +38,17 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
     }
   }
 
-  // Monshi weekly digest is added in M8.
+  // Monshi weekly digest: Saturdays 09:xx Tehran, once (day latch)
+  if (apps.monshi && t.weekdayKey === 'sat' && t.hour === 9) {
+    const monshi = apps.monshi;
+    await guarded('weekly-digest', async () => {
+      if ((await monshi.ctx.getSetting('digest_enabled')) !== '1') return;
+      if ((await monshi.ctx.getState('last_digest_day')) === t.day) return;
+      const { text, markup } = await buildDigest(monshi);
+      await notifyAll(monshi, text, markup);
+      await monshi.ctx.setState('last_digest_day', t.day);
+    });
+  }
 
   if (apps.store) {
     const store = apps.store;

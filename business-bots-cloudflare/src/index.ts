@@ -4,6 +4,7 @@ import { runCron } from './cron';
 import type { Env } from './env';
 import { getBotInfo } from './lib/botinfo';
 import { handleSetup } from './setup';
+import { createMonshiBot } from './monshi/bot';
 import { createStoreBot } from './store/bot';
 
 const WEBHOOK_WAIT_MS = 25_000;
@@ -14,7 +15,9 @@ async function buildBot(which: 'store' | 'monshi', apps: ReturnType<typeof creat
     const info = await getBotInfo('store', apps.store.raw, apps.store.api);
     return createStoreBot(apps.store, info);
   }
-  return null; // monshi is wired in M7
+  if (!apps.monshi) return null;
+  const info = await getBotInfo('monshi', apps.monshi.raw, apps.monshi.api);
+  return createMonshiBot(apps.monshi, info);
 }
 
 async function webhook(which: 'store' | 'monshi', req: Request, env: Env, ctx: ExecutionContext, deps: Deps): Promise<Response> {

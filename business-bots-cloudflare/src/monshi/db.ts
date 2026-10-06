@@ -21,6 +21,9 @@ export interface OrderRow {
 export interface MessageRow { direction: string; text: string | null; message_type: string | null }
 export interface UnansweredRow { id: number; chat_id: number; text: string; normalized_text: string; count: number; last_seen_at: string; status: string }
 
+const OPEN_STATUSES = ORDER_STATUS_FLOW.slice(0, -1);
+export const OPEN_ORDERS_SQL = 'SELECT * FROM orders WHERE status IN (' + OPEN_STATUSES.map(() => '?').join(', ') + ') ORDER BY created_at DESC';
+
 const FAQ_EDITABLE_FIELDS = new Set(['question', 'answer', 'keywords']);
 const FAQ_EMBEDDING_AFFECTING_FIELDS = new Set(['question', 'keywords']);
 
@@ -262,7 +265,8 @@ export class MonshiDb {
   }
 
   async getOpenOrders(): Promise<OrderRow[]> {
-    return (await this.q('SELECT * FROM orders WHERE status NOT IN (?, ?) ORDER BY created_at DESC', ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1], ORDER_STATUS_CANCELLED).all<OrderRow>()).results;
+    // IN (open statuses) instead of NOT IN (closed): lets SQLite use idx_orders_status_created
+    return (await this.q(OPEN_ORDERS_SQL, ...OPEN_STATUSES).all<OrderRow>()).results;
   }
 
   async getLatestOpenOrderForChat(chatId: number): Promise<OrderRow | null> {
