@@ -248,3 +248,17 @@ describe('store: discount codes at confirm time', () => {
     expect(await db.redeemDiscountCodeAtomic(1, 13, 3)).toBe(false);
   });
 });
+
+describe('store: discount code admin callbacks', () => {
+  it('a customer forging the list-page callback gets no code list', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    q(t.storeDb, "INSERT INTO discount_codes (code, customer_product_id, discount_type, discount_value, expires_at) VALUES ('SECRET50', ?, 'percent', 50, '2099-01-01 00:00:00')", pid);
+    await t.send('store', textUpdate(CUSTOMER, '/start'));
+    for (const data of ['cprod_disc_page_0', 'cprod_disc_list', 'cprod_disc_view_1', 'cprod_disc_close']) {
+      await t.send('store', callbackUpdate(CUSTOMER, data));
+      expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toBe('⛔️ دسترسی ندارید.');
+    }
+    expect(JSON.stringify(t.tg.calls)).not.toContain('SECRET50');
+  });
+});

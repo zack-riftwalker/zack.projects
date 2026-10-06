@@ -621,6 +621,8 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
   });
 
   bot.callbackQuery(/^cprod_disc_page_(\d+)$/, async (ctx) => {
+    // callback data is forgeable — without this a customer could list every discount code
+    if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery(NO_ACCESS);
     await ctx.answerCallbackQuery();
     const codes = await ctx.app.db.getAllDiscountCodes();
     await ctx.editMessageReplyMarkup(
@@ -629,6 +631,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
   });
 
   bot.callbackQuery('cprod_disc_close', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery(NO_ACCESS);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText('🎟 بسته شد.').catch(() => {});
   });
@@ -727,6 +730,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
   });
 
   bot.callbackQuery(/^cprod_disc_del_abort_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery(NO_ACCESS);
     await ctx.answerCallbackQuery('انصراف داده شد.');
     await ctx.editMessageText('❌ عملیات لغو شد. کد تغییری نکرد.').catch(() => {});
   });
