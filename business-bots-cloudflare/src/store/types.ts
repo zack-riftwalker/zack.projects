@@ -7,6 +7,8 @@ export interface PurchaseDraft {
   productName: string;
   price: number;
   discountCodeId: number | null;
+  /** epoch ms when the customer agreed to the terms (receipt drafts expire, see RECEIPT_DRAFT_TTL_MS) */
+  createdAt?: number;
 }
 
 export interface StoreSession extends SceneSession {

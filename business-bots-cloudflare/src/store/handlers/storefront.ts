@@ -17,6 +17,19 @@ import type { CustomerProduct, Order } from '../db';
 export { STOREFRONT_LABEL, MY_SUBS_LABEL, RENEWAL_NOTE };
 
 const MS_PER_DAY = 86400000;
+/** A receipt must follow the «agree» step within this time; older drafts (old price / code) are dropped. */
+export const RECEIPT_DRAFT_TTL_MS = MS_PER_DAY;
+
+/** The pending receipt draft, or null — an expired (or pre-TTL, undated) draft is cleared. */
+function receiptDraft(ctx: StoreContext) {
+  const d = ctx.session?.awaitingReceiptFor;
+  if (!d) return null;
+  if (!d.createdAt || ctx.app.apps.now().getTime() - d.createdAt > RECEIPT_DRAFT_TTL_MS) {
+    ctx.session.awaitingReceiptFor = null;
+    return null;
+  }
+  return d;
+}
 
 export function customerStorefrontKeyboard() {
   return Markup.keyboard([[STOREFRONT_LABEL, MY_SUBS_LABEL]]).resize();
@@ -354,6 +367,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       productName: product.name,
       price: usePending ? pending.price : product.price,
       discountCodeId: usePending ? pending.discountCodeId : null,
+      createdAt: ctx.app.apps.now().getTime(),
     };
     ctx.session.pendingPurchase = null;
 
@@ -380,14 +394,25 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
   // ── Receipt-step text nudge ─────────────────────────────────────────────────
   bot.on('message:text', async (ctx, next) => {
-    if (!ctx.session?.awaitingReceiptFor) return next();
+    if (!receiptDraft(ctx)) return next();
     await ctx.reply('⚠️ لطفاً عکس یا فایل رسید پرداخت را ارسال کنید، نه متن.');
   });
 
   // ── Receipt received → create order, forward to admins ─────────────────────
   bot.on(['message:photo', 'message:document'], async (ctx, next) => {
-    const pending = ctx.session?.awaitingReceiptFor;
-    if (!pending) return next();
+    const hadDraft = !!ctx.session?.awaitingReceiptFor;
+    const pending = receiptDraft(ctx);
+    if (!pending) {
+      if (!hadDraft) return next();
+      await ctx.reply('⌛️ مهلت ارسال رسید برای این خرید تمام شده است. لطفاً دوباره از «' + STOREFRONT_LABEL + '» محصول را انتخاب کنید.');
+      return;
+    }
+    const product = await ctx.app.db.getCustomerProductById(pending.productId);
+    if (!product || !product.is_active) {
+      ctx.session.awaitingReceiptFor = null;
+      await ctx.reply('❌ این محصول دیگر موجود نیست و رسید ثبت نشد. لطفاً با پشتیبانی تماس بگیرید.');
+      return;
+    }
 
     let receiptFileId: string;
     let receiptType: 'photo' | 'document';
@@ -471,7 +496,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   bot.on('message', async (ctx, next) => {
     if (isAdmin(ctx)) return next();
 
-    if (ctx.session?.awaitingReceiptFor) {
+    if (receiptDraft(ctx)) {
       await ctx.reply('⚠️ لطفاً عکس یا فایل رسید پرداخت را ارسال کنید (نه نوع دیگری از پیام).');
       return;
     }

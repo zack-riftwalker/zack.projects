@@ -107,3 +107,41 @@ describe('store: purchase flow', () => {
     expect(t.tg.texts(CUSTOMER.id).at(-1)).toBe('🤖 برای مشاهده محصولات، از دکمه «🛍 لیست محصولات» استفاده کنید.');
   });
 });
+
+describe('store: stale receipt state', () => {
+  async function agreed(t: ReturnType<typeof makeTestEnv>) {
+    const pid = seedProduct(t);
+    await t.send('store', textUpdate(CUSTOMER, '/start'));
+    await t.send('store', callbackUpdate(CUSTOMER, 'cust_prod_' + pid));
+    await t.send('store', callbackUpdate(CUSTOMER, 'cust_disc_skip_' + pid));
+    await t.send('store', callbackUpdate(CUSTOMER, 'cust_agree_' + pid));
+    return pid;
+  }
+  const ageDraft = (t: ReturnType<typeof makeTestEnv>, ms: number) => {
+    const row = one(t.storeDb, 'SELECT key, value FROM sessions');
+    const v = JSON.parse(row.value);
+    v.awaitingReceiptFor.createdAt -= ms;
+    q(t.storeDb, 'UPDATE sessions SET value = ? WHERE key = ?', JSON.stringify(v), row.key);
+  };
+
+  it('a receipt sent more than 24 h after agreeing creates no order', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await agreed(t);
+    ageDraft(t, 25 * 3600_000);
+    await t.send('store', photoUpdate(CUSTOMER));
+    expect(q(t.storeDb, 'SELECT * FROM orders')).toHaveLength(0);
+    expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('مهلت ارسال رسید');
+    // the state is gone: a later photo is just an ordinary message
+    await t.send('store', photoUpdate(CUSTOMER));
+    expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('برای مشاهده محصولات');
+  });
+
+  it('a receipt for a product deactivated meanwhile creates no order', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = await agreed(t);
+    q(t.storeDb, 'UPDATE customer_products SET is_active = 0 WHERE id = ?', pid);
+    await t.send('store', photoUpdate(CUSTOMER));
+    expect(q(t.storeDb, 'SELECT * FROM orders')).toHaveLength(0);
+    expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('این محصول دیگر موجود نیست');
+  });
+});
