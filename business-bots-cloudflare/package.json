@@ -9,7 +9,8 @@
     "test": "vitest run",
     "build:check": "wrangler deploy --dry-run --outdir dist",
     "db:migrate:remote": "wrangler d1 migrations apply store-bot-db --remote && wrangler d1 migrations apply monshi-bot-db --remote",
-    "db:migrate:local": "wrangler d1 migrations apply store-bot-db --local && wrangler d1 migrations apply monshi-bot-db --local"
+    "db:migrate:local": "wrangler d1 migrations apply store-bot-db --local && wrangler d1 migrations apply monshi-bot-db --local",
+    "setup": "node scripts/setup.mjs"
   },
   "dependencies": {
     "grammy": "^1.46.0",
