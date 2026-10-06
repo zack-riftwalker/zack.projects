@@ -16,11 +16,11 @@ MONSHI_NOTIFY_USER_IDS = ""   # optional, comma-separated
 [[d1_databases]]
 binding = "STORE_DB"
 database_name = "store-bot-db"
-database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"
+database_id = "00000000-0000-0000-0000-00000000aaaa"  # REPLACE with the id printed by: wrangler d1 create store-bot-db
 migrations_dir = "migrations/store"
 
 [[d1_databases]]
 binding = "MONSHI_DB"
 database_name = "monshi-bot-db"
-database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"
+database_id = "00000000-0000-0000-0000-00000000bbbb"  # REPLACE with the id printed by: wrangler d1 create monshi-bot-db
 migrations_dir = "migrations/monshi"
