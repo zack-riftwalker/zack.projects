@@ -9,9 +9,13 @@ export class BudgetExceededError extends Error {
 
 /** Counts every Telegram / Gemini / D1 call of one Worker invocation (free plan: 50). */
 export class Budget {
+  exceeded = false;
   constructor(public limit = 50, public used = 0) {}
   take(n = 1): void {
-    if (this.used + n > this.limit) throw new BudgetExceededError();
+    if (this.used + n > this.limit) {
+      this.exceeded = true;
+      throw new BudgetExceededError();
+    }
     this.used += n;
   }
   remaining(): number {

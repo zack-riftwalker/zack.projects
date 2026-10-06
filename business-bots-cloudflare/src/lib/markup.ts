@@ -1,4 +1,6 @@
-export type InlineButton = { text: string; callback_data?: string; url?: string };
+import type { InlineKeyboardButton } from 'grammy/types';
+
+export type InlineButton = InlineKeyboardButton;
 
 export interface InlineKb { reply_markup: { inline_keyboard: InlineButton[][] } }
 export interface ReplyKb { reply_markup: { keyboard: { text: string }[][]; resize_keyboard: boolean; is_persistent?: boolean } }
@@ -19,10 +21,10 @@ export const Markup = {
     };
   },
   button: {
-    callback(text: string, data: string): InlineButton {
+    callback(text: string, data: string): InlineKeyboardButton.CallbackButton {
       return { text, callback_data: data };
     },
-    url(text: string, url: string): InlineButton {
+    url(text: string, url: string): InlineKeyboardButton.UrlButton {
       return { text, url };
     },
   },

@@ -7,12 +7,13 @@ type Row = Record<string, unknown>;
 const isRead = (sql: string) => /^\s*(select|with|pragma|explain)\b/i.test(sql);
 
 class FakeStmt {
-  constructor(private db: DatabaseSync, readonly sql: string, readonly args: unknown[] = []) {}
+  constructor(private db: DatabaseSync, readonly sql: string, readonly args: unknown[] = [], private log: string[] = []) {}
   bind(...args: unknown[]) {
     for (const a of args) if (a === undefined) throw new Error('D1_TYPE_ERROR: Type \'undefined\' not supported for value \'undefined\'');
-    return new FakeStmt(this.db, this.sql, args);
+    return new FakeStmt(this.db, this.sql, args, this.log);
   }
   private exec(): { results: Row[]; meta: { changes: number; last_row_id: number } } {
+    this.log.push(this.sql);
     const st = this.db.prepare(this.sql);
     if (isRead(this.sql)) {
       return { results: st.all(...(this.args as any[])) as Row[], meta: { changes: 0, last_row_id: 0 } };
@@ -42,13 +43,14 @@ class FakeStmt {
 
 export class FakeD1 {
   readonly sqlite: DatabaseSync;
-  writes = 0;
+  /** every executed SQL string (for write-count assertions) */
+  log: string[] = [];
   constructor() {
     this.sqlite = new DatabaseSync(':memory:');
     this.sqlite.exec('PRAGMA foreign_keys=ON');
   }
   prepare(sql: string) {
-    return new FakeStmt(this.sqlite, sql);
+    return new FakeStmt(this.sqlite, sql, [], this.log);
   }
   async batch(stmts: FakeStmt[]) {
     this.sqlite.exec('BEGIN');
