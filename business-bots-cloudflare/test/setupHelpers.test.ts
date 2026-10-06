@@ -38,4 +38,9 @@ describe('setup helpers', () => {
     expect(t).toMatch(/binding = "MONSHI_DB"[\s\S]*?database_name = "my-db"/);
     expect(t).toContain('database_name = "store-bot-db"');
   });
+
+  it('backup helpers: database names from wrangler.toml and sortable file names', () => {
+    expect(h.databaseNames(readFileSync('wrangler.toml', 'utf8'))).toEqual(['store-bot-db', 'monshi-bot-db']);
+    expect(h.backupFileName('store-bot-db', new Date('2026-10-06T09:05:07.123Z'))).toBe('backups/store-bot-db-20261006-090507.sql');
+  });
 });

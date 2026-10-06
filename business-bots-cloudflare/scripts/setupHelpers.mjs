@@ -60,3 +60,14 @@ export function setDatabaseName(toml, binding, name) {
   if (!re.test(toml)) throw new Error('wrangler.toml has no D1 block for ' + binding);
   return toml.replace(re, `$1"${name}"`);
 }
+
+/** database_name of every [[d1_databases]] block, in file order. */
+export function databaseNames(toml) {
+  return [...String(toml).matchAll(/^\s*database_name\s*=\s*"([^"]+)"/gm)].map((m) => m[1]);
+}
+
+/** backups/<db>-YYYYMMDD-HHMMSS.sql (UTC) — sortable, one file per database per run. */
+export function backupFileName(dbName, date = new Date()) {
+  const stamp = date.toISOString().replace(/\.\d+Z$/, '').replace(/[-:]/g, '').replace('T', '-');
+  return `backups/${dbName}-${stamp}.sql`;
+}

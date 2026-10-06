@@ -10,12 +10,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import readline from 'node:readline/promises';
 import {
-  listDatabases, setDatabaseName, parseDatabaseId, parseIdList, parseWorkerUrl, setDatabaseId, setTomlVar, validBotToken,
+  backupFileName, listDatabases, setDatabaseName, parseDatabaseId, parseIdList, parseWorkerUrl, setDatabaseId, setTomlVar, validBotToken,
 } from './setupHelpers.mjs';
 
 const DRY = process.argv.includes('--dry-run');
@@ -83,6 +83,7 @@ async function main() {
     existing = listDatabases(list.out.slice(Math.max(0, list.out.indexOf('['))));
   }
   const names = {};
+  const reused = [];
   for (const [label, defName, binding] of [['فروشگاه', 'store-bot-db', 'STORE_DB'], ['منشی', 'monshi-bot-db', 'MONSHI_DB']]) {
     let db = existing.find((d) => d.name === defName);
     if (!db && existing.length) {
@@ -93,6 +94,7 @@ async function main() {
     }
     if (db) {
       say(`✅ برای ${label} از «${db.name}» استفاده می‌شود.`);
+      reused.push(db.name);
     } else if (DRY) {
       wrangler(['d1', 'create', defName]);
       db = { name: defName, id: '00000000-0000-0000-0000-000000000000' };
@@ -114,6 +116,16 @@ async function main() {
   say('✅ wrangler.toml به‌روز شد.');
 
   step(4, 'ساخت جدول‌ها');
+  // An existing database may hold live data: dump it before migrations / data import touch it.
+  if (reused.length) {
+    if (!DRY) mkdirSync('backups', { recursive: true });
+    const now = new Date();
+    for (const name of reused) {
+      const file = backupFileName(name, now);
+      wrangler(['d1', 'export', name, '--remote', '--output', file], { inherit: !DRY });
+      say(`💾 پشتیبان ${name} → ${file}`);
+    }
+  }
   wrangler(['d1', 'migrations', 'apply', names.STORE_DB, '--remote'], { inherit: !DRY });
   wrangler(['d1', 'migrations', 'apply', names.MONSHI_DB, '--remote'], { inherit: !DRY });
 
