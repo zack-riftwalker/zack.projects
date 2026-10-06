@@ -192,3 +192,14 @@ describe('gemini: decoded vector cache', () => {
     expect(g.generateCalls()[1].body.contents[0].parts[0].text).toMatch(/#2: b\n#1: a/);
   });
 });
+
+describe('gemini: conversation history', () => {
+  it("the bot's own earlier answer is part of the history Gemini sees", async () => {
+    const g = fakeGemini({ decisions: [{ action: 'FAQ_ANSWER', faq_id: 1, confidence: 0.95 }, { action: 'IGNORE', confidence: 0.1 }] });
+    const t = await setup(g);
+    addFaq(t, { question: 'گارانتی دارید؟', answer: 'بله، ۷ روز گارانتی', keywords: '' });
+    await t.send('monshi', businessMessageUpdate(CUST, 'ضمانت هم داره؟'));
+    await t.send('monshi', businessMessageUpdate(CUST, 'چند روزه؟'));
+    expect(g.generateCalls()[1].body.contents[0].parts[0].text).toContain('فروشنده: بله، ۷ روز گارانتی');
+  });
+});

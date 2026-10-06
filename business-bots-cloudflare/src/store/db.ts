@@ -398,7 +398,10 @@ export class StoreDb {
   // ─── Store settings ──────────────────────────────────────────────────────
   async getStoreSettings(): Promise<{ id: number; card_number: string; card_holder_name: string } | undefined> {
     try {
-      return ((await this.q('SELECT * FROM store_settings WHERE id = 1').first()) as any) ?? undefined;
+      const row: any = await this.q('SELECT * FROM store_settings WHERE id = 1').first();
+      // a row without a card number (possible in migrated data) counts as «not configured yet»
+      if (!row || !row.card_number) return undefined;
+      return { ...row, card_holder_name: row.card_holder_name ?? '' };
     } catch (err: any) {
       console.error('❌ [DB] getStoreSettings failed:', err.message);
       return undefined;

@@ -11,7 +11,7 @@ import type { MonshiCtx } from '../types';
 import { notifyAll } from './common';
 
 const replaceSalesBot = async (app: MonshiApp, text: string | null) =>
-  (text || '').replace('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
+  (text || '').replaceAll('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
 
 /** The owner's account was connected / disconnected. */
 export async function onBusinessConnection(ctx: MonshiCtx): Promise<void> {
@@ -40,6 +40,19 @@ export async function onBusinessConnection(ctx: MonshiCtx): Promise<void> {
     await app.api.sendMessage(bc.user_chat_id, text);
   } catch (err: any) {
     console.error('Failed to send connection confirmation', err?.message ?? err);
+  }
+}
+
+/**
+ * Sends an automatic reply on behalf of the owner and stores it as an 'out' message, so the conversation history
+ * Gemini sees includes what the bot already answered. A failed store never fails the reply.
+ */
+async function sendReply(app: MonshiApp, chatId: number, text: string, bcid: string): Promise<void> {
+  const sent = await app.api.sendMessage(chatId, text, { business_connection_id: bcid });
+  try {
+    await app.db.saveMessage(chatId, sent.message_id, 'out', 'text', text, bcid);
+  } catch (err: any) {
+    console.warn(`Could not store the auto-reply in chat ${chatId}`, err?.message ?? err);
   }
 }
 
@@ -77,7 +90,7 @@ async function sendPriceFallback(app: MonshiApp, chatId: number, messageId: numb
     return true;
   }
   try {
-    await app.api.sendMessage(chatId, fallbackText, { business_connection_id: bcid });
+    await sendReply(app, chatId, fallbackText, bcid);
   } catch (err: any) {
     // detection was right; only the send failed — stop like a failed FAQ send
     console.error(`Failed to send price fallback to chat ${chatId}`, err?.message ?? err);
@@ -94,7 +107,7 @@ async function tryOrderStatusReply(app: MonshiApp, chatId: number, messageId: nu
   const order = await app.db.getLatestOpenOrderForChat(chatId);
   if (!order) return false;
   try {
-    await app.api.sendMessage(chatId, orders.statusText(order), { business_connection_id: bcid });
+    await sendReply(app, chatId, orders.statusText(order), bcid);
   } catch (err: any) {
     console.error(`Failed to send order status to chat ${chatId}`, err?.message ?? err);
     return true;
@@ -169,7 +182,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
     if (greetingText) {
       let sentOk = true;
       try {
-        await app.api.sendMessage(chatId, greetingText, { business_connection_id: bcid });
+        await sendReply(app, chatId, greetingText, bcid);
       } catch (err: any) {
         sentOk = false;
         console.error(`Failed to send greeting to chat ${chatId}`, err?.message ?? err);
@@ -232,7 +245,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
       return;
     }
     try {
-      await app.api.sendMessage(chatId, matchedFaq.answer, { business_connection_id: bcid });
+      await sendReply(app, chatId, matchedFaq.answer, bcid);
     } catch (err: any) {
       // the match was right and only the send failed — don't record as unanswered or send an ack
       console.error(`Failed to send FAQ answer to chat ${chatId}`, err?.message ?? err);
@@ -264,7 +277,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
 
   const ackText = await replaceSalesBot(app, await app.ctx.getSetting('after_hours_message'));
   try {
-    await app.api.sendMessage(chatId, ackText, { business_connection_id: bcid });
+    await sendReply(app, chatId, ackText, bcid);
   } catch (err: any) {
     console.error(`Failed to send after-hours ack to chat ${chatId}`, err?.message ?? err);
     await app.db.restoreAck(chatId, previousAck);

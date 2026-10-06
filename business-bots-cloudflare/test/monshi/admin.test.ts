@@ -293,3 +293,13 @@ describe('monshi: leftover input states', () => {
     expect(getSetting(t, 'after_hours_message')).toBe(before);
   });
 });
+
+describe('monshi: {sales_bot} placeholder', () => {
+  it('every occurrence is replaced', async () => {
+    const t = makeTestEnv({ store: false });
+    setSetting(t, 'sales_bot', '@shop_bot');
+    setSetting(t, 'after_hours_message', 'A {sales_bot} B {sales_bot}');
+    await ownerCb(t, 'st_after_hours');
+    expect(lastEdit(t).text).toContain('A @shop_bot B @shop_bot');
+  });
+});

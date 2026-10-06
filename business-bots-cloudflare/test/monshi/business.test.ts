@@ -101,7 +101,9 @@ describe('monshi: pipeline', () => {
     expect(replies[0]).toContain('سلام، خوش آمدید 👋');
     expect(replies[0]).toContain('@mai_academia_bot');
     // greeting doubles as the «received» ack → no extra after-hours ack
-    expect(q(t.monshiDb, 'SELECT * FROM messages WHERE chat_id = ?', CUST.id)).toHaveLength(2);
+    expect(q(t.monshiDb, "SELECT * FROM messages WHERE chat_id = ? AND direction = 'in'", CUST.id)).toHaveLength(2);
+    // the bot's greeting is kept as an 'out' message (conversation history for Gemini)
+    expect(q(t.monshiDb, "SELECT * FROM messages WHERE chat_id = ? AND direction = 'out'", CUST.id)).toHaveLength(1);
   });
 
   it('after hours: one ack per cooldown; inside business hours: silent', async () => {
@@ -176,7 +178,7 @@ describe('monshi: pipeline', () => {
     const upd = businessMessageUpdate(CUST, 'سلام');
     await t.send('monshi', upd);
     await t.send('monshi', upd);
-    expect(q(t.monshiDb, 'SELECT * FROM messages')).toHaveLength(1);
+    expect(q(t.monshiDb, "SELECT * FROM messages WHERE direction = 'in'")).toHaveLength(1);
     expect(businessReplies(t, CUST.id)).toHaveLength(1);
   });
 });

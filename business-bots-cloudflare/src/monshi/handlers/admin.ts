@@ -439,7 +439,7 @@ async function settingsHubView(app: MonshiApp) {
 }
 
 async function afterHoursView(app: MonshiApp) {
-  const current = (await app.ctx.getSetting('after_hours_message') || '').replace('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
+  const current = (await app.ctx.getSetting('after_hours_message') || '').replaceAll('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
   return {
     text: '✉️ پیام خارج ساعت کاری:\n\n' + current,
     markup: Markup.inlineKeyboard([
@@ -451,7 +451,7 @@ async function afterHoursView(app: MonshiApp) {
 
 async function greetingView(app: MonshiApp) {
   const enabled = (await app.ctx.getSetting('greeting_enabled')) === '1';
-  const current = ((await app.ctx.getSetting('greeting_message')) || '').replace('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
+  const current = ((await app.ctx.getSetting('greeting_message')) || '').replaceAll('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
   return {
     text: `👋 پیام خوش‌آمد مشتری جدید (${enabled ? 'فعال ✅' : 'خاموش 🚫'}):\n\n` + current,
     markup: Markup.inlineKeyboard([
@@ -597,7 +597,7 @@ export async function cmdSetMessage(ctx: MonshiCtx): Promise<void> {
   // everything after the command, newlines kept
   const newText = commandRest(ctx);
   if (!newText) {
-    const current = ((await ctx.app.ctx.getSetting('after_hours_message')) || '').replace('{sales_bot}', (await ctx.app.ctx.getSetting('sales_bot')) || '');
+    const current = ((await ctx.app.ctx.getSetting('after_hours_message')) || '').replaceAll('{sales_bot}', (await ctx.app.ctx.getSetting('sales_bot')) || '');
     await ctx.reply(
       'متن فعلی پیام خارج ساعت کاری:\n\n' + current +
       '\n\nبرای تغییر، متن جدید را بعد از دستور بنویسید:\n/set_message متن جدید...\n' +
@@ -614,7 +614,7 @@ export async function cmdSetGreeting(ctx: MonshiCtx): Promise<void> {
   const newText = commandRest(ctx);
   if (!newText) {
     const enabled = (await ctx.app.ctx.getSetting('greeting_enabled')) === '1';
-    const current = ((await ctx.app.ctx.getSetting('greeting_message')) || '').replace('{sales_bot}', (await ctx.app.ctx.getSetting('sales_bot')) || '');
+    const current = ((await ctx.app.ctx.getSetting('greeting_message')) || '').replaceAll('{sales_bot}', (await ctx.app.ctx.getSetting('sales_bot')) || '');
     await ctx.reply(
       `👋 پیام خوش‌آمد مشتری جدید (${enabled ? 'فعال ✅' : 'خاموش 🚫'}):\n\n` + current +
       '\n\nبرای تغییر، متن جدید را بعد از دستور بنویسید:\n/set_greeting متن جدید...\n' +

@@ -145,3 +145,18 @@ describe('store: stale receipt state', () => {
     expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('این محصول دیگر موجود نیست');
   });
 });
+
+describe('store: card settings without a card number', () => {
+  it('a store_settings row with a NULL card number counts as not configured (no crash)', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    q(t.storeDb, 'INSERT INTO store_settings (id, card_number, card_holder_name) VALUES (1, NULL, NULL)');
+    await t.send('store', textUpdate(CUSTOMER, '/start'));
+    await t.send('store', callbackUpdate(CUSTOMER, 'cust_prod_' + pid));
+    await t.send('store', callbackUpdate(CUSTOMER, 'cust_disc_skip_' + pid));
+    await t.send('store', callbackUpdate(CUSTOMER, 'cust_agree_' + pid));
+    expect(t.tg.of('editMessageText').at(-1)!.payload.text).toContain('لطفاً عکس یا فایل رسید پرداخت را ارسال کنید');
+    await t.send('store', textUpdate(ADMIN, '💳 شماره کارت'));
+    expect(t.tg.texts(ADMIN.id).at(-1)).toContain('تنظیم شماره کارت فروشگاه');
+  });
+});
