@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local `wrangler dev` (gitignored). In production use `wrangler secret put <NAME>`.
+STORE_BOT_TOKEN=
+MONSHI_BOT_TOKEN=
+GEMINI_API_KEY=
+WEBHOOK_SECRET=

@@ -1,0 +1,28 @@
+{
+  "name": "business-bots-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:check": "wrangler deploy --dry-run --outdir dist",
+    "db:migrate:remote": "npm run db:backup && wrangler d1 migrations apply store-bot-db --remote && wrangler d1 migrations apply monshi-bot-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply store-bot-db --local && wrangler d1 migrations apply monshi-bot-db --local",
+    "setup": "node scripts/setup.mjs",
+    "db:backup": "node scripts/backup.mjs"
+  },
+  "dependencies": {
+    "grammy": "^1.46.0",
+    "jalaali-js": "^2.0.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "@types/jalaali-js": "^1.2.0",
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.147.0"
+  }
+}

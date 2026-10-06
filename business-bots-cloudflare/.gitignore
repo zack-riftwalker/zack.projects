@@ -1,0 +1,14 @@
+node_modules/
+.wrangler/
+dist/
+.dev.vars
+.env
+*.db
+*.db-shm
+*.db-wal
+migration_out/
+# Original bot source extracted from the user's zip — reference only, never committed (public repo)
+legacy/
+
+# D1 dumps from `npm run db:backup` — contain customer data, never commit
+backups/
