@@ -207,9 +207,18 @@ export class MonshiDb {
     await this.db.batch(stmts);
   }
 
+  /**
+   * All rows in ONE statement (a JSON array parameter): one statement per FAQ would spend one unit of the
+   * 50-call budget each, and with ~40+ FAQs the batch never fit, so embeddings were never saved.
+   */
   async setFaqEmbeddings(rows: { id: number; embedding: string }[]): Promise<void> {
     if (!rows.length) return;
-    await this.db.batch(rows.map((r) => this.q('UPDATE faqs SET embedding = ? WHERE id = ?', r.embedding, r.id)));
+    const json = JSON.stringify(rows.map((r) => ({ id: r.id, e: r.embedding })));
+    await this.q(
+      "UPDATE faqs SET embedding = (SELECT json_extract(j.value, '$.e') FROM json_each(?) AS j WHERE json_extract(j.value, '$.id') = faqs.id) " +
+        "WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))",
+      json, json,
+    ).run();
   }
 
   async setFaqEnabled(faqId: number, enabled: boolean): Promise<void> {

@@ -143,3 +143,34 @@ describe('gemini: pipeline', () => {
     expect(used).toBeLessThanOrEqual(25);
   });
 });
+
+describe('gemini: many FAQs without embeddings', () => {
+  it('45 un-embedded FAQs (e.g. right after migration) are embedded on the first message within budget', async () => {
+    const g = fakeGemini({ decisions: [{ action: 'FAQ_ANSWER', faq_id: 1, confidence: 0.95 }] });
+    const t = await setup(g);
+    for (let i = 0; i < 45; i++) addFaq(t, { question: 'سوال ' + i, answer: 'جواب ' + i, keywords: '' });
+    await t.send('monshi', businessMessageUpdate(CUST, 'یک سوال تستی'));
+    expect(one(t.monshiDb, 'SELECT COUNT(*) AS n FROM faqs WHERE embedding IS NOT NULL').n).toBe(45);
+    expect(g.calls.filter((c) => c.url.includes(':batchEmbedContents'))).toHaveLength(1);
+    expect(g.generateCalls()).toHaveLength(1);
+    expect(businessReplies(t, CUST.id)).toEqual(['جواب 0']);
+    // each FAQ got its own vector back
+    const rows = q(t.monshiDb, 'SELECT id, embedding FROM faqs ORDER BY id');
+    expect(rows.every((r: any) => Array.from(decodeEmbedding(r.embedding)).length === 3)).toBe(true);
+  });
+});
+
+describe('MonshiDb.setFaqEmbeddings', () => {
+  it('writes each row its own embedding in a single statement and leaves other rows alone', async () => {
+    const t = makeTestEnv({ store: false });
+    const a = addFaq(t, { question: 'a', answer: 'A' });
+    const b = addFaq(t, { question: 'b', answer: 'B' });
+    const c = addFaq(t, { question: 'c', answer: 'C' });
+    const before = t.monshiDb.log.length;
+    await t.apps().monshi!.db.setFaqEmbeddings([{ id: a, embedding: 'EA' }, { id: c, embedding: 'EC' }]);
+    expect(t.monshiDb.log.length - before).toBe(1);
+    expect(q(t.monshiDb, 'SELECT id, embedding FROM faqs ORDER BY id')).toEqual([
+      { id: a, embedding: 'EA' }, { id: b, embedding: null }, { id: c, embedding: 'EC' },
+    ]);
+  });
+});

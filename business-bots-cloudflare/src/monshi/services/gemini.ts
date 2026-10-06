@@ -23,6 +23,8 @@ export const HISTORY_LOOKBACK = 6; // recent messages (both directions) given to
 export const SHORT_TEXT_CHARS = 15; // below this the previous customer message is prepended to the embedding query
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const EMBED_BATCH = 100;
+// Budget kept free for the rest of the message pipeline (query embedding, classification, reply, DB writes)
+const EMBED_BUDGET_RESERVE = 20;
 
 export const SYSTEM_PROMPT = `تو مسئول دسته‌بندی پیام‌های مشتریان یک فروشگاه تلگرامی هستی.
 
@@ -161,6 +163,8 @@ export async function ensureEmbeddings(app: MonshiApp): Promise<void> {
   if (!missing.length) return;
 
   for (let i = 0; i < missing.length; i += EMBED_BATCH) {
+    // each chunk = 1 Gemini call + 1 D1 statement; what doesn't fit now is embedded on a later message
+    if (app.apps.budget.remaining() - 2 < EMBED_BUDGET_RESERVE) return;
     const chunk = missing.slice(i, i + EMBED_BATCH);
     const data = await post(app, `/models/${EMBEDDING_MODEL}:batchEmbedContents`, {
       requests: chunk.map((f) => ({
