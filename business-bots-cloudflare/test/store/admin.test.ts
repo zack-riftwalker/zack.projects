@@ -262,3 +262,27 @@ describe('store: discount code admin callbacks', () => {
     expect(JSON.stringify(t.tg.calls)).not.toContain('SECRET50');
   });
 });
+
+describe('store: admin mid-wizard', () => {
+  it('confirming a receipt works while the admin is inside a wizard, and the wizard continues afterwards', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    await t.send('store', textUpdate(CUSTOMER, '/start'));
+    await buyOnce(t, pid);
+    await t.send('store', textUpdate(ADMIN, '➕ افزودن محصول'));
+    await t.send('store', callbackUpdate(ADMIN, 'order_confirm_1', { caption: 'CAP', chatId: ADMIN.id }));
+    expect(one(t.storeDb, 'SELECT status FROM orders').status).toBe('confirmed');
+    await t.send('store', textUpdate(ADMIN, 'New product'));
+    expect(t.tg.texts(ADMIN.id).at(-1)).toContain('قیمت');
+  });
+
+  it('/start leaves the wizard instead of becoming its input', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await t.send('store', textUpdate(ADMIN, '➕ افزودن محصول'));
+    await t.send('store', textUpdate(ADMIN, '/start'));
+    expect(t.tg.texts(ADMIN.id).at(-1)).toContain('سلام مدیر!');
+    await t.send('store', textUpdate(ADMIN, 'Some text'));
+    expect(t.tg.texts(ADMIN.id).at(-1)).toContain('با هیچ عملیاتی مطابقت نداشت');
+    expect(q(t.storeDb, 'SELECT * FROM customer_products')).toHaveLength(0);
+  });
+});

@@ -62,7 +62,12 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard,
     storeSettingsWizard,
     manualPurchaseWizard,
-  ]);
+  ], {
+    // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
+    bypass: (ctx) => /^order_(confirm|reject|deliver)_\d+$/.test(ctx.callbackQuery?.data ?? ''),
+    // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
+    exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
+  });
   bot.use(stage.middleware());
 
   // /start — admins go straight into the panel, everyone else into the storefront.

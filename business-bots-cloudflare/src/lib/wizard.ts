@@ -48,9 +48,16 @@ export function getSessionOf<S>(ctx: Context): (S & SceneSession) | undefined {
   }
 }
 
+export interface StageOptions<C> {
+  /** Updates that skip the active scene (it stays active), e.g. buttons on unrelated messages. */
+  bypass?: (ctx: C) => boolean;
+  /** Updates that close the active scene and then run normally, e.g. /start. */
+  exit?: (ctx: C) => boolean;
+}
+
 export class Stage<C extends Context & WizardFlavor> {
   private scenes = new Map<string, WizardScene<C>>();
-  constructor(scenes: WizardScene<C>[]) {
+  constructor(scenes: WizardScene<C>[], private opts: StageOptions<C> = {}) {
     for (const s of scenes) this.scenes.set(s.id, s);
   }
 
@@ -96,13 +103,18 @@ export class Stage<C extends Context & WizardFlavor> {
         delete session!.__scene;
         return next();
       }
+      if (this.opts.bypass?.(ctx)) return next();
+      if (this.opts.exit?.(ctx)) {
+        delete session!.__scene;
+        return next();
+      }
 
       let fallThrough = false;
       await scene.composer.middleware()(ctx, async () => {
         fallThrough = true;
       });
       if (!fallThrough) return;
-      // An active scene consumes every update (legacy Telegraf behaviour).
+      // Otherwise an active scene consumes every update (legacy Telegraf behaviour).
       await runStep(scene);
     };
   }
