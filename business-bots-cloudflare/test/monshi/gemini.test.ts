@@ -174,3 +174,21 @@ describe('MonshiDb.setFaqEmbeddings', () => {
     ]);
   });
 });
+
+describe('gemini: decoded vector cache', () => {
+  it('a re-embedded FAQ (same id, same updated_at, same length) uses its new vector', async () => {
+    const g = fakeGemini({ decisions: [{ action: 'IGNORE', confidence: 0.1 }, { action: 'IGNORE', confidence: 0.1 }] });
+    const t = await setup(g);
+    const a = addFaq(t, { question: 'a', answer: 'A' });
+    const b = addFaq(t, { question: 'b', answer: 'B' });
+    q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([1, 0, 0]), a);
+    q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([0, 1, 0]), b);
+    await t.send('monshi', businessMessageUpdate(CUST, 'سوال اول تستی'));
+    expect(g.generateCalls()[0].body.contents[0].parts[0].text).toMatch(/#1: a\n#2: b/);
+    // vectors swap (e.g. re-embedded by a new model); query vector is [1,0,0] → FAQ b must now rank first
+    q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([0, 1, 0]), a);
+    q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([1, 0, 0]), b);
+    await t.send('monshi', businessMessageUpdate(CUST, 'سوال دوم تستی'));
+    expect(g.generateCalls()[1].body.contents[0].parts[0].text).toMatch(/#2: b\n#1: a/);
+  });
+});

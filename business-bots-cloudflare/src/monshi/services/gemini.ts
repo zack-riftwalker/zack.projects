@@ -95,15 +95,15 @@ export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
 }
 
 // Decoded-embedding cache (module level — survives across requests in one isolate)
-const decoded = new Map<string, Float32Array>();
+// Keyed by FAQ id and validated against the stored text: re-embedding (model/version change) does not touch
+// updated_at, so the old key scheme could keep serving the previous model's vectors.
+const decoded = new Map<number, { src: string; vec: Float32Array }>();
 function decodedFor(faq: FaqRow): Float32Array {
-  const key = `${faq.id}:${faq.updated_at}:${faq.embedding!.length}`;
-  let v = decoded.get(key);
-  if (!v) {
-    v = decodeEmbedding(faq.embedding!);
-    decoded.set(key, v);
-  }
-  return v;
+  const hit = decoded.get(faq.id);
+  if (hit && hit.src === faq.embedding) return hit.vec;
+  const vec = decodeEmbedding(faq.embedding!);
+  decoded.set(faq.id, { src: faq.embedding!, vec });
+  return vec;
 }
 
 export function embeddingText(faq: FaqRow): string {
