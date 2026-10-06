@@ -199,14 +199,8 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       return;
     }
 
-    try {
-      await ctx.app.db.setWarrantyClaimNow(order.id);
-    } catch (err: any) {
-      console.error('❌ [Storefront] setWarrantyClaimNow failed:', err.message);
-    }
-
     const customerLabel = escapeMarkdown(ctx.from.first_name || 'مشتری') +
-      (ctx.from.username ? ' (@' + ctx.from.username + ')' : '');
+      (ctx.from.username ? ' (@' + escapeMarkdown(ctx.from.username) + ')' : '');
     const adminMsg =
       '🛠 *درخواست گارانتی جدید*\n\n' +
       '👤 مشتری: ' + customerLabel + '\n' +
@@ -215,12 +209,26 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       '📅 تاریخ تحویل: ' + formatJalaliDate(order.delivered_at!) + '\n' +
       '🛡 گارانتی تا: ' + formatJalaliDate(order.warranty_expires_at!);
 
+    let delivered = 0;
     for (const adminId of ctx.app.cfg.adminIds) {
       try {
         await ctx.api.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
+        delivered++;
       } catch (err: any) {
         console.warn('⚠️ [Storefront] Failed to deliver warranty claim to admin ' + adminId + ':', err.message);
       }
+    }
+
+    // No admin got it → don't start the once-a-day lock and don't claim success; the customer may retry.
+    if (delivered === 0) {
+      await ctx.answerCallbackQuery({ text: '❌ ثبت درخواست ناموفق بود. لطفاً کمی بعد دوباره تلاش کنید.', show_alert: true });
+      return;
+    }
+
+    try {
+      await ctx.app.db.setWarrantyClaimNow(order.id);
+    } catch (err: any) {
+      console.error('❌ [Storefront] setWarrantyClaimNow failed:', err.message);
     }
 
     await ctx.answerCallbackQuery('✅ درخواست ثبت شد.');

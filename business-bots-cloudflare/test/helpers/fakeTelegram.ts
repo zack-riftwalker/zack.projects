@@ -2,6 +2,20 @@ import { Api } from 'grammy';
 
 export interface Call { token: string; method: string; payload: any }
 
+/**
+ * Rough legacy-Markdown parse check, like Telegram's "can't parse entities": every unescaped
+ * `_`, `*` and backtick must be balanced (backtick spans are literal inside).
+ */
+export function markdownError(text: string): string | null {
+  const plain = String(text).replace(/\\[_*`\[]/g, '');
+  const outsideCode = plain.replace(/`[^`]*`/g, '');
+  if ((plain.match(/`/g) ?? []).length % 2) return 'unclosed `';
+  for (const ch of ['_', '*']) {
+    if ((outsideCode.split(ch).length - 1) % 2) return 'unclosed ' + ch;
+  }
+  return null;
+}
+
 type Rule = { method: string; when: (c: Call) => boolean; code: number; description: string; times: number };
 
 export function makeFakeTelegram() {
@@ -37,6 +51,11 @@ export function makeFakeTelegram() {
     api.config.use(async (_prev, method, payload) => {
       const call: Call = { token, method, payload };
       calls.push(call);
+      const pm = (payload as any)?.parse_mode;
+      const md = pm === 'Markdown' ? markdownError((payload as any).text ?? (payload as any).caption ?? '') : null;
+      if (md) {
+        return { ok: false, error_code: 400, description: "Bad Request: can't parse entities: " + md } as any;
+      }
       const rule = rules.find((r) => r.times !== 0 && r.method === method && r.when(call));
       if (rule) {
         if (rule.times > 0) rule.times -= 1;

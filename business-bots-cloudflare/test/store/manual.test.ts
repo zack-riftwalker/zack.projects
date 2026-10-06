@@ -149,6 +149,27 @@ describe('subscriptions & warranty', () => {
     expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toContain('حداکثر یک درخواست در روز');
   });
 
+  it('warranty claim from a username with "_" reaches the admins (Markdown-escaped)', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await delivered(t);
+    await t.send('store', callbackUpdate({ ...CUSTOMER, username: 'ali_reza' }, 'warranty_claim_1'));
+    const sent = t.tg.of('sendMessage').filter((c) => c.payload.text?.includes('درخواست گارانتی جدید'));
+    expect(sent.map((c) => c.payload.chat_id)).toEqual([1001, 1002]);
+    expect(sent[0].payload.text).toContain('@ali\\_reza');
+    expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('ثبت و به ادمین اطلاع داده شد');
+  });
+
+  it('warranty claim that reaches no admin: customer is told, no once-a-day lock', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await delivered(t);
+    t.tg.fail('sendMessage', (c) => [1001, 1002].includes(c.payload.chat_id), 400, 'Bad Request', 2);
+    await t.send('store', callbackUpdate(CUSTOMER, 'warranty_claim_1'));
+    expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toContain('ناموفق بود');
+    expect(one(t.storeDb, 'SELECT last_warranty_claim_at FROM orders').last_warranty_claim_at).toBeNull();
+    await t.send('store', callbackUpdate(CUSTOMER, 'warranty_claim_1')); // retry works
+    expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toBe('✅ درخواست ثبت شد.');
+  });
+
   it('renew button restarts the purchase flow with the renewal note', async () => {
     const t = makeTestEnv({ monshi: false });
     const pid = await delivered(t);
