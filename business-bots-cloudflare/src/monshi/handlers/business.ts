@@ -108,7 +108,20 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   const chatId = msg.chat.id;
   const bcid = msg.business_connection_id!;
   const sender = msg.from;
-  const conn = await app.ctx.getConnection();
+  let conn = await app.ctx.getConnection();
+  // Self-heal: the connection event may have been missed (e.g. the account was connected from the profile
+  // settings before this webhook existed). Every business message carries the connection id → fetch & save it.
+  if (!conn || conn.business_connection_id !== bcid) {
+    try {
+      const bc = await app.api.getBusinessConnection(bcid);
+      await app.db.saveConnection(bc.id, bc.user.id, !!bc.is_enabled);
+      app.ctx.invalidateConnection();
+      conn = await app.ctx.getConnection();
+      console.log(`Business connection ${bc.id} registered from a business message (user ${bc.user.id})`);
+    } catch (err: any) {
+      console.warn('Could not fetch business connection ' + bcid, err?.message ?? err);
+    }
+  }
   const ownerId = conn?.owner_user_id || app.cfg.adminId;
   const messageType = rules.detectMessageType(msg);
   const text = (msg as any).text || (msg as any).caption || null;

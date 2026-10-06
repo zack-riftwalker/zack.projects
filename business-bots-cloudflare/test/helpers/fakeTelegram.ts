@@ -19,6 +19,8 @@ export function makeFakeTelegram() {
       case 'sendChecklist':
       case 'editMessageChecklist':
         return { message_id: ++mid, date: 0, chat: { id: payload?.chat_id, type: 'private' }, text: payload?.text };
+      case 'getBusinessConnection':
+        return { id: payload?.business_connection_id, user: { id: 5001, is_bot: false, first_name: 'Owner' }, user_chat_id: 5001, date: 0, rights: { can_reply: true }, is_enabled: true };
       case 'copyMessage':
         return { message_id: ++mid };
       default:

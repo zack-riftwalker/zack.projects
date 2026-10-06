@@ -22,6 +22,20 @@ describe('monshi: business connection', () => {
   });
 });
 
+describe('monshi: missed connection event', () => {
+  it('a business message from an unknown connection registers it (status shows connected)', async () => {
+    const t = makeTestEnv({ store: false });
+    await t.send('monshi', businessMessageUpdate(CUST, 'سلام', { bcid: 'bcLate' }));
+    expect(one(t.monshiDb, 'SELECT business_connection_id, owner_user_id, is_enabled FROM connection')).toEqual({ business_connection_id: 'bcLate', owner_user_id: OWNER.id, is_enabled: 1 });
+    await t.send('monshi', textUpdate(OWNER, '/status'));
+    expect(t.tg.texts(OWNER.id).at(-1)).toContain('وصل ✅');
+    // known connection → no further lookups
+    t.tg.reset();
+    await t.send('monshi', businessMessageUpdate(CUST, 'دوباره', { bcid: 'bcLate' }));
+    expect(t.tg.of('getBusinessConnection')).toHaveLength(0);
+  });
+});
+
 describe('monshi: pipeline', () => {
   it('an owner message pauses the chat and marks earlier customer messages as human-answered', async () => {
     const t = makeTestEnv({ store: false });
