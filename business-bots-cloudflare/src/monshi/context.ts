@@ -8,7 +8,7 @@ export class MonshiContext {
   private faqs?: FaqRow[];
   private conn?: { business_connection_id: string; owner_user_id: number } | null;
 
-  constructor(readonly db: MonshiDb) {}
+  constructor(readonly db: MonshiDb, private readonly ownerUserId: number) {}
 
   async load(): Promise<void> {
     if (this.loaded) return;
@@ -50,7 +50,7 @@ export class MonshiContext {
   }
 
   async getConnection() {
-    if (this.conn === undefined) this.conn = await this.db.getActiveConnection();
+    if (this.conn === undefined) this.conn = await this.db.getActiveConnection(this.ownerUserId);
     return this.conn;
   }
 

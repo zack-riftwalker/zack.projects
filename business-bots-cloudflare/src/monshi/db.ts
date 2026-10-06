@@ -76,9 +76,11 @@ export class MonshiDb {
     ).run();
   }
 
-  async getActiveConnection(): Promise<{ business_connection_id: string; owner_user_id: number } | null> {
+  /** The owner's enabled connection. Rows of other accounts (never saved now, but maybe from older code) are ignored. */
+  async getActiveConnection(ownerUserId: number): Promise<{ business_connection_id: string; owner_user_id: number } | null> {
     return this.q(
-      'SELECT business_connection_id, owner_user_id FROM connection WHERE is_enabled = 1 ORDER BY updated_at DESC LIMIT 1',
+      'SELECT business_connection_id, owner_user_id FROM connection WHERE is_enabled = 1 AND owner_user_id = ? ORDER BY updated_at DESC LIMIT 1',
+      ownerUserId,
     ).first();
   }
 

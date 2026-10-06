@@ -17,6 +17,11 @@ const replaceSalesBot = async (app: MonshiApp, text: string | null) =>
 export async function onBusinessConnection(ctx: MonshiCtx): Promise<void> {
   const app = ctx.app;
   const bc = ctx.businessConnection!;
+  // Any Telegram Business user can attach this bot to their own account — only the owner's connection counts.
+  if (bc.user.id !== app.cfg.adminId) {
+    console.warn(`Ignored business connection ${bc.id} from non-owner user ${bc.user.id}`);
+    return;
+  }
   const isEnabled = !!bc.is_enabled;
   await app.db.saveConnection(bc.id, bc.user.id, isEnabled);
   app.ctx.invalidateConnection();
@@ -108,21 +113,27 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   const chatId = msg.chat.id;
   const bcid = msg.business_connection_id!;
   const sender = msg.from;
-  let conn = await app.ctx.getConnection();
+  const ownerId = app.cfg.adminId;
+  const conn = await app.ctx.getConnection();
   // Self-heal: the connection event may have been missed (e.g. the account was connected from the profile
-  // settings before this webhook existed). Every business message carries the connection id → fetch & save it.
+  // settings before this webhook existed). Every business message carries the connection id → fetch it,
+  // and keep it only if it belongs to the owner. Messages from anyone else's account are ignored entirely.
   if (!conn || conn.business_connection_id !== bcid) {
+    let bc;
     try {
-      const bc = await app.api.getBusinessConnection(bcid);
-      await app.db.saveConnection(bc.id, bc.user.id, !!bc.is_enabled);
-      app.ctx.invalidateConnection();
-      conn = await app.ctx.getConnection();
-      console.log(`Business connection ${bc.id} registered from a business message (user ${bc.user.id})`);
+      bc = await app.api.getBusinessConnection(bcid);
     } catch (err: any) {
-      console.warn('Could not fetch business connection ' + bcid, err?.message ?? err);
+      console.warn('Could not verify business connection ' + bcid + ' — message ignored', err?.message ?? err);
+      return;
     }
+    if (bc.user.id !== ownerId) {
+      console.warn(`Ignored message from business connection ${bcid} of non-owner user ${bc.user.id}`);
+      return;
+    }
+    await app.db.saveConnection(bc.id, bc.user.id, !!bc.is_enabled);
+    app.ctx.invalidateConnection();
+    console.log(`Business connection ${bc.id} registered from a business message (user ${bc.user.id})`);
   }
-  const ownerId = conn?.owner_user_id || app.cfg.adminId;
   const messageType = rules.detectMessageType(msg);
   const text = (msg as any).text || (msg as any).caption || null;
 

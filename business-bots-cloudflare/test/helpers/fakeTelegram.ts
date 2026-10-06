@@ -20,7 +20,11 @@ export function makeFakeTelegram() {
       case 'editMessageChecklist':
         return { message_id: ++mid, date: 0, chat: { id: payload?.chat_id, type: 'private' }, text: payload?.text };
       case 'getBusinessConnection':
-        return { id: payload?.business_connection_id, user: { id: 5001, is_bot: false, first_name: 'Owner' }, user_chat_id: 5001, date: 0, rights: { can_reply: true }, is_enabled: true };
+      {
+        // connection ids starting with 'foreign' belong to some other Telegram Business account
+        const uid = String(payload?.business_connection_id).startsWith('foreign') ? 9999 : 5001;
+        return { id: payload?.business_connection_id, user: { id: uid, is_bot: false, first_name: 'Owner' }, user_chat_id: uid, date: 0, rights: { can_reply: true }, is_enabled: true };
+      }
       case 'copyMessage':
         return { message_id: ++mid };
       default:

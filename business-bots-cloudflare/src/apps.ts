@@ -72,7 +72,7 @@ export function createApps(env: Env, deps: Deps = {}): Apps {
   if (mc) {
     const raw = countedD1(env.MONSHI_DB, budget);
     const db = new MonshiDb(raw);
-    apps.monshi = { kind: 'monshi', cfg: mc, db, raw, api: makeApi(mc.token), ctx: new MonshiContext(db), apps };
+    apps.monshi = { kind: 'monshi', cfg: mc, db, raw, api: makeApi(mc.token), ctx: new MonshiContext(db, mc.adminId), apps };
   }
   return apps;
 }

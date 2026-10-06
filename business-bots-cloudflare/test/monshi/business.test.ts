@@ -36,6 +36,38 @@ describe('monshi: missed connection event', () => {
   });
 });
 
+describe('monshi: connections of other accounts', () => {
+  const STRANGER = { id: 9999, first_name: 'Stranger' };
+  const STRANGERS_CUSTOMER = { id: 8888, first_name: 'Other' };
+
+  it('a stranger connecting the bot to their own Business account is ignored', async () => {
+    const t = makeTestEnv({ store: false });
+    await connect(t);
+    await t.send('monshi', businessConnectionUpdate(STRANGER, 'foreign1'));
+    expect(q(t.monshiDb, 'SELECT business_connection_id FROM connection').map((r) => r.business_connection_id)).toEqual(['bc1']);
+    expect(t.tg.calls).toHaveLength(0);
+    expect((await t.apps().monshi!.ctx.getConnection())!.business_connection_id).toBe('bc1');
+  });
+
+  it("messages arriving through a stranger's connection are dropped (not stored, not answered, no notification)", async () => {
+    const t = makeTestEnv({ store: false });
+    await connect(t);
+    setHours(t, 'closed');
+    await t.send('monshi', businessMessageUpdate(STRANGERS_CUSTOMER, 'رمزم کار نمیکنه', { bcid: 'foreign1' }));
+    expect(q(t.monshiDb, 'SELECT * FROM customers')).toHaveLength(0);
+    expect(q(t.monshiDb, 'SELECT * FROM messages')).toHaveLength(0);
+    expect(t.tg.calls.map((c) => c.method)).toEqual(['getBusinessConnection']);
+    expect(q(t.monshiDb, 'SELECT business_connection_id FROM connection').map((r) => r.business_connection_id)).toEqual(['bc1']);
+  });
+
+  it('a stranger row left in the table by older code never becomes the active connection', async () => {
+    const t = makeTestEnv({ store: false });
+    await connect(t);
+    q(t.monshiDb, "INSERT INTO connection VALUES ('foreign-old', 9999, 1, '2999-01-01T00:00:00+00:00')");
+    expect((await t.apps().monshi!.ctx.getConnection())!.business_connection_id).toBe('bc1');
+  });
+});
+
 describe('monshi: pipeline', () => {
   it('an owner message pauses the chat and marks earlier customer messages as human-answered', async () => {
     const t = makeTestEnv({ store: false });
