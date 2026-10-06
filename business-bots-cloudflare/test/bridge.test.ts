@@ -120,6 +120,32 @@ describe('bridge: store ⇄ monshi order flow', () => {
     expect(one(t.monshiDb, 'SELECT status FROM orders').status).toBe('cancelled');
   });
 
+  it('cancelling a store order in monshi tells the store admins and stops the stalled alert', async () => {
+    const t = makeTestEnv();
+    await connect(t);
+    await purchase(t);
+    await confirm(t);
+    t.tg.reset();
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_cancel:1'));
+    const notes = t.tg.of('sendMessage').filter((c) => c.token === STORE_TOKEN && String(c.payload.text).includes('در ربات منشی لغو شد'));
+    expect(notes.map((c) => c.payload.chat_id)).toEqual([ADMIN.id, ADMIN2.id]);
+    expect(one(t.storeDb, 'SELECT status, stalled_alert_sent FROM orders')).toEqual({ status: 'confirmed', stalled_alert_sent: 1 });
+    // a stale cancel tap does nothing more
+    t.tg.reset();
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_cancel:1'));
+    expect(t.tg.of('sendMessage')).toHaveLength(0);
+  });
+
+  it('a delivered order cannot be cancelled from a stale list message', async () => {
+    const t = makeTestEnv();
+    await connect(t);
+    await purchase(t);
+    await confirm(t);
+    await pressDelivered(t, OWNER);
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_cancel:1'));
+    expect(one(t.monshiDb, 'SELECT status FROM orders').status).toBe('delivered');
+  });
+
   it('duplicate confirm taps never register a second monshi order', async () => {
     const t = makeTestEnv();
     await connect(t);

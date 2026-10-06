@@ -1,6 +1,6 @@
 import type { Apps } from './apps';
 import { handleOrderPaid, type OrderPaidEvent } from './monshi/handlers/bridge';
-import { onOrderDelivered, onOrderPaidFailed } from './store/bridgeHandlers';
+import { onOrderCancelledInMonshi, onOrderDelivered, onOrderPaidFailed } from './store/bridgeHandlers';
 
 export type { OrderPaidEvent };
 
@@ -31,4 +31,10 @@ export async function storeOrderPaid(apps: Apps, event: OrderPaidEvent): Promise
 export async function monshiOrderDelivered(apps: Apps, storeOrderId: number): Promise<void> {
   if (!apps.store) return;
   await onOrderDelivered(apps.store, storeOrderId);
+}
+
+/** monshi → store: the owner cancelled an order that came from the store (the store has no «cancelled» status). */
+export async function monshiOrderCancelled(apps: Apps, storeOrderId: number): Promise<void> {
+  if (!apps.store) return;
+  await onOrderCancelledInMonshi(apps.store, storeOrderId);
 }

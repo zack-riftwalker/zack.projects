@@ -32,6 +32,28 @@ export async function onOrderDelivered(app: StoreApp, orderIdRaw: unknown): Prom
 }
 
 /**
+ * The support owner cancelled this order in monshi. The store keeps it «confirmed» (paid), so its admins are told
+ * to follow up (e.g. refund) and the 20 h stalled alert is switched off for it.
+ */
+export async function onOrderCancelledInMonshi(app: StoreApp, orderIdRaw: unknown): Promise<void> {
+  const orderId = parseInt(String(orderIdRaw), 10);
+  const order = orderId ? await app.db.getOrderById(orderId) : undefined;
+  if (!order || order.status !== 'confirmed') return;
+  await app.db.setStalledAlertSent(orderId);
+  const msg =
+    '⚠️ سفارش #' + orderId + ' («' + order.product_name + '») در ربات منشی لغو شد.\n' +
+    '👤 مشتری: ' + order.customer_telegram_id + '\n\n' +
+    'این سفارش پرداخت شده و در فروشگاه هنوز «تایید شده» است — در صورت نیاز، بازپرداخت/پیگیری را دستی انجام دهید.';
+  for (const adminId of app.cfg.adminIds) {
+    try {
+      await app.api.sendMessage(adminId, msg);
+    } catch (err: any) {
+      console.warn('⚠️ [Bridge] Failed to notify admin ' + adminId + ' about cancelled order #' + orderId + ':', err.message);
+    }
+  }
+}
+
+/**
  * Monshi could not message the customer (usually: never chatted with the
  * support account). Fallback: the store bot sends the preparing text itself,
  * and admins get a notice with a manual "delivered" button.

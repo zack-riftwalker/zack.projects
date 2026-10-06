@@ -301,8 +301,13 @@ export class MonshiDb {
     return r.meta.changes === 1;
   }
 
-  async cancelOrder(orderId: number): Promise<void> {
-    await this.q('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?', ORDER_STATUS_CANCELLED, utcIsoNow(), orderId).run();
+  /** Cancels an open order; a delivered or already cancelled one is left alone (false). */
+  async cancelOrder(orderId: number): Promise<boolean> {
+    const r = await this.q(
+      'UPDATE orders SET status = ?, updated_at = ? WHERE id = ? AND status IN (' + OPEN_STATUSES.map(() => '?').join(', ') + ')',
+      ORDER_STATUS_CANCELLED, utcIsoNow(), orderId, ...OPEN_STATUSES,
+    ).run();
+    return r.meta.changes === 1;
   }
 
   async setOrderChecklistMsg(orderId: number, messageId: number): Promise<void> {

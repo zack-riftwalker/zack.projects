@@ -5,6 +5,7 @@ import { ORDER_STATUS_DELIVERED, nextOrderStatus, type CustomerRow } from '../db
 import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, clearWizardStates, safeEdit } from './common';
 import { deliverOrder } from './bridge';
+import { monshiOrderCancelled } from '../../bridge';
 
 const customerLabel = (c: CustomerRow) => c.first_name || c.username || String(c.chat_id);
 
@@ -107,7 +108,16 @@ export const onOrderCallback = adminGuard(async (ctx) => {
   }
 
   if (data.startsWith('ord_cancel:')) {
-    await app.db.cancelOrder(parseInt(data.split(':', 2)[1], 10));
+    const orderId = parseInt(data.split(':', 2)[1], 10);
+    const order = await app.db.getOrder(orderId);
+    if (order && (await app.db.cancelOrder(orderId)) && order.external_order_id) {
+      // the store still has this order as «confirmed» — tell its admins (refund / follow-up) and stop its stalled alert
+      try {
+        await monshiOrderCancelled(app.apps, order.external_order_id);
+      } catch (err: any) {
+        console.error(`order_cancelled event to the store failed for order ${orderId}`, err?.message ?? err);
+      }
+    }
     return refreshOrdersMessage(ctx);
   }
 });
