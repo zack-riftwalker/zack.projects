@@ -124,6 +124,21 @@ npx wrangler tail                 # لاگ زنده
 ```
 داشبورد Cloudflare: Workers → business-bots → Logs / Metrics، و D1 → Metrics (تعداد ردیف‌های خوانده/نوشته‌شده).
 
+## پشتیبان‌گیری از دیتابیس (Backup)
+قبل از هر deploy یا تغییر دیتابیس، از هر دو دیتابیس یک خروجی کامل (ساختار + داده) بگیرید:
+```bash
+npm run db:backup
+```
+فایل‌ها در پوشه‌ی `backups/` با نام `<دیتابیس>-<تاریخ>-<ساعت>.sql` ذخیره می‌شوند (در `.gitignore` است؛ شامل اطلاعات مشتریان است، **هرگز commit نکنید** و جای امنی نگه دارید).
+- `npm run db:migrate:remote` اول خودش همین پشتیبان را می‌گیرد و اگر ناموفق باشد ادامه نمی‌دهد.
+- `npm run setup` هم وقتی از دیتابیس موجود استفاده می‌کند، قبل از ساخت جدول‌ها و انتقال دیتا پشتیبان می‌گیرد.
+- D1 علاوه بر این قابلیت Time Travel دارد (بازگردانی به هر لحظه از ۳۰ روز اخیر): `npx wrangler d1 time-travel restore <دیتابیس> --timestamp=<زمان>`.
+
+بازگردانی از فایل پشتیبان (روی یک دیتابیس خالی):
+```bash
+npx wrangler d1 execute <دیتابیس> --remote --file=backups/<فایل>.sql
+```
+
 ## برگشت به سرور قبلی (Rollback)
 ```bash
 curl "https://api.telegram.org/bot<STORE_TOKEN>/deleteWebhook"
@@ -194,4 +209,4 @@ legacy/                  (فقط محلی، در گیت نیست) کد اصلی 
 
 - webhookها با هدر `X-Telegram-Bot-Api-Secret-Token` محافظت می‌شوند؛ بدون آن پاسخ ۴۰۱ است.
 - توکن‌ها و کلیدها فقط در `wrangler secret` (و `.dev.vars` محلی که در گیت نیست) نگهداری می‌شوند.
-- `.env`، `*.db` و `migration_out/` در `.gitignore` هستند. مخزن عمومی است؛ هیچ داده‌ی مشتری یا کلیدی را commit نکنید.
+- `.env`، `*.db`، `migration_out/` و `backups/` در `.gitignore` هستند. مخزن عمومی است؛ هیچ داده‌ی مشتری یا کلیدی را commit نکنید.
