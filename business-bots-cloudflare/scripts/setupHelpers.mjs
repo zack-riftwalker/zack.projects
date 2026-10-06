@@ -44,3 +44,19 @@ export function findDatabaseId(listJson, name) {
     return null;
   }
 }
+
+/** [{name, id}] from `wrangler d1 list --json` output. */
+export function listDatabases(listJson) {
+  try {
+    return JSON.parse(listJson).map((d) => ({ name: d.name, id: d.uuid || d.id }));
+  } catch {
+    return [];
+  }
+}
+
+/** Set database_name of the [[d1_databases]] block whose binding is `binding`. */
+export function setDatabaseName(toml, binding, name) {
+  const re = new RegExp('(binding\\s*=\\s*"' + binding + '"[\\s\\S]*?database_name\\s*=\\s*)"[^"]*"');
+  if (!re.test(toml)) throw new Error('wrangler.toml has no D1 block for ' + binding);
+  return toml.replace(re, `$1"${name}"`);
+}

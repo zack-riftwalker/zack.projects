@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import readline from 'node:readline/promises';
 import {
-  findDatabaseId, parseDatabaseId, parseIdList, parseWorkerUrl, setDatabaseId, setTomlVar, validBotToken,
+  listDatabases, setDatabaseName, parseDatabaseId, parseIdList, parseWorkerUrl, setDatabaseId, setTomlVar, validBotToken,
 } from './setupHelpers.mjs';
 
 const DRY = process.argv.includes('--dry-run');
@@ -74,27 +74,38 @@ async function main() {
   const oldMonshi = await ask('مسیر فایل monshi.db قدیمی (اختیاری، Enter = از صفر)', { required: false, check: existsSync });
   const webhookSecret = randomBytes(32).toString('hex');
 
-  step(3, 'ساخت دیتابیس‌ها');
+  step(3, 'دیتابیس‌ها');
   let toml = readFileSync(TOML, 'utf8');
   const original = toml;
-  for (const [name, binding] of [['store-bot-db', 'STORE_DB'], ['monshi-bot-db', 'MONSHI_DB']]) {
-    let id = null;
-    if (!DRY) {
-      const list = wrangler(['d1', 'list', '--json'], { allowFail: true });
-      id = findDatabaseId(list.out.slice(list.out.indexOf('[')), name);
-      if (id) say(`✅ ${name} از قبل وجود دارد.`);
-      else {
-        const created = wrangler(['d1', 'create', name]);
-        id = parseDatabaseId(created.out);
-        writeFileSync(TOML, original); // `d1 create` may append its own binding block — undo that
-        if (!id) throw new Error('شناسه‌ی دیتابیس ' + name + ' پیدا نشد.');
-        say(`✅ ${name} ساخته شد.`);
-      }
-    } else {
-      wrangler(['d1', 'create', name]);
-      id = '00000000-0000-0000-0000-000000000000';
+  let existing = [];
+  if (!DRY) {
+    const list = wrangler(['d1', 'list', '--json'], { allowFail: true });
+    existing = listDatabases(list.out.slice(Math.max(0, list.out.indexOf('['))));
+  }
+  const names = {};
+  for (const [label, defName, binding] of [['فروشگاه', 'store-bot-db', 'STORE_DB'], ['منشی', 'monshi-bot-db', 'MONSHI_DB']]) {
+    let db = existing.find((d) => d.name === defName);
+    if (!db && existing.length) {
+      say(`دیتابیس‌های موجود در حساب شما:`);
+      existing.forEach((d, i) => say(`  ${i + 1}) ${d.name}  (${d.id})`));
+      const pick = await ask(`شماره‌ی دیتابیس «${label}» (Enter = بساز)`, { required: false, check: (v) => existing[Number(v) - 1] });
+      if (pick) db = existing[Number(pick) - 1];
     }
-    toml = setDatabaseId(toml, binding, id);
+    if (db) {
+      say(`✅ برای ${label} از «${db.name}» استفاده می‌شود.`);
+    } else if (DRY) {
+      wrangler(['d1', 'create', defName]);
+      db = { name: defName, id: '00000000-0000-0000-0000-000000000000' };
+    } else {
+      const created = wrangler(['d1', 'create', defName]);
+      writeFileSync(TOML, original); // `d1 create` may append its own binding block — undo that
+      const id = parseDatabaseId(created.out);
+      if (!id) throw new Error('شناسه‌ی دیتابیس ' + defName + ' پیدا نشد.');
+      db = { name: defName, id };
+      say(`✅ ${defName} ساخته شد.`);
+    }
+    names[binding] = db.name;
+    toml = setDatabaseName(setDatabaseId(toml, binding, db.id), binding, db.name);
   }
   toml = setTomlVar(toml, 'STORE_ADMIN_IDS', parseIdList(storeAdmins).join(','));
   toml = setTomlVar(toml, 'MONSHI_ADMIN_USER_ID', monshiAdmin);
@@ -103,8 +114,8 @@ async function main() {
   say('✅ wrangler.toml به‌روز شد.');
 
   step(4, 'ساخت جدول‌ها');
-  wrangler(['d1', 'migrations', 'apply', 'store-bot-db', '--remote'], { inherit: !DRY });
-  wrangler(['d1', 'migrations', 'apply', 'monshi-bot-db', '--remote'], { inherit: !DRY });
+  wrangler(['d1', 'migrations', 'apply', names.STORE_DB, '--remote'], { inherit: !DRY });
+  wrangler(['d1', 'migrations', 'apply', names.MONSHI_DB, '--remote'], { inherit: !DRY });
 
   step(5, 'انتقال دیتای قدیمی');
   if (oldStore || oldMonshi) {
@@ -116,8 +127,8 @@ async function main() {
       const py = spawnSync(process.platform === 'win32' ? 'python' : 'python3', args, { stdio: 'inherit' });
       if (py.status !== 0) throw new Error('تبدیل دیتا ناموفق بود (Python 3 نصب است؟)');
     }
-    if (oldStore) wrangler(['d1', 'execute', 'store-bot-db', '--remote', '--file=migration_out/store_data.sql', '-y'], { inherit: !DRY });
-    if (oldMonshi) wrangler(['d1', 'execute', 'monshi-bot-db', '--remote', '--file=migration_out/monshi_data.sql', '-y'], { inherit: !DRY });
+    if (oldStore) wrangler(['d1', 'execute', names.STORE_DB, '--remote', '--file=migration_out/store_data.sql', '-y'], { inherit: !DRY });
+    if (oldMonshi) wrangler(['d1', 'execute', names.MONSHI_DB, '--remote', '--file=migration_out/monshi_data.sql', '-y'], { inherit: !DRY });
     if (!DRY) rmSync('migration_out', { recursive: true, force: true });
     say('✅ دیتا منتقل شد و فایل‌های موقت پاک شدند.');
   } else say('از صفر شروع می‌شود.');

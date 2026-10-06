@@ -33,5 +33,9 @@ describe('setup helpers', () => {
     expect(h.parseWorkerUrl('Deployed business-bots\n  https://business-bots.zack.workers.dev\nVersion')).toBe('https://business-bots.zack.workers.dev');
     expect(h.findDatabaseId('[{"name":"a","uuid":"u1"},{"name":"b","uuid":"u2"}]', 'b')).toBe('u2');
     expect(h.findDatabaseId('garbage', 'b')).toBeNull();
+    expect(h.listDatabases('[{"name":"a","uuid":"u1"}]')).toEqual([{ name: 'a', id: 'u1' }]);
+    const t = h.setDatabaseName(readFileSync('wrangler.toml', 'utf8'), 'MONSHI_DB', 'my-db');
+    expect(t).toMatch(/binding = "MONSHI_DB"[\s\S]*?database_name = "my-db"/);
+    expect(t).toContain('database_name = "store-bot-db"');
   });
 });
