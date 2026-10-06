@@ -420,7 +420,34 @@ export class StoreDb {
   async getRunningBroadcast(): Promise<BroadcastJob | undefined> {
     const row: any = await this.q("SELECT * FROM broadcast_jobs WHERE status = 'running' ORDER BY id LIMIT 1").first();
     if (!row) return undefined;
-    return { ...row, entities: row.entities ? JSON.parse(row.entities) : null };
+    let entities = null;
+    if (row.entities) {
+      try {
+        entities = JSON.parse(row.entities);
+      } catch (err: any) {
+        // a corrupt row must not block this and every later announcement — send it as plain text
+        console.error('❌ [DB] Corrupt entities JSON for broadcast job id=' + row.id + ':', err.message);
+      }
+    }
+    return { ...row, entities };
+  }
+
+  /**
+   * Atomic lease so only one invocation sends a broadcast batch at a time (the admin's webhook and the
+   * every-minute cron used to send the same batch concurrently). `token` = lease expiry (epoch ms).
+   */
+  async acquireBroadcastLease(nowMs: number, token: number): Promise<boolean> {
+    const r = await this.q(
+      "INSERT INTO app_state (key, value, updated_at) VALUES ('broadcast_lease', ?, datetime('now')) " +
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at ' +
+        'WHERE CAST(app_state.value AS INTEGER) <= ?',
+      String(token), nowMs,
+    ).run();
+    return r.meta.changes === 1;
+  }
+
+  async releaseBroadcastLease(token: number): Promise<void> {
+    await this.q("UPDATE app_state SET value = '0' WHERE key = 'broadcast_lease' AND value = ?", String(token)).run();
   }
 
   async getCustomerBatch(afterId: number, limit: number): Promise<{ id: number; telegram_id: number }[]> {

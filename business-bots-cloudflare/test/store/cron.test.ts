@@ -136,4 +136,38 @@ describe('announcement broadcast queue', () => {
     expect(sentTo.filter((c) => c.payload.chat_id === 4003)).toHaveLength(2);
     expect(one(t.storeDb, 'SELECT status, sent, failed FROM broadcast_jobs')).toEqual({ status: 'done', sent: 4, failed: 1 });
   });
+
+  it('two invocations running at the same time never send to the same customer twice (lease)', async () => {
+    const t = makeTestEnv({ monshi: false });
+    customers(t, 30);
+    q(t.storeDb, "INSERT INTO broadcast_jobs (admin_chat_id, text, total) VALUES (?, 'Big news', 30)", ADMIN.id);
+    await Promise.all([t.cron(at(5, 1)), t.cron(at(5, 1)), t.cron(at(5, 1))]);
+    await t.cron(at(5, 2));
+    const recipients = t.tg.of('sendMessage').filter((c) => c.payload.text === 'Big news').map((c) => c.payload.chat_id);
+    expect(recipients).toHaveLength(30);
+    expect(new Set(recipients).size).toBe(30);
+    expect(one(t.storeDb, 'SELECT status, sent FROM broadcast_jobs')).toEqual({ status: 'done', sent: 30 });
+    expect(one(t.storeDb, "SELECT value FROM app_state WHERE key = 'broadcast_lease'").value).toBe('0');
+  });
+
+  it('a held lease blocks sending; an expired one (crashed invocation) does not', async () => {
+    const t = makeTestEnv({ monshi: false });
+    customers(t, 3);
+    q(t.storeDb, "INSERT INTO broadcast_jobs (admin_chat_id, text, total) VALUES (?, 'Big news', 3)", ADMIN.id);
+    q(t.storeDb, "INSERT INTO app_state (key, value) VALUES ('broadcast_lease', ?)", String(Date.now() + 60_000));
+    await t.cron(at(5, 1));
+    expect(t.tg.of('sendMessage').filter((c) => c.payload.text === 'Big news')).toHaveLength(0);
+    q(t.storeDb, "UPDATE app_state SET value = ? WHERE key = 'broadcast_lease'", String(Date.now() - 1));
+    await t.cron(at(5, 2));
+    expect(t.tg.of('sendMessage').filter((c) => c.payload.text === 'Big news')).toHaveLength(3);
+  });
+
+  it('corrupt entities JSON does not block the queue (sent as plain text)', async () => {
+    const t = makeTestEnv({ monshi: false });
+    customers(t, 2);
+    q(t.storeDb, "INSERT INTO broadcast_jobs (admin_chat_id, text, entities, total) VALUES (?, 'Big news', '{oops', 2)", ADMIN.id);
+    await t.cron(at(5, 1));
+    expect(t.tg.of('sendMessage').filter((c) => c.payload.text === 'Big news')).toHaveLength(2);
+    expect(one(t.storeDb, 'SELECT status FROM broadcast_jobs').status).toBe('done');
+  });
 });
