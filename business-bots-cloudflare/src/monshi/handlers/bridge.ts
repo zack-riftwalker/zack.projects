@@ -6,7 +6,7 @@
 import type { MonshiApp } from '../../apps';
 import { monshiOrderDelivered } from '../../bridge';
 import { Markup } from '../../lib/markup';
-import { ORDER_STATUS_CANCELLED, ORDER_STATUS_FLOW, type OrderRow } from '../db';
+import { ORDER_STATUS_CANCELLED, ORDER_STATUS_DELIVERED, nextOrderStatus, type OrderRow } from '../db';
 import * as orders from '../services/orders';
 import type { MonshiCtx } from '../types';
 import { notifyAll } from './common';
@@ -78,8 +78,11 @@ export async function handleOrderPaid(app: MonshiApp, event: OrderPaidEvent): Pr
  * Marks an order «delivered»: completion message to the customer + checklist update + bridge event to the
  * store (starts the subscription clock). Shared by the «✅ تحویل شد» button in the customer chat and the last step of /orders.
  */
-export async function deliverOrder(app: MonshiApp, order: OrderRow): Promise<void> {
-  await app.db.setOrderStatus(order.id, ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1]);
+export async function deliverOrder(app: MonshiApp, order: OrderRow): Promise<boolean> {
+  // atomic: of two concurrent taps (or a tap on a stale button) only one delivers and messages the customer
+  if (nextOrderStatus(order.status) === null || !(await app.db.transitionOrder(order.id, order.status, ORDER_STATUS_DELIVERED))) {
+    return false;
+  }
   const fresh = (await app.db.getOrder(order.id))!;
 
   try {
@@ -111,6 +114,7 @@ export async function deliverOrder(app: MonshiApp, order: OrderRow): Promise<voi
       console.error(`order_delivered event to the store failed for order ${order.id}`, err?.message ?? err);
     }
   }
+  return true;
 }
 
 async function removeDeliveryButton(app: MonshiApp, order: OrderRow, messageId: number | undefined): Promise<void> {
@@ -141,7 +145,7 @@ export async function onDeliveryCallback(ctx: MonshiCtx): Promise<void> {
     await ctx.answerCallbackQuery('❌ سفارش یافت نشد.');
     return;
   }
-  if (order.status === ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1]) {
+  if (order.status === ORDER_STATUS_DELIVERED) {
     // already delivered (e.g. from /orders) — just remove the leftover button
     await ctx.answerCallbackQuery('ℹ️ قبلاً تحویل ثبت شده.');
     await removeDeliveryButton(app, order, messageId);
@@ -152,7 +156,12 @@ export async function onDeliveryCallback(ctx: MonshiCtx): Promise<void> {
     return;
   }
 
+  if (!(await deliverOrder(app, order))) {
+    // lost the race to another tap / the orders list
+    await ctx.answerCallbackQuery('ℹ️ قبلاً تحویل ثبت شده.');
+    await removeDeliveryButton(app, order, messageId);
+    return;
+  }
   await ctx.answerCallbackQuery('✅ تحویل ثبت شد.');
   await removeDeliveryButton(app, order, messageId);
-  await deliverOrder(app, order);
 }

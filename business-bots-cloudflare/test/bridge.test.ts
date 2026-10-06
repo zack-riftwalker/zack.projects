@@ -85,6 +85,41 @@ describe('bridge: store ⇄ monshi order flow', () => {
     expect(one(t.storeDb, 'SELECT status FROM orders').status).toBe('delivered');
   });
 
+  it('a second «next step» on an already delivered order (stale list / double tap) sends nothing again', async () => {
+    const t = makeTestEnv();
+    await connect(t);
+    await purchase(t);
+    await confirm(t);
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_next:1'));
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_next:1'));
+    await pressDelivered(t, OWNER);
+    expect(t.tg.of('sendMessage', CUSTOMER.id).filter((c) => c.payload.text === MONSHI_COMPLETION)).toHaveLength(1);
+  });
+
+  it('two concurrent «✅ تحویل شد» taps deliver exactly once', async () => {
+    const t = makeTestEnv();
+    await connect(t);
+    await purchase(t);
+    await confirm(t);
+    t.tg.reset();
+    await Promise.all([pressDelivered(t, OWNER), pressDelivered(t, OWNER)]);
+    expect(t.tg.of('sendMessage', CUSTOMER.id).filter((c) => c.payload.text === MONSHI_COMPLETION)).toHaveLength(1);
+    expect(one(t.monshiDb, 'SELECT status FROM orders').status).toBe('delivered');
+  });
+
+  it('«next step» on a cancelled order does nothing for the customer', async () => {
+    const t = makeTestEnv();
+    await connect(t);
+    await purchase(t);
+    await confirm(t);
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_cancel:1'));
+    t.tg.reset();
+    await t.send('monshi', callbackUpdate(OWNER, 'ord_next:1'));
+    expect(t.tg.of('sendMessage', CUSTOMER.id)).toHaveLength(0);
+    expect(t.tg.of('editMessageChecklist')).toHaveLength(0);
+    expect(one(t.monshiDb, 'SELECT status FROM orders').status).toBe('cancelled');
+  });
+
   it('duplicate confirm taps never register a second monshi order', async () => {
     const t = makeTestEnv();
     await connect(t);

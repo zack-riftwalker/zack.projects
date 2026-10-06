@@ -22,6 +22,13 @@ export interface MessageRow { direction: string; text: string | null; message_ty
 export interface UnansweredRow { id: number; chat_id: number; text: string; normalized_text: string; count: number; last_seen_at: string; status: string }
 
 const OPEN_STATUSES = ORDER_STATUS_FLOW.slice(0, -1);
+export const ORDER_STATUS_DELIVERED = ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1];
+
+/** Next step of an open order; null when delivered, cancelled or unknown. */
+export function nextOrderStatus(status: string): string | null {
+  const idx = OPEN_STATUSES.indexOf(status);
+  return idx === -1 ? null : ORDER_STATUS_FLOW[idx + 1];
+}
 export const OPEN_ORDERS_SQL = 'SELECT * FROM orders WHERE status IN (' + OPEN_STATUSES.map(() => '?').join(', ') + ') ORDER BY created_at DESC';
 
 const FAQ_EDITABLE_FIELDS = new Set(['question', 'answer', 'keywords']);
@@ -284,16 +291,14 @@ export class MonshiDb {
     return this.q('SELECT * FROM orders WHERE chat_id = ? AND status NOT IN (?, ?) ORDER BY created_at DESC LIMIT 1', chatId, ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1], ORDER_STATUS_CANCELLED).first();
   }
 
-  async advanceOrder(orderId: number): Promise<string | null> {
-    const order = await this.getOrder(orderId);
-    if (!order) return null;
-    const current = order.status;
-    if (!ORDER_STATUS_FLOW.includes(current)) return current;
-    const idx = ORDER_STATUS_FLOW.indexOf(current);
-    if (idx >= ORDER_STATUS_FLOW.length - 1) return current;
-    const next = ORDER_STATUS_FLOW[idx + 1];
-    await this.q('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?', next, utcIsoNow(), orderId).run();
-    return next;
+  /**
+   * Compare-and-set status change: true only for the one caller that actually moved the order from `from`.
+   * A double tap or an out-of-date button gets false and must not repeat the side effects (customer messages).
+   */
+  async transitionOrder(orderId: number, from: string, to: string): Promise<boolean> {
+    if (!ORDER_STATUS_FLOW.includes(to) && to !== ORDER_STATUS_CANCELLED) throw new Error('invalid order status: ' + to);
+    const r = await this.q('UPDATE orders SET status = ?, updated_at = ? WHERE id = ? AND status = ?', to, utcIsoNow(), orderId, from).run();
+    return r.meta.changes === 1;
   }
 
   async cancelOrder(orderId: number): Promise<void> {

@@ -1,7 +1,7 @@
 /** Order management from inside Telegram — register, advance a step, cancel. */
 import { Markup, type InlineButton } from '../../lib/markup';
 import * as orders from '../services/orders';
-import { ORDER_STATUS_FLOW, type CustomerRow } from '../db';
+import { ORDER_STATUS_DELIVERED, nextOrderStatus, type CustomerRow } from '../db';
 import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, safeEdit } from './common';
 import { deliverOrder } from './bridge';
@@ -79,16 +79,17 @@ export const onOrderCallback = adminGuard(async (ctx) => {
 
   if (data.startsWith('ord_next:')) {
     const orderId = parseInt(data.split(':', 2)[1], 10);
-    const newStatus = await app.db.advanceOrder(orderId);
     const order = await app.db.getOrder(orderId);
-    if (order && newStatus) {
-      if (newStatus === ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1] && order.external_order_id) {
+    // delivered / cancelled (stale list message or double tap) → nothing to do, just refresh the list
+    const next = order ? nextOrderStatus(order.status) : null;
+    if (order && next) {
+      if (next === ORDER_STATUS_DELIVERED && order.external_order_id) {
         // store order: same behaviour as the «✅ تحویل شد» button in the customer chat —
         // completion/activation message + checklist + bridge event to the store
         await deliverOrder(app, order);
-      } else {
-        await orders.sendOrUpdateChecklist(app, order);
-        if (newStatus === ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1]) {
+      } else if (await app.db.transitionOrder(orderId, order.status, next)) {
+        await orders.sendOrUpdateChecklist(app, (await app.db.getOrder(orderId))!);
+        if (next === ORDER_STATUS_DELIVERED) {
           try {
             await app.api.sendMessage(
               order.chat_id,
