@@ -3,7 +3,7 @@ import { Markup, type InlineButton } from '../../lib/markup';
 import * as orders from '../services/orders';
 import { ORDER_STATUS_DELIVERED, nextOrderStatus, type CustomerRow } from '../db';
 import type { MonshiCtx } from '../types';
-import { adminGuard, cancelButton, safeEdit } from './common';
+import { adminGuard, cancelButton, clearWizardStates, safeEdit } from './common';
 import { deliverOrder } from './bridge';
 
 const customerLabel = (c: CustomerRow) => c.first_name || c.username || String(c.chat_id);
@@ -39,6 +39,7 @@ async function ordersView(ctx: MonshiCtx) {
 }
 
 const startOrderAddWizard = (ctx: MonshiCtx) => {
+  clearWizardStates(ctx.session);
   ctx.session.order_wizard = { step: 'customer', data: {} };
 };
 

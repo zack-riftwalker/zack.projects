@@ -9,7 +9,7 @@ import * as hours from '../services/hours';
 import * as rules from '../services/rules';
 import { unansweredView } from '../views';
 import type { MonshiCtx } from '../types';
-import { adminGuard, cancelButton, commandArgs, commandRest, safeEdit } from './common';
+import { adminGuard, cancelButton, clearWizardStates, commandArgs, commandRest, safeEdit } from './common';
 import * as faqAdmin from './faqAdmin';
 import * as orderAdmin from './orderAdmin';
 
@@ -377,6 +377,7 @@ export const onHoursCallback = adminGuard(async (ctx) => {
   }
   if (data.startsWith('hcustom:')) {
     const dayKey = data.split(':', 2)[1];
+    clearWizardStates(ctx.session);
     ctx.session.awaiting_hours_day = dayKey;
     return safeEdit(
       ctx,
@@ -552,11 +553,13 @@ export const onSettingsCallback = adminGuard(async (ctx) => {
     return show(await cooldownView(app));
   }
   if (data === 'st_cooldown_custom') {
+    clearWizardStates(ctx.session);
     ctx.session.awaiting_cooldown = true;
     return safeEdit(ctx, '✏️ فاصله دلخواه را به ساعت بفرست (مثلاً 2 یا 0.5):', cancelButton());
   }
   if (data.startsWith('st_edit:')) {
     const key = data.split(':', 2)[1];
+    clearWizardStates(ctx.session);
     ctx.session.settings_edit = { key };
     const label = key === 'after_hours_message' ? 'پیام غیرکاری' : 'پیام خوش‌آمد';
     return safeEdit(ctx, `✏️ متن جدید «${label}» را بفرست:\n(عبارت {sales_bot} خودکار جایگزین می‌شود)`, cancelButton());

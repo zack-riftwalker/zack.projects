@@ -278,3 +278,18 @@ describe('monshi admin: orders panel', () => {
       .toEqual(['وضعیت سفارش «سفارش تست»: ثبت سفارش ✅\nبه‌محض تغییر وضعیت، اطلاع‌رسانی می‌شود.']);
   });
 });
+
+describe('monshi: leftover input states', () => {
+  it('an abandoned «edit after-hours message» does not swallow text after another wizard', async () => {
+    const t = makeTestEnv({ store: false });
+    const before = getSetting(t, 'after_hours_message');
+    await ownerCb(t, 'st_edit:after_hours_message'); // started, never finished or cancelled
+    await owner(t, '/faq_add');
+    await owner(t, 'Q?');
+    await owner(t, 'A.');
+    await owner(t, 'kw');
+    expect(q(t.monshiDb, 'SELECT question FROM faqs')).toEqual([{ question: 'Q?' }]);
+    await owner(t, 'just a note to myself');
+    expect(getSetting(t, 'after_hours_message')).toBe(before);
+  });
+});

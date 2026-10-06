@@ -66,6 +66,7 @@ export async function cmdFaqList(ctx: MonshiCtx): Promise<void> {
 }
 
 const startFaqAddWizard = (ctx: MonshiCtx) => {
+  clearWizardStates(ctx.session);
   ctx.session.faq_wizard = { step: 'question', data: {} };
 };
 
@@ -142,6 +143,7 @@ export const onFaqCallback = adminGuard(async (ctx) => {
   }
   if (data.startsWith('fq_edit:')) {
     const [, faqId, field] = data.split(':');
+    clearWizardStates(ctx.session);
     ctx.session.faq_edit = { id: parseInt(faqId, 10), field };
     const fieldFa = ({ question: 'سوال', answer: 'جواب', keywords: 'کلیدواژه‌ها' } as Record<string, string>)[field];
     return safeEdit(ctx, `✏️ متن جدید برای «${fieldFa}» را بفرست:`, cancelButton());
@@ -150,6 +152,7 @@ export const onFaqCallback = adminGuard(async (ctx) => {
     const uid = parseInt(data.split(':', 2)[1], 10);
     const row = await app.db.getUnansweredById(uid);
     if (!row) return safeEdit(ctx, '❌ این مورد دیگر موجود نیست.');
+    clearWizardStates(ctx.session);
     ctx.session.faq_wizard = { step: 'answer', data: { question: row.text, _unanswered_id: uid } };
     return safeEdit(ctx, `➕ تبدیل به FAQ:\n❓ ${row.text}\n\nحالا متن جوابی که باید فرستاده شود را بنویس:`, cancelButton());
   }
