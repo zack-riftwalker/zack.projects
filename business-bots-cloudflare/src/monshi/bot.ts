@@ -75,6 +75,7 @@ export function createMonshiBot(app: MonshiApp, botInfo: UserFromGetMe): Bot<Mon
     ['set_message', admin.cmdSetMessage],
     ['set_greeting', admin.cmdSetGreeting],
     ['resume_chat', admin.cmdResumeChat],
+    ['customer', admin.cmdCustomer],
     ['set_cooldown', admin.cmdSetCooldown],
     ['unanswered', admin.cmdUnanswered],
     ['stats', admin.cmdStats],

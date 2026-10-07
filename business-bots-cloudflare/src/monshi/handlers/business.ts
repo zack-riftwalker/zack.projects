@@ -8,6 +8,8 @@ import * as hours from '../services/hours';
 import * as orders from '../services/orders';
 import * as rules from '../services/rules';
 import { sendToStaff } from '../services/topics';
+import { storeCustomerSummary } from '../../bridge';
+import { customerCardLines } from '../views';
 import type { MonshiCtx } from '../types';
 import { notifyAll } from './common';
 
@@ -70,11 +72,14 @@ async function markRead(app: MonshiApp, bcid: string, chatId: number, messageId:
 async function notifyAdmin(
   app: MonshiApp, sender: { id: number; first_name?: string; username?: string } | undefined,
   chatId: number, messageType: string, text: string | null | undefined, reason: string,
+  customer?: { first_seen_at: string | null } | null,
 ): Promise<void> {
   const name = sender?.first_name || 'ناشناس';
   const link = sender?.username ? `https://t.me/${sender.username}` : sender ? `tg://user?id=${sender.id}` : '—';
   const preview = text ? text.slice(0, 200) : `[${messageType}]`;
-  const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n🔗 ${link}`;
+  // what the store knows about this customer (their chat id is their Telegram id) — never blocks the notification
+  const card = customerCardLines(await storeCustomerSummary(app.apps, chatId), customer, app.apps.now());
+  const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n` + card.map((l) => l + '\n').join('') + `🔗 ${link}`;
   // pause button: with one tap the bot steps away from this chat while the owner continues by hand
   const markup = Markup.inlineKeyboard([[
     Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`),
@@ -173,7 +178,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   // 4) silence rule: media / sensitive content → notify the owner, no reply
   if (rules.isSensitive(text, messageType)) {
     await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
-    await notifyAdmin(app, sender, chatId, messageType, text, 'حساس/مدیا');
+    await notifyAdmin(app, sender, chatId, messageType, text, 'حساس/مدیا', customer);
     return;
   }
 
@@ -219,7 +224,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
           if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;
         }
         await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
-        await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)');
+        await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)', customer);
         return;
       }
     } else if (route === 'order_status') {

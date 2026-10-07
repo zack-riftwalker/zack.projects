@@ -2,11 +2,13 @@ import type { Api } from 'grammy';
 import { Markup } from '../../lib/markup';
 import { formatPrice } from '../utils';
 
-export function buildReceiptCaption({ customer, order, duplicateOf }: {
+export function buildReceiptCaption({ customer, order, duplicateOf, history }: {
   customer: { id: number; firstName?: string; username?: string | null };
   order: { productName: string; price: number };
   /** an earlier order that used the very same receipt file */
   duplicateOf?: { id: number; status: string; customerId: number } | null;
+  /** the customer's confirmed-purchase count so far (null = unknown, no line) */
+  history?: number | null;
 }): string {
   const username = customer.username ? ' (@' + customer.username + ')' : '';
   const lines = [
@@ -17,6 +19,9 @@ export function buildReceiptCaption({ customer, order, duplicateOf }: {
     '📦 محصول: ' + order.productName,
     '💰 قیمت: ' + formatPrice(order.price) + ' تومان',
   ];
+  if (history !== undefined && history !== null) {
+    lines.push(history > 0 ? '🧾 سابقه: ' + history + ' خرید تأییدشده' : '🆕 اولین خرید این مشتری');
+  }
   if (duplicateOf) {
     lines.push('', '⚠️ هشدار: همین فایل رسید قبلاً برای سفارش #' + duplicateOf.id +
       ' (' + (ORDER_STATUS_FA[duplicateOf.status] ?? duplicateOf.status) + '، مشتری ' + duplicateOf.customerId + ') ارسال شده است.');

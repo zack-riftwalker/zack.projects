@@ -8,7 +8,8 @@ import * as gemini from '../services/gemini';
 import * as hours from '../services/hours';
 import * as rules from '../services/rules';
 import { ensureTopic, sendToStaff, TOPIC_CATEGORIES, TOPICS } from '../services/topics';
-import { unansweredView } from '../views';
+import { customerCardLines, unansweredView } from '../views';
+import { storeCustomerSummary } from '../../bridge';
 import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, clearWizardStates, commandArgs, commandRest, safeEdit } from './common';
 import * as faqAdmin from './faqAdmin';
@@ -102,6 +103,7 @@ export const HELP_TEXT =
   'میان‌برهای اختیاری (برای کسی که تایپ رو ترجیح می‌ده):\n\n' +
   '/status /pause /resume /settings /hours /set_message /set_greeting\n' +
   '/resume_chat <آیدی یا @یوزرنیم> /set_cooldown <ساعت> /unanswered /stats /digest\n' +
+  '/customer <آیدی یا @یوزرنیم> — کارت مشتری (سابقه خرید + آخرین پیام‌ها)\n' +
   '/faq_list /faq_add /faq_edit <شماره> /faq_disable <شماره> /faq_enable <شماره>\n' +
   '/order_add /orders\n' +
   '/gemini_status /gemini_toggle /set_threshold faq|handoff <عدد>\n' +
@@ -147,6 +149,40 @@ export async function cmdResumeChat(ctx: MonshiCtx): Promise<void> {
   }
   await ctx.app.db.setChatPause(customer.chat_id, null);
   await ctx.reply(`▶️ پاسخ خودکار برای چت «${labelOf(customer)}» دوباره فعال شد.`);
+}
+
+/** /customer <@username | id>: the customer card (store history) + the last messages + pause/resume button. */
+export async function cmdCustomer(ctx: MonshiCtx): Promise<void> {
+  const app = ctx.app;
+  const args = commandArgs(ctx);
+  if (!args.length) {
+    await ctx.reply('فرمت: /customer <آیدی چت> یا /customer @یوزرنیم');
+    return;
+  }
+  const target = args[0];
+  const customer = target.startsWith('@')
+    ? await app.db.getCustomerByUsername(target)
+    : /^-?\d+$/.test(target) ? await app.db.getCustomer(parseInt(target, 10)) : null;
+  if (!customer) {
+    await ctx.reply('❌ مشتری‌ای با این مشخصات پیدا نشد.');
+    return;
+  }
+  const card = customerCardLines(await storeCustomerSummary(app.apps, customer.chat_id), customer, app.apps.now());
+  const recent = await app.db.getRecentMessages(customer.chat_id, 5);
+  const icon: Record<string, string> = { in: '👤', owner: '🧑', out: '🤖' };
+  const lines = [
+    `👤 ${labelOf(customer)}${customer.username ? ' (@' + customer.username + ')' : ''}`,
+    ...card,
+    '',
+    '💬 آخرین پیام‌ها:',
+    ...(recent.length ? recent.map((m) => `${icon[m.direction] ?? '•'} ${(m.text ?? `[${m.message_type ?? '—'}]`).slice(0, 80)}`) : ['—']),
+  ];
+  const paused = rules.isChatPaused(customer, app.apps.now());
+  await ctx.reply(lines.join('\n'), Markup.inlineKeyboard([[
+    paused
+      ? Markup.button.callback('▶️ فعال‌سازی ربات برای این چت', `resume_chat:${customer.chat_id}`)
+      : Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${customer.chat_id}`),
+  ]]));
 }
 
 export async function cmdSetCooldown(ctx: MonshiCtx): Promise<void> {

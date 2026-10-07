@@ -2,6 +2,7 @@ import type { Bot } from 'grammy';
 import type { StoreApp } from '../../apps';
 import { getReferralConfig } from '../referralConfig';
 import { onPurchaseConfirmed } from '../referrals';
+import { getCustomerSummary } from '../customerSummary';
 import { Markup } from '../../lib/markup';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
@@ -540,6 +541,12 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       return;
     }
 
+    let history: number | null = null;
+    try {
+      history = (await getCustomerSummary(ctx.app, ctx.from.id)).purchases;
+    } catch (err: any) {
+      console.warn('⚠️ [Storefront] customer history lookup failed:', err.message);
+    }
     const caption = buildReceiptCaption({
       customer: {
         id: ctx.from.id,
@@ -548,6 +555,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       },
       order: { productName, price },
       duplicateOf,
+      history,
     });
     const delivery = await deliverReceiptToAdmins({
       api: ctx.api,

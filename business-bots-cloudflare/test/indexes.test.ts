@@ -48,6 +48,8 @@ describe('store hot queries use indexes', () => {
     ['stale pending rewards', "SELECT id, referrer_telegram_id FROM referral_rewards WHERE status = 'pending' AND created_at < datetime('now', '+03:30', '-10 minutes') LIMIT ?", [3]],
     ['admin referral totals (LIMIT)', 'SELECT COUNT(*) AS invited FROM referrals', []],
     ['admin top referrers (LIMIT)', 'SELECT referrer_telegram_id, COUNT(*) AS n FROM referrals WHERE qualified_at IS NOT NULL GROUP BY referrer_telegram_id ORDER BY n DESC LIMIT 5', []],
+    ['customer summary totals', "SELECT SUM(CASE WHEN status IN ('confirmed', 'delivered') THEN 1 ELSE 0 END) AS purchases, MAX(created_at) AS last FROM orders WHERE customer_telegram_id = ?", [1]],
+    ['customer summary active', "SELECT product_name, expires_at FROM orders WHERE customer_telegram_id = ? AND status = 'delivered' AND (expires_at IS NULL OR expires_at > datetime('now', '+03:30')) ORDER BY delivered_at DESC LIMIT 3", [1]],
     ['report current', "SELECT (SELECT COUNT(*) FROM orders WHERE status = 'pending') AS pending, (SELECT COUNT(*) FROM orders WHERE status = 'confirmed') AS waiting, (SELECT COUNT(*) FROM referrals WHERE qualified_at >= ? AND qualified_at < ?) AS ref_ok", ['a', 'b']],
     ['my orders in progress', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status IN ('pending', 'confirmed') ORDER BY id DESC LIMIT 10", [1]],
     ['my recent rejections', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'rejected' AND decided_at >= datetime('now', '+03:30', '-7 days') ORDER BY id DESC LIMIT 5", [1]],
