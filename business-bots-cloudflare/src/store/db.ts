@@ -371,12 +371,16 @@ export class StoreDb {
     return (await this.q("SELECT datetime('now', '+03:30') AS now").first<{ now: string }>())!.now;
   }
 
-  async createDiscountCode(p: { code: string; customerProductId: number; discountType: string; discountValue: number; maxUses: number | null; expiresAt: string }) {
+  async createDiscountCode(p: {
+    code: string; customerProductId: number; discountType: string; discountValue: number; maxUses: number | null; expiresAt: string;
+    ownerTelegramId?: number | null; source?: 'admin' | 'referral';
+  }) {
     const r = await this.q(`
     INSERT INTO discount_codes
-      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `, p.code.toUpperCase(), p.customerProductId, p.discountType, p.discountValue, p.maxUses ?? null, p.expiresAt).run();
+      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, p.code.toUpperCase(), p.customerProductId, p.discountType, p.discountValue, p.maxUses ?? null, p.expiresAt,
+      p.ownerTelegramId ?? null, p.source ?? 'admin').run();
     return { lastInsertRowid: r.meta.last_row_id };
   }
 
@@ -400,7 +404,8 @@ export class StoreDb {
 
   async getAllDiscountCodes(): Promise<DiscountCode[]> {
     try {
-      return (await this.q('SELECT * FROM discount_codes ORDER BY id DESC').all<DiscountCode>()).results;
+      // referral reward codes are personal; they stay out of the admin's list
+      return (await this.q("SELECT * FROM discount_codes WHERE source = 'admin' ORDER BY id DESC").all<DiscountCode>()).results;
     } catch (err: any) {
       console.error('❌ [DB] getAllDiscountCodes failed:', err.message);
       return [];
@@ -454,6 +459,137 @@ export class StoreDb {
       AND  (d.max_uses IS NULL OR (SELECT COUNT(*) FROM discount_code_redemptions r WHERE r.discount_code_id = d.id) < d.max_uses)
   `, customerTelegramId, orderId, discountCodeId, customerTelegramId).run();
     return r.meta.changes === 1;
+  }
+
+  // ─── Referrals ───────────────────────────────────────────────────────────
+  async getRefCode(telegramId: number): Promise<string | null> {
+    return (await this.q('SELECT ref_code FROM customers WHERE telegram_id = ?', telegramId).first<{ ref_code: string | null }>())?.ref_code ?? null;
+  }
+
+  /** true when the code was stored (false: customer missing, already has a code, or the code collided) */
+  async setRefCode(telegramId: number, code: string): Promise<boolean> {
+    try {
+      const r = await this.q('UPDATE customers SET ref_code = ? WHERE telegram_id = ? AND ref_code IS NULL', code, telegramId).run();
+      return r.meta.changes === 1;
+    } catch {
+      return false; // unique collision
+    }
+  }
+
+  async findCustomerByRefCode(code: string): Promise<number | null> {
+    return (await this.q('SELECT telegram_id FROM customers WHERE ref_code = ?', code).first<{ telegram_id: number }>())?.telegram_id ?? null;
+  }
+
+  /** true = a new referral row (the invitee had no inviter yet) */
+  async insertReferral(referrerId: number, inviteeId: number): Promise<boolean> {
+    const r = await this.q('INSERT INTO referrals (referrer_telegram_id, invitee_telegram_id) VALUES (?, ?) ON CONFLICT(invitee_telegram_id) DO NOTHING', referrerId, inviteeId).run();
+    return r.meta.changes === 1;
+  }
+
+  async getReferralByInvitee(inviteeId: number): Promise<{ id: number; referrer_telegram_id: number; qualified_at: string | null } | null> {
+    return this.q('SELECT id, referrer_telegram_id, qualified_at FROM referrals WHERE invitee_telegram_id = ?', inviteeId).first();
+  }
+
+  async qualifyReferral(id: number, orderId: number): Promise<boolean> {
+    const r = await this.q("UPDATE referrals SET qualified_at = datetime('now', '+03:30'), qualifying_order_id = ? WHERE id = ? AND qualified_at IS NULL", orderId, id).run();
+    return r.meta.changes === 1;
+  }
+
+  async countUnrewardedReferrals(referrerId: number): Promise<number> {
+    return (await this.q('SELECT COUNT(*) AS n FROM referrals WHERE referrer_telegram_id = ? AND qualified_at IS NOT NULL AND reward_id IS NULL', referrerId).first<{ n: number }>())!.n;
+  }
+
+  async getOldestUnrewardedReferralIds(referrerId: number, limit: number): Promise<number[]> {
+    return (await this.q('SELECT id FROM referrals WHERE referrer_telegram_id = ? AND qualified_at IS NOT NULL AND reward_id IS NULL ORDER BY id LIMIT ?', referrerId, limit).all<{ id: number }>()).results.map((r) => r.id);
+  }
+
+  async hasLiveReward(referrerId: number): Promise<boolean> {
+    return !!(await this.q("SELECT 1 FROM referral_rewards WHERE referrer_telegram_id = ? AND status IN ('pending', 'issued') LIMIT 1", referrerId).first());
+  }
+
+  async createReferralReward(referrerId: number, type: string, snapshot: string): Promise<number> {
+    const r = await this.q('INSERT INTO referral_rewards (referrer_telegram_id, reward_type, config_snapshot) VALUES (?, ?, ?)', referrerId, type, snapshot).run();
+    return r.meta.last_row_id;
+  }
+
+  /** Atomically takes these referrals for a reward; returns how many were really free. */
+  async claimReferrals(ids: number[], rewardId: number): Promise<number> {
+    if (!ids.length) return 0;
+    const r = await this.q('UPDATE referrals SET reward_id = ? WHERE reward_id IS NULL AND id IN (' + ids.map(() => '?').join(',') + ')', rewardId, ...ids).run();
+    return r.meta.changes;
+  }
+
+  async releaseReward(rewardId: number): Promise<void> {
+    await this.db.batch([
+      this.q('UPDATE referrals SET reward_id = NULL WHERE reward_id = ?', rewardId),
+      this.q('DELETE FROM referral_rewards WHERE id = ?', rewardId),
+    ]);
+  }
+
+  async finishReferralReward(id: number, status: 'issued' | 'failed', p: { discountCodeId?: number | null; orderId?: number | null } = {}): Promise<void> {
+    await this.q("UPDATE referral_rewards SET status = ?, discount_code_id = ?, order_id = ?, issued_at = datetime('now', '+03:30') WHERE id = ?", status, p.discountCodeId ?? null, p.orderId ?? null, id).run();
+  }
+
+  /** A free-product reward: an already-confirmed 0-Toman order that follows the normal delivery flow. */
+  async createRewardOrder(p: { customerTelegramId: number; product: CustomerProduct }): Promise<number> {
+    const r = await this.q(`
+    INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, purchase_source, status, decided_at, decided_by, duration_days, warranty_days)
+    VALUES (?, ?, ?, 0, 'manual', 'confirmed', datetime('now', '+03:30'), 0, ?, ?)
+  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null).run();
+    return r.meta.last_row_id;
+  }
+
+  /** Customer-facing numbers + the latest issued rewards, one batch. */
+  async getReferralOverview(referrerId: number): Promise<{
+    invited: number; qualified: number; unrewarded: number; rewarded: number;
+    rewards: { reward_type: string; order_id: number | null; code: string | null; discount_type: string | null; discount_value: number | null; expires_at: string | null; used: number | null; product_name: string | null }[];
+  }> {
+    const [a, b] = await this.db.batch([
+      this.q(`SELECT COUNT(*) AS invited,
+                     COALESCE(SUM(CASE WHEN qualified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS qualified,
+                     COALESCE(SUM(CASE WHEN qualified_at IS NOT NULL AND reward_id IS NULL THEN 1 ELSE 0 END), 0) AS unrewarded
+              FROM referrals WHERE referrer_telegram_id = ?`, referrerId),
+      this.q(`SELECT r.reward_type, r.order_id, d.code, d.discount_type, d.discount_value, d.expires_at,
+                     (SELECT COUNT(*) FROM discount_code_redemptions x WHERE x.discount_code_id = d.id) AS used,
+                     COALESCE(p.name, o.product_name) AS product_name
+              FROM referral_rewards r
+              LEFT JOIN discount_codes d ON d.id = r.discount_code_id
+              LEFT JOIN customer_products p ON p.id = d.customer_product_id
+              LEFT JOIN orders o ON o.id = r.order_id
+              WHERE r.referrer_telegram_id = ? AND r.status = 'issued' ORDER BY r.id DESC LIMIT 5`, referrerId),
+    ]);
+    const row: any = a.results[0];
+    return { invited: row.invited, qualified: row.qualified, unrewarded: row.unrewarded, rewarded: row.qualified - row.unrewarded, rewards: b.results as any };
+  }
+
+  /** Referrers with enough unspent qualified invites (cron sweep). One-time programs skip anyone already rewarded. */
+  async getReferrersReadyForReward(required: number, repeatable: boolean, limit: number): Promise<number[]> {
+    return (await this.q(
+      `SELECT referrer_telegram_id FROM referrals
+       WHERE qualified_at IS NOT NULL AND reward_id IS NULL
+         AND (? = 1 OR NOT EXISTS (SELECT 1 FROM referral_rewards w WHERE w.referrer_telegram_id = referrals.referrer_telegram_id AND w.status IN ('pending', 'issued')))
+       GROUP BY referrer_telegram_id HAVING COUNT(*) >= ? LIMIT ?`,
+      repeatable ? 1 : 0, required, limit,
+    ).all<{ referrer_telegram_id: number }>()).results.map((r) => r.referrer_telegram_id);
+  }
+
+  async getStalePendingRewards(limit: number): Promise<{ id: number; referrer_telegram_id: number }[]> {
+    return (await this.q(
+      "SELECT id, referrer_telegram_id FROM referral_rewards WHERE status = 'pending' AND created_at < datetime('now', '+03:30', '-10 minutes') LIMIT ?", limit,
+    ).all<{ id: number; referrer_telegram_id: number }>()).results;
+  }
+
+  /** Admin panel numbers: totals + top referrers. */
+  async getReferralAdminStats(): Promise<{ invited: number; qualified: number; rewards: number; top: { referrer_telegram_id: number; n: number; display_name: string | null }[] }> {
+    const [a, b, c] = await this.db.batch([
+      this.q('SELECT COUNT(*) AS invited, COALESCE(SUM(CASE WHEN qualified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS qualified FROM referrals'),
+      this.q("SELECT COUNT(*) AS n FROM referral_rewards WHERE status = 'issued'"),
+      this.q(`SELECT r.referrer_telegram_id, COUNT(*) AS n, c.display_name FROM referrals r
+              LEFT JOIN customers c ON c.telegram_id = r.referrer_telegram_id
+              WHERE r.qualified_at IS NOT NULL GROUP BY r.referrer_telegram_id ORDER BY n DESC, r.referrer_telegram_id LIMIT 5`),
+    ]);
+    const t: any = a.results[0];
+    return { invited: t.invited, qualified: t.qualified, rewards: (b.results[0] as any).n, top: c.results as any };
   }
 
   // ─── Store settings ──────────────────────────────────────────────────────

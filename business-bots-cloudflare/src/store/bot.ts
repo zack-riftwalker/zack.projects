@@ -8,7 +8,7 @@ import { registerAdminPanelHandler, adminPanelKeyboard } from './handlers/adminP
 import { announceWizard } from './handlers/announceWizard';
 import { customerProductsWizard, customerProductsDeactivateWizard } from './handlers/customerProducts';
 import { customerProductsEditWizard } from './handlers/customerProductsEdit';
-import { registerStorefrontHandler, customerStorefrontKeyboard } from './handlers/storefront';
+import { registerStorefrontHandler, customerKeyboard } from './handlers/storefront';
 import { registerSalesReportHandler } from './handlers/salesReport';
 import {
   discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, registerDiscountCodeHandler,
@@ -16,6 +16,8 @@ import {
 import { storeSettingsWizard } from './handlers/storeSettings';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
+import { registerReferralHandler } from './handlers/referralPanel';
+import { REF_PAYLOAD_RE, handleRefStart } from './referrals';
 import type { StoreContext, StoreSession } from './types';
 
 export function logBotError(err: BotError<any>): void {
@@ -87,10 +89,20 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
         return;
       }
 
-      await ctx.app.db.upsertCustomer({
+      const upserted = await ctx.app.db.upsertCustomer({
         telegramId: ctx.from!.id,
         displayName: ctx.from!.first_name || ctx.from!.username || String(ctx.from!.id),
       });
+
+      // /start ref_<code>: remember who invited this (brand-new) customer; never blocks the welcome
+      const refMatch = REF_PAYLOAD_RE.exec(payload);
+      if (refMatch) {
+        try {
+          await handleRefStart(ctx.app, ctx.from!.id, refMatch[1], upserted.changes === 1);
+        } catch (err: any) {
+          console.error('❌ [Bot] referral attribution failed:', err.message);
+        }
+      }
 
       if (await handleManualPurchaseStart(ctx, payload)) return;
 
@@ -98,7 +110,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
         '👋 *سلام!*\n\n' +
         'به ربات فروشگاه خوش آمدید. 🎓\n\n' +
         'برای مشاهده محصولات و خرید، دکمه زیر را بزنید:',
-        { parse_mode: 'Markdown', ...customerStorefrontKeyboard() },
+        { parse_mode: 'Markdown', ...(await customerKeyboard(ctx.app)) },
       );
     } catch (err: any) {
       console.error('❌ [Bot] /start handler error:', err.message);
@@ -110,11 +122,12 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
       await ctx.reply('🎛 پنل مدیریت:', adminPanelKeyboard());
       return;
     }
-    await ctx.reply('🛍 فروشگاه:', customerStorefrontKeyboard());
+    await ctx.reply('🛍 فروشگاه:', await customerKeyboard(ctx.app));
   });
 
   registerAdminPanelHandler(bot, isAdmin);
   registerSalesReportHandler(bot, isAdmin);
+  registerReferralHandler(bot, isAdmin);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);
   registerStorefrontHandler(bot);

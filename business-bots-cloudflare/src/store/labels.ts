@@ -25,3 +25,5 @@ export const DUPLICATE_REASON_TEXT = REJECT_REASONS.find((r) => r.code === 'dupl
 export const MAX_REJECT_REASON_LENGTH = 200;
 
 export const REPORT_LABEL = '📊 گزارش فروش';
+
+export const REFERRAL_LABEL = '🎁 دعوت دوستان';

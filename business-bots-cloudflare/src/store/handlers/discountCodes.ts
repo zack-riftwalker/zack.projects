@@ -21,6 +21,7 @@ export function applyDiscount(price: number, discountCode: DiscountCode): number
 export const DISCOUNT_ERROR_LABEL: Record<string, string> = {
   not_found: '❌ کد تخفیف نامعتبر است.',
   inactive: '❌ این کد تخفیف غیرفعال شده است.',
+  not_owner: '❌ این کد تخفیف مخصوص حساب دیگری است.',
   wrong_product: '❌ این کد تخفیف برای این محصول معتبر نیست.',
   expired: '⌛️ این کد تخفیف منقضی شده است.',
   max_uses: '❌ ظرفیت استفاده از این کد تخفیف تمام شده است.',
@@ -36,6 +37,8 @@ async function validateDiscountCodeRecord(
 ): Promise<DiscountValidation> {
   if (!discountCode) return { ok: false, reason: 'not_found' };
   if (!discountCode.is_active) return { ok: false, reason: 'inactive' };
+  // personal (referral reward) codes work only for their owner
+  if (discountCode.owner_telegram_id != null && discountCode.owner_telegram_id !== customerTelegramId) return { ok: false, reason: 'not_owner' };
   if (discountCode.customer_product_id !== productId) return { ok: false, reason: 'wrong_product' };
   if (discountCode.expires_at < (await app.db.nowLocalDateTimeString())) return { ok: false, reason: 'expired' };
 

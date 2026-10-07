@@ -67,4 +67,5 @@ CREATE INDEX IF NOT EXISTS idx_referrals_created       ON referrals(created_at);
 CREATE INDEX IF NOT EXISTS idx_referrals_qualified     ON referrals(qualified_at);
 CREATE INDEX IF NOT EXISTS idx_referrals_unrewarded    ON referrals(referrer_telegram_id) WHERE qualified_at IS NOT NULL AND reward_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rewards_referrer        ON referral_rewards(referrer_telegram_id, id);
+CREATE INDEX IF NOT EXISTS idx_rewards_status          ON referral_rewards(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_waitlist_customer       ON product_waitlist(customer_telegram_id);

@@ -6,6 +6,7 @@ import { processBroadcastBatch } from './store/broadcast';
 import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
 import { checkStalledOrders, sendReminders } from './store/scheduler';
+import { sweepReferralRewards } from './store/referrals';
 
 const REMINDER_HOUR_TEHRAN = 11;
 
@@ -27,6 +28,10 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
 
     if (t.minute % 10 === 0) {
       await guarded('stalled-orders', () => checkStalledOrders(store));
+    }
+
+    if (t.minute % 10 === 5) {
+      await guarded('referral-rewards', () => sweepReferralRewards(store));
     }
 
     if (t.hour === REMINDER_HOUR_TEHRAN) {

@@ -1,4 +1,7 @@
 import type { Bot } from 'grammy';
+import type { StoreApp } from '../../apps';
+import { getReferralConfig } from '../referralConfig';
+import { onPurchaseConfirmed } from '../referrals';
 import { Markup } from '../../lib/markup';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
@@ -11,7 +14,7 @@ import {
 import { formatCardNumber } from './storeSettings';
 import { buildReceiptCaption, deliverReceiptToAdmins } from '../services/receiptDelivery';
 import {
-  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL,
+  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REFERRAL_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL,
 } from '../labels';
 import type { StoreContext } from '../types';
 import type { CustomerProduct, Order } from '../db';
@@ -33,8 +36,11 @@ function receiptDraft(ctx: StoreContext) {
   return d;
 }
 
-export function customerStorefrontKeyboard() {
-  return Markup.keyboard([[STOREFRONT_LABEL, MY_SUBS_LABEL]]).resize();
+/** The customer's reply keyboard; «🎁 دعوت دوستان» appears only while the referral program is on. */
+export async function customerKeyboard(app: StoreApp) {
+  const rows = [[STOREFRONT_LABEL, MY_SUBS_LABEL]];
+  if ((await getReferralConfig(app)).enabled) rows.push([REFERRAL_LABEL]);
+  return Markup.keyboard(rows).resize();
 }
 
 // ─── Catalog browsing (paged) ─────────────────────────────────────────────────
@@ -724,6 +730,7 @@ async function onReupload(ctx: StoreContext) {
 const DISCOUNT_REASON_ADMIN: Record<string, string> = {
   not_found: 'کد حذف شده',
   inactive: 'کد غیرفعال شده',
+  not_owner: 'کد مخصوص مشتری دیگری است',
   wrong_product: 'کد برای این محصول نیست',
   expired: 'کد منقضی شده',
   max_uses: 'ظرفیت کد پر شده',
@@ -852,6 +859,12 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
       });
     } catch (err: any) {
       console.error('❌ [Storefront] Bridge failed for order #' + orderId + ':', err.message);
+    }
+    // an invited customer's first confirmed purchase counts for their inviter
+    try {
+      await onPurchaseConfirmed(ctx.app, { id: orderId, customer_telegram_id: order.customer_telegram_id, price: order.price });
+    } catch (err: any) {
+      console.error('❌ [Storefront] Referral qualification failed for order #' + orderId + ':', err.message);
     }
   }
 
