@@ -8,8 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build:check": "wrangler deploy --dry-run --outdir dist",
-    "db:migrate:remote": "npm run db:backup && wrangler d1 migrations apply store-bot-db --remote && wrangler d1 migrations apply monshi-bot-db --remote",
-    "db:migrate:local": "wrangler d1 migrations apply store-bot-db --local && wrangler d1 migrations apply monshi-bot-db --local",
+    "db:migrate:remote": "npm run db:backup && wrangler d1 migrations apply STORE_DB --remote && wrangler d1 migrations apply MONSHI_DB --remote",
+    "db:migrate:local": "wrangler d1 migrations apply STORE_DB --local && wrangler d1 migrations apply MONSHI_DB --local",
     "setup": "node scripts/setup.mjs",
     "db:backup": "node scripts/backup.mjs"
   },
