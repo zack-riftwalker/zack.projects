@@ -37,6 +37,7 @@ export async function buildDigest(app: MonshiApp): Promise<{ text: string; marku
   if (view) {
     markup = view.markup;
     lines.push('\n' + view.text);
+    if (view.ownerReplies > 0) lines.push(`\n💡 برای ${view.ownerReplies} سؤال بی‌جواب، جواب خودت پیدا شد؛ با دکمه‌ی ⚡️ مستقیم FAQ کن.`);
   }
   return { text: lines.join('\n'), markup };
 }

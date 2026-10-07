@@ -181,13 +181,14 @@ export class MonshiDb {
   }
 
   // ── messages ────────────────────────────────────────────────────────────
-  async saveMessage(chatId: number, telegramMessageId: number, direction: string, messageType: string, text: string | null | undefined, bcid: string | null): Promise<boolean> {
+  /** The new row's id; 0 = duplicate (already stored). */
+  async saveMessage(chatId: number, telegramMessageId: number, direction: string, messageType: string, text: string | null | undefined, bcid: string | null): Promise<number> {
     const r = await this.q(
       'INSERT INTO messages (chat_id, telegram_message_id, direction, message_type, text, received_at, business_connection_id) ' +
         'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(business_connection_id, chat_id, telegram_message_id) DO NOTHING',
       chatId, telegramMessageId, direction, messageType, text ?? null, utcIsoNow(), bcid,
     ).run();
-    return r.meta.changes === 1;
+    return r.meta.changes === 1 ? r.meta.last_row_id : 0;
   }
 
   async markMessageAnswered(chatId: number, telegramMessageId: number, answeredBy: string, faqId: number | null = null): Promise<void> {
@@ -260,14 +261,34 @@ export class MonshiDb {
   }
 
   // ── unanswered ──────────────────────────────────────────────────────────
-  async recordUnanswered(chatId: number, text: string, normalizedText: string): Promise<void> {
+  /** `messageRowId` = the stored customer message (lets us find the owner's own reply to it later). */
+  async recordUnanswered(chatId: number, text: string, normalizedText: string, messageRowId: number | null = null): Promise<void> {
     const now = utcIsoNow();
     const existing = await this.q("SELECT id FROM unanswered WHERE normalized_text = ? AND status = 'open'", normalizedText).first<{ id: number }>();
     if (existing) {
-      await this.q('UPDATE unanswered SET count = count + 1, last_seen_at = ?, chat_id = ? WHERE id = ?', now, chatId, existing.id).run();
+      await this.q('UPDATE unanswered SET count = count + 1, last_seen_at = ?, chat_id = ?, last_message_row_id = ? WHERE id = ?', now, chatId, messageRowId, existing.id).run();
     } else {
-      await this.q("INSERT INTO unanswered (chat_id, text, normalized_text, count, last_seen_at, status) VALUES (?, ?, ?, 1, ?, 'open')", chatId, text, normalizedText, now).run();
+      await this.q("INSERT INTO unanswered (chat_id, text, normalized_text, count, last_seen_at, status, last_message_row_id) VALUES (?, ?, ?, 1, ?, 'open', ?)", chatId, text, normalizedText, now, messageRowId).run();
     }
+  }
+
+  /**
+   * For each (chat, customer message row): the text of the owner's first own reply after it, if it came within
+   * 24 h of the question (else null). One statement per pair, all in one batch.
+   */
+  async getOwnerRepliesAfter(pairs: { chatId: number; afterRowId: number }[]): Promise<(string | null)[]> {
+    if (!pairs.length) return [];
+    const rs = await this.db.batch(pairs.map((p) => this.q(
+      "SELECT (SELECT received_at FROM messages WHERE id = ?) AS q_at, text, received_at FROM messages " +
+        "WHERE chat_id = ? AND id > ? AND direction = 'owner' AND text IS NOT NULL ORDER BY id LIMIT 1",
+      p.afterRowId, p.chatId, p.afterRowId,
+    )));
+    return rs.map((r) => {
+      const row: any = r.results[0];
+      if (!row || !row.q_at) return null;
+      const gap = Date.parse(row.received_at) - Date.parse(row.q_at);
+      return gap >= 0 && gap <= 24 * 3600 * 1000 ? (row.text as string) : null;
+    });
   }
 
   async getTopUnanswered(limit = 10): Promise<UnansweredRow[]> {

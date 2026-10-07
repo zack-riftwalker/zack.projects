@@ -182,7 +182,8 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   const { isNew: isNewCustomer, customer } = await app.db.upsertCustomer(
     chatId, sender?.id ?? null, sender?.username ?? null, sender?.first_name ?? null,
   );
-  if (!(await app.db.saveMessage(chatId, msg.message_id, 'in', messageType, text, bcid))) return; // duplicate
+  const messageRowId = await app.db.saveMessage(chatId, msg.message_id, 'in', messageType, text, bcid);
+  if (!messageRowId) return; // duplicate
 
   // 3) automation off or chat paused → store only
   if (!(await rules.isAutomationEnabled(app)) || rules.isChatPaused(customer, app.apps.now())) return;
@@ -282,7 +283,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
 
   // no match → record for repeated-unanswered detection
   if (text) {
-    await app.db.recordUnanswered(chatId, text, normalizeText(text));
+    await app.db.recordUnanswered(chatId, text, normalizeText(text), messageRowId);
     // price question without an FAQ → point to the sales bot
     if (faq.isPriceQuery(normalizeText(text))) {
       if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;

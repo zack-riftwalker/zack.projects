@@ -69,3 +69,22 @@ export async function ackCutoffIso(app: MonshiApp): Promise<string> {
   const cooldown = parseFloat((await app.ctx.getSetting('ack_cooldown_hours')) || '8');
   return utcIsoNow(new Date(app.apps.now().getTime() - cooldown * 3600 * 1000));
 }
+
+const toLatinDigits = (s: string) =>
+  s.replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 0x30))
+    .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x0660 + 0x30));
+
+/**
+ * Is this (owner-written) reply too personal to suggest as a public FAQ answer? Sensitive words, long digit runs
+ * (cards, phones, codes), e-mail addresses, «user: / pass:» lines and very short replies all count.
+ */
+export function looksPrivate(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 5) return true;
+  if (isSensitive(t, 'text')) return true;
+  // digits split by spaces/dashes («6037 9972 …») still count as one run
+  const digits = toLatinDigits(t).replace(/(?<=\d)[\s\-.](?=\d)/g, '');
+  if (/\d{6,}/.test(digits)) return true;
+  if (/[\w.+-]+@[\w-]+\.[\w.-]+/.test(t)) return true;
+  return /(user(name)?|pass(word)?|login)\s*[:：]/i.test(t);
+}

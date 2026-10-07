@@ -2,20 +2,36 @@ import type { MonshiApp } from '../apps';
 import { formatJalaliDate, formatPrice, formatTehran, parseLocalDateTime } from '../lib/time';
 import type { CustomerSummary } from '../store/customerSummary';
 import { Markup, type InlineKb } from '../lib/markup';
+import * as rules from './services/rules';
 
-/** Most frequent unanswered questions with a convert-to-FAQ button — shared by /unanswered and the digest. */
-export async function unansweredView(app: MonshiApp, limit = 10): Promise<{ text: string; markup: InlineKb } | null> {
+/**
+ * Most frequent unanswered questions with a convert-to-FAQ button — shared by /unanswered and the digest.
+ * When the owner already answered such a question by hand (and the answer isn't private), it is shown and a
+ * one-tap «⚡️ FAQ با جواب خودم» button is added. `ownerReplies` = how many items have one.
+ */
+export async function unansweredView(app: MonshiApp, limit = 10): Promise<{ text: string; markup: InlineKb; ownerReplies: number } | null> {
   const rows = await app.db.getTopUnanswered(limit);
   if (!rows.length) return null;
+  const withRow = rows.filter((r) => r.last_message_row_id);
+  const found = await app.db.getOwnerRepliesAfter(withRow.map((r) => ({ chatId: r.chat_id, afterRowId: r.last_message_row_id! })));
+  const ownReply = new Map<number, string>();
+  withRow.forEach((r, i) => {
+    const reply = found[i];
+    if (reply && !rules.looksPrivate(reply)) ownReply.set(r.id, reply);
+  });
+
   const lines = ['📥 پرتکرارترین سوالات بی‌جواب (بدون FAQ مطابق):\n'];
   const buttons = [];
   for (const r of rows) {
     const preview = r.text ? r.text.slice(0, 80) : '—';
     const when = formatTehran(r.last_seen_at);
-    lines.push(`🔁 ${r.count} بار — آخرین بار ${when} (تهران)\n💬 ${preview}\n`);
-    buttons.push([Markup.button.callback(`➕ تبدیل به FAQ (#${r.id})`, `utofaq:${r.id}`)]);
+    const own = ownReply.get(r.id);
+    lines.push(`🔁 ${r.count} بار — آخرین بار ${when} (تهران)\n💬 ${preview}\n` + (own ? `🧑 جواب خودت: «${own.slice(0, 120)}»\n` : ''));
+    const row = [Markup.button.callback(`➕ تبدیل به FAQ (#${r.id})`, `utofaq:${r.id}`)];
+    if (own) row.push(Markup.button.callback(`⚡️ FAQ با جواب خودم (#${r.id})`, `utofaq_own:${r.id}`));
+    buttons.push(row);
   }
-  return { text: lines.join('\n'), markup: Markup.inlineKeyboard(buttons) };
+  return { text: lines.join('\n'), markup: Markup.inlineKeyboard(buttons), ownerReplies: ownReply.size };
 }
 
 const faNum = (n: number) => n.toLocaleString('fa-IR');

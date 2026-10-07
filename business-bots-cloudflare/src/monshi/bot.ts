@@ -110,7 +110,7 @@ export function createMonshiBot(app: MonshiApp, botInfo: UserFromGetMe): Bot<Mon
 
   // Inline buttons (each handler is admin-guarded except the delivery button which checks itself)
   bot.callbackQuery(/^(hday|hset|hcustom|hback|hdone)/, admin.onHoursCallback);
-  bot.callbackQuery(/^(fq_|utofaq:)/, faqAdmin.onFaqCallback);
+  bot.callbackQuery(/^(fq_|utofaq:|utofaq_own:)/, faqAdmin.onFaqCallback);
   bot.callbackQuery(/^ord_/, orderAdmin.onOrderCallback);
   // «✅ تحویل شد» under the preparing message in the customer chat (the admin check is inside the handler)
   bot.callbackQuery(/^orddlv:/, bridge.onDeliveryCallback);

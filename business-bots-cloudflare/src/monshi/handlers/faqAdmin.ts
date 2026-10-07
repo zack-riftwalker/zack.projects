@@ -2,6 +2,7 @@
 import { Markup } from '../../lib/markup';
 import type { FaqRow } from '../db';
 import { hasSpecificKeyword } from '../services/faq';
+import { looksPrivate } from '../services/rules';
 import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, clearWizardStates, commandArgs, safeEdit } from './common';
 
@@ -12,6 +13,11 @@ const MAX_LIST_ITEMS = 20;
 const ALL_GENERIC_WARNING =
   '\n\n⚠️ همه کلیدواژه‌ها عمومی‌اند (مثل «قیمت»، «هزینه»). این FAQ از مسیر ' +
   'کلیدواژه‌ای تطبیق نمی‌خورد؛ یک کلیدواژه اختصاصی محصول (مثل «جمینای») اضافه کن.';
+
+const KEYWORDS_PROMPT =
+  '۳) کلیدواژه‌های تشخیص این سوال را با ویرگول جدا بنویس.\n' +
+  'مثال: قیمت, هزینه, چند تومن\n' +
+  '(اگر می‌خوای فقط با خود متن سوال تشخیص داده بشه، بنویس: -)';
 
 function keywordsWarning(keywords: string): string {
   if (keywords.trim() && !hasSpecificKeyword(keywords)) return ALL_GENERIC_WARNING;
@@ -148,6 +154,19 @@ export const onFaqCallback = adminGuard(async (ctx) => {
     const fieldFa = ({ question: 'سوال', answer: 'جواب', keywords: 'کلیدواژه‌ها' } as Record<string, string>)[field];
     return safeEdit(ctx, `✏️ متن جدید برای «${fieldFa}» را بفرست:`, cancelButton());
   }
+  if (data.startsWith('utofaq_own:')) {
+    const uid = parseInt(data.split(':', 2)[1], 10);
+    const row = await app.db.getUnansweredById(uid);
+    if (!row) return safeEdit(ctx, '❌ این مورد دیگر موجود نیست.');
+    // never trust callback data for the text: find the owner's reply again
+    const [reply] = row.last_message_row_id
+      ? await app.db.getOwnerRepliesAfter([{ chatId: row.chat_id, afterRowId: row.last_message_row_id }])
+      : [null];
+    if (!reply || looksPrivate(reply)) return safeEdit(ctx, '❌ جواب قابل‌استفاده‌ای پیدا نشد.');
+    clearWizardStates(ctx.session);
+    ctx.session.faq_wizard = { step: 'keywords', data: { question: row.text, answer: reply, _unanswered_id: uid } };
+    return safeEdit(ctx, `⚡️ تبدیل به FAQ:\n❓ ${row.text}\n💬 ${reply}\n\n${KEYWORDS_PROMPT}`, cancelButton());
+  }
   if (data.startsWith('utofaq:')) {
     const uid = parseInt(data.split(':', 2)[1], 10);
     const row = await app.db.getUnansweredById(uid);
@@ -193,12 +212,7 @@ export async function onFaqFreeText(ctx: MonshiCtx): Promise<boolean> {
     if (step === 'answer') {
       data.answer = text;
       wizard.step = 'keywords';
-      await ctx.reply(
-        '۳) کلیدواژه‌های تشخیص این سوال را با ویرگول جدا بنویس.\n' +
-        'مثال: قیمت, هزینه, چند تومن\n' +
-        '(اگر می‌خوای فقط با خود متن سوال تشخیص داده بشه، بنویس: -)',
-        cancelButton(),
-      );
+      await ctx.reply(KEYWORDS_PROMPT, cancelButton());
       return true;
     }
     if (step === 'keywords') {
