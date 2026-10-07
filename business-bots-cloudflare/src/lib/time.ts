@@ -93,3 +93,34 @@ export function formatTehran(isoUtc: string, withTime = true): string {
 export function formatPrice(amount: number): string {
   return amount.toLocaleString('fa-IR');
 }
+
+export type ReportPeriod = 'today' | '7d' | '30d' | 'month' | 'all';
+
+/** Tehran wall-clock 'YYYY-MM-DD 00:00:00' of the day `addDays` after the Tehran date of `date`. */
+export function tehranMidnightString(date: Date, addDays = 0): string {
+  const p = tehranParts(date);
+  const t = new Date(Date.UTC(p.y, p.m - 1, p.d + addDays));
+  return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-${pad2(t.getUTCDate())} 00:00:00`;
+}
+
+/**
+ * Half-open range [from, to) of Tehran wall-clock strings (same format as the orders/customers columns).
+ * `to` is always tomorrow's midnight, so the whole of today is included; `fromDay` is null for «all».
+ */
+export function reportRange(period: ReportPeriod, now: Date): { from: string; to: string; fromDay: string | null; toDay: string } {
+  const to = tehranMidnightString(now, 1);
+  const toDay = tehranParts(now).day;
+  if (period === 'all') return { from: '0000-01-01 00:00:00', to, fromDay: null, toDay };
+  let from: string;
+  if (period === 'today') {
+    from = tehranMidnightString(now, 0);
+  } else if (period === 'month') {
+    const p = tehranParts(now);
+    const j = toJalaali(p.y, p.m, p.d);
+    const g = toGregorian(j.jy, j.jm, 1);
+    from = `${g.gy}-${pad2(g.gm)}-${pad2(g.gd)} 00:00:00`;
+  } else {
+    from = tehranDateTimeString(new Date(now.getTime() - (period === '7d' ? 7 : 30) * 86400000));
+  }
+  return { from, to, fromDay: from.slice(0, 10), toDay };
+}

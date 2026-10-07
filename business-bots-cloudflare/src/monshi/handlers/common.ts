@@ -1,9 +1,10 @@
 import type { MonshiApp } from '../../apps';
 import { Markup } from '../../lib/markup';
+import { sendToStaff, type TopicCategory } from '../services/topics';
 import { WIZARD_STATE_KEYS, type MonshiCtx, type MonshiSession } from '../types';
 
-// The only callbacks notify-only accounts may press (the button under a handoff notification)
-export const NOTIFY_ALLOWED_CALLBACK_PREFIXES = ['pause_chat:'];
+// The only callbacks notify-only accounts may press (the buttons under a handoff notification)
+export const NOTIFY_ALLOWED_CALLBACK_PREFIXES = ['pause_chat:', 'hfaq:'];
 
 /** Admin guard for callback handlers (they have no user filter). */
 export function adminGuard(handler: (ctx: MonshiCtx) => Promise<unknown>) {
@@ -30,15 +31,23 @@ export async function onNotifyStart(ctx: MonshiCtx): Promise<void> {
   );
 }
 
-/** Sends to the admin and every notify account; one failing recipient never breaks the rest. */
-export async function notifyAll(app: MonshiApp, text: string, replyMarkup?: { reply_markup: any }): Promise<void> {
+/**
+ * Sends to the admin and every notify account (into the category's topic when topics are on); one failing
+ * recipient never breaks the rest. Returns where each message landed.
+ */
+export async function notifyAll(
+  app: MonshiApp, text: string, replyMarkup?: { reply_markup: any }, category: TopicCategory = 'system',
+): Promise<{ userId: number; messageId: number }[]> {
+  const sent: { userId: number; messageId: number }[] = [];
   for (const userId of app.cfg.allNotifyIds) {
     try {
-      await app.api.sendMessage(userId, text, replyMarkup ?? {});
+      const msg = await sendToStaff(app, userId, category, text, replyMarkup ?? {});
+      if (msg) sent.push({ userId, messageId: msg.message_id });
     } catch (err: any) {
       console.error('Failed to send notification to user ' + userId, err?.message ?? err);
     }
   }
+  return sent;
 }
 
 export function cancelButton() {

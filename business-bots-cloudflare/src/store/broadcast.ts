@@ -3,6 +3,8 @@ import type { StoreApp } from '../apps';
 import { BudgetExceededError } from '../lib/budget';
 import type { BroadcastJob } from './db';
 
+export { audienceFilter } from './audience';
+
 const BATCH_SIZE = 40;
 /** Longer than any batch can take (40 sends + the 25 s webhook window); expires on its own if never released. */
 const LEASE_MS = 90_000;
@@ -45,14 +47,29 @@ export async function processBroadcastBatch(app: StoreApp, opts: { reserve: numb
   }
 
   if (finished) {
+    let summary =
+      '✅ *اطلاعیه ارسال شد.*\n\n' +
+      '📨 ارسال موفق: ' + sent + ' مشتری\n' +
+      (failed > 0 ? '⚠️ ارسال ناموفق: ' + failed + ' مشتری\n' : '');
+    const waitMatch = /^waitlist:(\d+)$/.exec(job!.audience ?? '');
+    if (waitMatch) {
+      // the restock notice went out: those customers leave the waitlist (later joiners stay)
+      const pid = parseInt(waitMatch[1], 10);
+      try {
+        const product = await app.db.getCustomerProductById(pid);
+        if (job!.created_at) await app.db.clearWaitlist(pid, job!.created_at);
+        summary =
+          '✅ به ' + sent + ' نفر از لیست انتظار «' + (product?.name ?? pid) + '» خبر داده شد.\n' +
+          (failed > 0 ? '⚠️ ارسال ناموفق: ' + failed + ' نفر\n' : '');
+        await app.api.sendMessage(job!.admin_chat_id, summary);
+        console.log('📢 [Announce] Waitlist notice for product ' + pid + ': ' + sent + ' ok, ' + failed + ' failed.');
+      } catch (err: any) {
+        console.warn('⚠️ [Announce] Waitlist cleanup/summary failed:', err.message);
+      }
+      return;
+    }
     try {
-      await app.api.sendMessage(
-        job!.admin_chat_id,
-        '✅ *اطلاعیه ارسال شد.*\n\n' +
-          '📨 ارسال موفق: ' + sent + ' مشتری\n' +
-          (failed > 0 ? '⚠️ ارسال ناموفق: ' + failed + ' مشتری\n' : ''),
-        { parse_mode: 'Markdown' },
-      );
+      await app.api.sendMessage(job!.admin_chat_id, summary, { parse_mode: 'Markdown' });
     } catch (err: any) {
       console.warn('⚠️ [Announce] Summary to admin failed:', err.message);
     }
@@ -66,7 +83,15 @@ async function sendBatch(
   const n = Math.min(BATCH_SIZE, app.apps.budget.remaining() - opts.reserve - 4);
   if (n <= 0) return null;
 
-  const customers = await app.db.getCustomerBatch(job.cursor_customer_id, n);
+  const customers = await app.db.getCustomerBatch(job.cursor_customer_id, n, job.audience ?? 'all');
+  let markup: any;
+  if (job.reply_markup) {
+    try {
+      markup = JSON.parse(job.reply_markup);
+    } catch {
+      markup = undefined;
+    }
+  }
   let cursor = job.cursor_customer_id;
   let sent = job.sent;
   let failed = job.failed;
@@ -74,7 +99,7 @@ async function sendBatch(
 
   for (const c of customers) {
     try {
-      await app.api.sendMessage(c.telegram_id, job.text, { entities: job.entities || undefined });
+      await app.api.sendMessage(c.telegram_id, job.text, { entities: job.entities || undefined, ...(markup ? { reply_markup: markup } : {}) });
       sent++;
     } catch (err: any) {
       if (err instanceof BudgetExceededError) {

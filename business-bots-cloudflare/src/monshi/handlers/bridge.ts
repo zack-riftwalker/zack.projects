@@ -99,6 +99,7 @@ export async function deliverOrder(app: MonshiApp, order: OrderRow): Promise<boo
         app,
         `⚠️ سفارش #${fresh.id} (${fresh.title}) تحویل ثبت شد ولی پیام تکمیل ` +
         'به مشتری ارسال نشد — لطفاً دستی اطلاع دهید.',
+        undefined, 'orders',
       );
     } catch (err2: any) {
       console.error(`Failed to notify admin about completion-send failure for order ${order.id}`, err2?.message ?? err2);

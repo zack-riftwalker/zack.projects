@@ -4,7 +4,8 @@ import { formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTim
 import { isAdminId } from '../config';
 import { MANUAL_PURCHASE_LABEL } from '../labels';
 import { adminPanelKeyboard } from './adminPanel';
-import { customerStorefrontKeyboard } from './storefront';
+import { customerKeyboard } from './storefront';
+import { onPurchaseConfirmed } from '../referrals';
 import type { StoreContext } from '../types';
 import type { CustomerProduct, Order } from '../db';
 
@@ -79,7 +80,7 @@ export async function handleManualPurchaseStart(ctx: StoreContext, payload: stri
   }
 
   if (!match) {
-    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', customerStorefrontKeyboard());
+    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', await customerKeyboard(ctx.app));
     return true;
   }
 
@@ -93,23 +94,31 @@ export async function handleManualPurchaseStart(ctx: StoreContext, payload: stri
     });
   } catch (err: any) {
     console.error('❌ [ManualPurchase] Redemption failed for customer ' + ctx.from!.id + ':', err.message);
-    await ctx.reply('❌ فعال‌سازی با خطا مواجه شد. لطفاً با پشتیبانی تماس بگیرید.', customerStorefrontKeyboard());
+    await ctx.reply('❌ فعال‌سازی با خطا مواجه شد. لطفاً با پشتیبانی تماس بگیرید.', await customerKeyboard(ctx.app));
     return true;
   }
 
   if (result.outcome === 'invalid') {
-    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', customerStorefrontKeyboard());
+    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', await customerKeyboard(ctx.app));
     return true;
   }
   if (result.outcome === 'claimed_by_other') {
     console.warn('⚠️ [ManualPurchase] Already-used link opened by customer ' + ctx.from!.id + '.');
-    await ctx.reply('❌ این لینک دیگر قابل استفاده نیست. لطفاً با پشتیبانی تماس بگیرید.', customerStorefrontKeyboard());
+    await ctx.reply('❌ این لینک دیگر قابل استفاده نیست. لطفاً با پشتیبانی تماس بگیرید.', await customerKeyboard(ctx.app));
     return true;
+  }
+
+  if (result.outcome === 'claimed') {
+    try {
+      await onPurchaseConfirmed(ctx.app, result.order!);
+    } catch (err: any) {
+      console.error('❌ [ManualPurchase] Referral qualification failed:', err.message);
+    }
   }
 
   await ctx.reply(
     activatedPurchaseText(result.order!, result.outcome === 'already_claimed'),
-    customerStorefrontKeyboard(),
+    await customerKeyboard(ctx.app),
   );
   console.log(
     '🛒 [ManualPurchase] Order #' + result.order!.id +

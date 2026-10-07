@@ -39,15 +39,28 @@ export function buildPagedKeyboard<T>(
   return Markup.inlineKeyboard(rows);
 }
 
-export function productButton(p: { id: number; name: string; price: number }, callbackPrefix: string): InlineButton {
-  return Markup.button.callback(p.name + '  |  ' + formatPrice(p.price) + ' ت', callbackPrefix + p.id);
+type PickerProduct = { id: number; name: string; price: number; is_available?: number };
+
+export function productButton(p: PickerProduct, callbackPrefix: string, label?: (p: PickerProduct) => string): InlineButton {
+  return Markup.button.callback(label ? label(p) : p.name + '  |  ' + formatPrice(p.price) + ' ت', callbackPrefix + p.id);
 }
 
+/** `label` overrides the button text (e.g. to mark out-of-stock products). */
 export function productPickerKeyboard(
-  products: { id: number; name: string; price: number }[], page: number,
-  callbackPrefix: string, navPrefix: string, cancelBtn: InlineButton,
+  products: PickerProduct[], page: number,
+  callbackPrefix: string, navPrefix: string, cancelBtn: InlineButton, label?: (p: PickerProduct) => string,
 ) {
-  return buildPagedKeyboard(products, page, (p) => productButton(p, callbackPrefix), navPrefix, cancelBtn);
+  return buildPagedKeyboard(products, page, (p) => productButton(p, callbackPrefix, label), navPrefix, cancelBtn);
+}
+
+/** Catalog label: out-of-stock products stay visible but show no price. */
+export function catalogLabel(p: PickerProduct): string {
+  return p.is_available === 0 ? '⛔️ ' + p.name + ' (ناموجود)' : p.name + '  |  ' + formatPrice(p.price) + ' ت';
+}
+
+/** Admin label: the normal text, prefixed when the product is out of stock. */
+export function adminProductLabel(p: PickerProduct): string {
+  return (p.is_available === 0 ? '⛔️ ' : '') + p.name + '  |  ' + formatPrice(p.price) + ' ت';
 }
 
 export async function ackStrayCallback(ctx: Context): Promise<void> {

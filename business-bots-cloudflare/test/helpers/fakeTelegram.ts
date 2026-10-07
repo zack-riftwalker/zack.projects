@@ -41,6 +41,16 @@ export function makeFakeTelegram() {
       }
       case 'copyMessage':
         return { message_id: ++mid };
+      case 'createForumTopic':
+        return { message_thread_id: ++mid, name: payload?.name, icon_color: payload?.icon_color ?? 0x6FB9F0 };
+      case 'sendPhoto':
+      case 'sendDocument':
+      case 'sendVideo':
+      case 'sendVoice':
+      case 'sendAudio':
+      case 'sendAnimation':
+      case 'sendSticker':
+        return { message_id: ++mid, date: 0, chat: { id: payload?.chat_id, type: 'private' } };
       default:
         return true;
     }

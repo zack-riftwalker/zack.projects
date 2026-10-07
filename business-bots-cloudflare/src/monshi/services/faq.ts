@@ -28,13 +28,15 @@ function keywordsOf(faq: FaqRow): string[] {
   return (faq.keywords || '').split(',').filter((k) => k.trim()).map((k) => normalizeText(k).toLowerCase());
 }
 
-export function findBestMatch(text: string | null | undefined, faqs: FaqRow[]): { faq: FaqRow; score: number } | null {
-  if (!text) return null;
-  const normalized = normalizeText(text).toLowerCase();
-  if (!normalized) return null;
+interface ScoredFaq { faq: FaqRow; score: number }
 
-  let best: FaqRow | null = null;
-  let bestScore = 0;
+/** Every FAQ with at least one specific keyword (or question) hit, with its score. */
+function scoreFaqs(text: string | null | undefined, faqs: FaqRow[]): ScoredFaq[] {
+  if (!text) return [];
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return [];
+
+  const out: ScoredFaq[] = [];
   const priceIntent = isPriceQuery(normalized);
   for (const faq of faqs) {
     let specificHits = 0;
@@ -51,11 +53,22 @@ export function findBestMatch(text: string | null | undefined, faqs: FaqRow[]): 
       score += 2;
     }
     if (specificHits === 0) continue;
-    if (score > bestScore) {
-      bestScore = score;
-      best = faq;
-    }
+    out.push({ faq, score });
   }
-  if (best !== null && bestScore >= MIN_SCORE) return { faq: best, score: bestScore };
+  return out;
+}
+
+export function findBestMatch(text: string | null | undefined, faqs: FaqRow[]): { faq: FaqRow; score: number } | null {
+  let best: ScoredFaq | null = null;
+  for (const c of scoreFaqs(text, faqs)) if (!best || c.score > best.score) best = c;
+  if (best !== null && best.score >= MIN_SCORE) return best;
   return null;
+}
+
+/** Up to k FAQs worth suggesting to a human (any specific hit, best first) — weaker than a firm auto-answer match. */
+export function topMatches(text: string | null | undefined, faqs: FaqRow[], k = 3): FaqRow[] {
+  return scoreFaqs(text, faqs)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k)
+    .map((c) => c.faq);
 }

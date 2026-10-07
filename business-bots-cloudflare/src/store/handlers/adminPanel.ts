@@ -1,24 +1,26 @@
 import type { Bot } from 'grammy';
 import { Markup } from '../../lib/markup';
-import { MANUAL_PURCHASE_LABEL } from '../labels';
+import { MANUAL_PURCHASE_LABEL, REFERRAL_LABEL, REPORT_LABEL } from '../labels';
 import type { StoreContext } from '../types';
 
 const LABEL = {
   announce: '📢 اطلاعیه‌ها',
+  report: REPORT_LABEL,
   addProduct: '➕ افزودن محصول',
+  editProduct: '✏️ ویرایش محصول',
   deactProduct: '🗑 حذف محصول',
   discountCode: '🎟 کد تخفیف',
   cardSettings: '💳 شماره کارت',
+  referral: REFERRAL_LABEL,
   manualPurchase: MANUAL_PURCHASE_LABEL,
 };
 
 export function adminPanelKeyboard() {
   return Markup.keyboard([
-    [LABEL.announce],
-    [LABEL.addProduct],
-    [LABEL.deactProduct],
-    [LABEL.discountCode],
-    [LABEL.cardSettings],
+    [LABEL.announce, LABEL.report],
+    [LABEL.addProduct, LABEL.editProduct],
+    [LABEL.deactProduct, LABEL.discountCode],
+    [LABEL.cardSettings, LABEL.referral],
     [LABEL.manualPurchase],
   ]).resize();
 }
@@ -30,6 +32,15 @@ const DISCOUNT_SUBMENU_KB = Markup.inlineKeyboard([
 ]);
 
 export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: number | undefined) => boolean) {
+  // Any panel button abandons a half-typed input (e.g. a custom reject reason waiting for text).
+  bot.hears(Object.values(LABEL), async (ctx, next) => {
+    if (isAdmin(ctx.from?.id) && ctx.session) {
+      ctx.session.awaitingRejectReasonFor = null;
+      ctx.session.awaitingReferralInput = null;
+    }
+    return next();
+  });
+
   bot.hears(LABEL.announce, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.scene.enter('announce-wizard');
@@ -38,6 +49,11 @@ export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: 
   bot.hears(LABEL.addProduct, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.scene.enter('customer-products-wizard');
+  });
+
+  bot.hears(LABEL.editProduct, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    await ctx.scene.enter('customer-products-edit-wizard');
   });
 
   bot.hears(LABEL.deactProduct, async (ctx) => {

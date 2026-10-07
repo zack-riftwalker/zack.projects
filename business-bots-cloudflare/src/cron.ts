@@ -1,11 +1,12 @@
 import { createApps, type Deps } from './apps';
 import type { Env } from './env';
 import { getAppState, setAppState } from './lib/appstate';
-import { tehranParts } from './lib/time';
+import { tehranParts, utcIsoNow } from './lib/time';
 import { processBroadcastBatch } from './store/broadcast';
 import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
 import { checkStalledOrders, sendReminders } from './store/scheduler';
+import { sweepReferralRewards } from './store/referrals';
 
 const REMINDER_HOUR_TEHRAN = 11;
 
@@ -22,11 +23,25 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
   const apps = createApps(env, deps);
   const t = tehranParts(now);
 
+  // Monshi: forget old «reply to a notification» links once a day (04:xx Tehran)
+  if (apps.monshi && t.hour === 4) {
+    const monshi = apps.monshi;
+    await guarded('notify-links-cleanup', async () => {
+      if ((await monshi.ctx.getState('notify_links_cleanup_day')) === t.day) return;
+      await monshi.db.deleteNotifyLinksBefore(utcIsoNow(new Date(now.getTime() - 30 * 86400000)));
+      await monshi.ctx.setState('notify_links_cleanup_day', t.day);
+    });
+  }
+
   if (apps.store) {
     const store = apps.store;
 
     if (t.minute % 10 === 0) {
       await guarded('stalled-orders', () => checkStalledOrders(store));
+    }
+
+    if (t.minute % 10 === 5) {
+      await guarded('referral-rewards', () => sweepReferralRewards(store));
     }
 
     if (t.hour === REMINDER_HOUR_TEHRAN) {
@@ -45,7 +60,7 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
       if ((await monshi.ctx.getSetting('digest_enabled')) !== '1') return;
       if ((await monshi.ctx.getState('last_digest_day')) === t.day) return;
       const { text, markup } = await buildDigest(monshi);
-      await notifyAll(monshi, text, markup);
+      await notifyAll(monshi, text, markup, 'reports');
       await monshi.ctx.setState('last_digest_day', t.day);
     });
   }

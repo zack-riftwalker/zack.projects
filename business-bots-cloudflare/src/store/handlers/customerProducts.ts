@@ -31,6 +31,13 @@ const NO_WARRANTY_KB = Markup.inlineKeyboard([
   [Markup.button.callback('❌ انصراف', 'cprod_add_cancel')],
 ]);
 
+/** null = valid; otherwise the Persian error text (shared by the add and edit wizards). */
+export function productNameError(name: string): string | null {
+  if (name.length < 3) return '⚠️ نام محصول باید حداقل ۳ کاراکتر باشد. دوباره وارد کنید:';
+  if (name.length > MAX_NAME_LENGTH) return '⚠️ نام محصول نباید بیشتر از ' + MAX_NAME_LENGTH + ' کاراکتر باشد. نام کوتاه‌تری وارد کنید:';
+  return null;
+}
+
 export function parseDays(text: string): number {
   const normalised = String(text)
     .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 0x30))
@@ -74,12 +81,9 @@ export const customerProductsWizard = new WizardScene<StoreContext>(
     }
 
     const name = ctx.message.text.trim();
-    if (name.length < 3) {
-      await ctx.reply('⚠️ نام محصول باید حداقل ۳ کاراکتر باشد. دوباره وارد کنید:');
-      return;
-    }
-    if (name.length > MAX_NAME_LENGTH) {
-      await ctx.reply('⚠️ نام محصول نباید بیشتر از ' + MAX_NAME_LENGTH + ' کاراکتر باشد. نام کوتاه‌تری وارد کنید:');
+    const nameError = productNameError(name);
+    if (nameError) {
+      await ctx.reply(nameError);
       return;
     }
 

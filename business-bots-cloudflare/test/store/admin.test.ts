@@ -43,8 +43,11 @@ describe('store: admin confirm / reject', () => {
     const pid = seedProduct(t);
     await buyOnce(t, pid);
     await t.send('store', callbackUpdate(ADMIN, 'order_reject_1', { caption: 'CAP', chatId: ADMIN.id }));
+    expect(one(t.storeDb, 'SELECT status FROM orders').status).toBe('pending'); // asks for a reason first
+    await t.send('store', callbackUpdate(ADMIN, 'order_rejr_1_none', { caption: 'CAP', chatId: ADMIN.id }));
     expect(one(t.storeDb, 'SELECT status FROM orders').status).toBe('rejected');
     expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('رسید پرداخت شما تایید نشد');
+    expect(t.tg.texts(CUSTOMER.id).at(-1)).not.toContain('دلیل');
     expect(q(t.storeDb, 'SELECT * FROM discount_code_redemptions')).toHaveLength(0);
   });
 

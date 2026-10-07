@@ -7,7 +7,9 @@ import { buildDigest } from '../services/digest';
 import * as gemini from '../services/gemini';
 import * as hours from '../services/hours';
 import * as rules from '../services/rules';
-import { unansweredView } from '../views';
+import { ensureTopic, sendToStaff, TOPIC_CATEGORIES, TOPICS } from '../services/topics';
+import { customerCardLines, unansweredView } from '../views';
+import { storeCustomerSummary } from '../../bridge';
 import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, clearWizardStates, commandArgs, commandRest, safeEdit } from './common';
 import * as faqAdmin from './faqAdmin';
@@ -101,6 +103,7 @@ export const HELP_TEXT =
   'میان‌برهای اختیاری (برای کسی که تایپ رو ترجیح می‌ده):\n\n' +
   '/status /pause /resume /settings /hours /set_message /set_greeting\n' +
   '/resume_chat <آیدی یا @یوزرنیم> /set_cooldown <ساعت> /unanswered /stats /digest\n' +
+  '/customer <آیدی یا @یوزرنیم> — کارت مشتری (سابقه خرید + آخرین پیام‌ها)\n' +
   '/faq_list /faq_add /faq_edit <شماره> /faq_disable <شماره> /faq_enable <شماره>\n' +
   '/order_add /orders\n' +
   '/gemini_status /gemini_toggle /set_threshold faq|handoff <عدد>\n' +
@@ -146,6 +149,40 @@ export async function cmdResumeChat(ctx: MonshiCtx): Promise<void> {
   }
   await ctx.app.db.setChatPause(customer.chat_id, null);
   await ctx.reply(`▶️ پاسخ خودکار برای چت «${labelOf(customer)}» دوباره فعال شد.`);
+}
+
+/** /customer <@username | id>: the customer card (store history) + the last messages + pause/resume button. */
+export async function cmdCustomer(ctx: MonshiCtx): Promise<void> {
+  const app = ctx.app;
+  const args = commandArgs(ctx);
+  if (!args.length) {
+    await ctx.reply('فرمت: /customer <آیدی چت> یا /customer @یوزرنیم');
+    return;
+  }
+  const target = args[0];
+  const customer = target.startsWith('@')
+    ? await app.db.getCustomerByUsername(target)
+    : /^-?\d+$/.test(target) ? await app.db.getCustomer(parseInt(target, 10)) : null;
+  if (!customer) {
+    await ctx.reply('❌ مشتری‌ای با این مشخصات پیدا نشد.');
+    return;
+  }
+  const card = customerCardLines(await storeCustomerSummary(app.apps, customer.chat_id), customer, app.apps.now());
+  const recent = await app.db.getRecentMessages(customer.chat_id, 5);
+  const icon: Record<string, string> = { in: '👤', owner: '🧑', out: '🤖' };
+  const lines = [
+    `👤 ${labelOf(customer)}${customer.username ? ' (@' + customer.username + ')' : ''}`,
+    ...card,
+    '',
+    '💬 آخرین پیام‌ها:',
+    ...(recent.length ? recent.map((m) => `${icon[m.direction] ?? '•'} ${(m.text ?? `[${m.message_type ?? '—'}]`).slice(0, 80)}`) : ['—']),
+  ];
+  const paused = rules.isChatPaused(customer, app.apps.now());
+  await ctx.reply(lines.join('\n'), Markup.inlineKeyboard([[
+    paused
+      ? Markup.button.callback('▶️ فعال‌سازی ربات برای این چت', `resume_chat:${customer.chat_id}`)
+      : Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${customer.chat_id}`),
+  ]]));
 }
 
 export async function cmdSetCooldown(ctx: MonshiCtx): Promise<void> {
@@ -425,6 +462,7 @@ const floatsEqual = (a: unknown, b: unknown) => {
 
 async function settingsHubView(app: MonshiApp) {
   const markReadOn = (await app.ctx.getSetting('mark_read_enabled')) === '1';
+  const topicsOn = (await app.ctx.getSetting('topics_enabled')) === '1';
   return {
     text: '⚙️ تنظیمات ربات\n\nیکی از موارد زیر را انتخاب کنید 👇',
     markup: Markup.inlineKeyboard([
@@ -433,6 +471,7 @@ async function settingsHubView(app: MonshiApp) {
       [Markup.button.callback('👋 پیام خوش‌آمد', 'st_greeting')],
       [Markup.button.callback('⏱ فاصله «دریافت شد»', 'st_cooldown')],
       [Markup.button.callback('🧠 Gemini', 'st_gemini')],
+      [Markup.button.callback(`🗂 دسته‌بندی پیام‌ها (${topicsOn ? 'فعال ✅' : 'خاموش 🚫'})`, 'st_toggle_topics')],
       [Markup.button.callback(`👁 خوانده‌شدن خودکار (${markReadOn ? 'فعال ✅' : 'خاموش 🚫'})`, 'st_toggle_markread')],
     ]),
   };
@@ -507,7 +546,9 @@ export const onSettingsCallback = adminGuard(async (ctx) => {
   const app = ctx.app;
   const data = ctx.callbackQuery?.data ?? '';
   const noKeyAlert = data === 'st_toggle_gemini' && !app.cfg.geminiKey;
-  if (!noKeyAlert) await ctx.answerCallbackQuery();
+  // turning topics ON answers itself (success toast or the BotFather alert)
+  const topicsTurningOn = data === 'st_toggle_topics' && (await app.ctx.getSetting('topics_enabled')) !== '1';
+  if (!noKeyAlert && !topicsTurningOn) await ctx.answerCallbackQuery();
 
   const show = async (v: { text: string; markup: { reply_markup: any } }) => safeEdit(ctx, v.text, v.markup);
 
@@ -530,6 +571,28 @@ export const onSettingsCallback = adminGuard(async (ctx) => {
   if (data === 'st_toggle_markread') {
     const enabled = (await app.ctx.getSetting('mark_read_enabled')) === '1';
     await app.ctx.setSetting('mark_read_enabled', enabled ? '0' : '1');
+    return show(await settingsHubView(app));
+  }
+  if (data === 'st_toggle_topics') {
+    if (!topicsTurningOn) {
+      await app.ctx.setSetting('topics_enabled', '0');
+      return show(await settingsHubView(app));
+    }
+    // create all four topics for the owner first; the setting is saved only if every one exists
+    for (const cat of TOPIC_CATEGORIES) {
+      if ((await ensureTopic(app, app.cfg.adminId, cat)) === null) {
+        await ctx.answerCallbackQuery({
+          text: '❌ ساخت تاپیک ممکن نشد. اول در @BotFather برای ربات منشی حالت تاپیک (Threaded Mode) را روشن کنید و دوباره امتحان کنید.',
+          show_alert: true,
+        });
+        return;
+      }
+    }
+    await app.ctx.setSetting('topics_enabled', '1');
+    await ctx.answerCallbackQuery('✅ تاپیک‌ها ساخته شدند');
+    for (const cat of TOPIC_CATEGORIES) {
+      await sendToStaff(app, app.cfg.adminId, cat, 'این تاپیک برای «' + TOPICS[cat].name + '» است.').catch(() => {});
+    }
     return show(await settingsHubView(app));
   }
   if (data === 'st_gemini') return show(await geminiSettingsView(app));

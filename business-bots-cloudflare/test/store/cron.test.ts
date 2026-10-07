@@ -94,6 +94,7 @@ describe('announcement broadcast queue', () => {
   };
   async function startAnnounce(t: TestEnv) {
     await t.send('store', textUpdate(ADMIN, '📢 اطلاعیه‌ها'));
+    await t.send('store', callbackUpdate(ADMIN, 'ann_aud_all'));
     await t.send('store', textUpdate(ADMIN, 'Big news'));
     await t.send('store', callbackUpdate(ADMIN, 'announce_confirm'));
   }
@@ -123,6 +124,7 @@ describe('announcement broadcast queue', () => {
     t.tg.fail('sendMessage', (c) => c.payload.chat_id === 4001, 403);
     t.tg.fail('sendMessage', (c) => c.payload.chat_id === 4003, 429, 'Too Many Requests: retry after 5', 1);
     await t.send('store', textUpdate(ADMIN, '📢 اطلاعیه‌ها'));
+    await t.send('store', callbackUpdate(ADMIN, 'ann_aud_all'));
     const upd = textUpdate(ADMIN, 'Big news');
     upd.message.entities = [{ type: 'bold', offset: 0, length: 3 }];
     await t.send('store', upd);

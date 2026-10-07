@@ -1,5 +1,6 @@
 import type { Apps } from './apps';
 import { handleOrderPaid, type OrderPaidEvent } from './monshi/handlers/bridge';
+import { getCustomerSummary, type CustomerSummary } from './store/customerSummary';
 import { onOrderCancelledInMonshi, onOrderDelivered, onOrderPaidFailed } from './store/bridgeHandlers';
 
 export type { OrderPaidEvent };
@@ -37,4 +38,15 @@ export async function monshiOrderDelivered(apps: Apps, storeOrderId: number): Pr
 export async function monshiOrderCancelled(apps: Apps, storeOrderId: number): Promise<void> {
   if (!apps.store) return;
   await onOrderCancelledInMonshi(apps.store, storeOrderId);
+}
+
+/** monshi → store: what the store knows about a customer (null when the store is off or the lookup fails). */
+export async function storeCustomerSummary(apps: Apps, telegramId: number): Promise<CustomerSummary | null> {
+  if (!apps.store) return null;
+  try {
+    return await getCustomerSummary(apps.store, telegramId);
+  } catch (err: any) {
+    console.warn('⚠️ [Bridge] Customer summary failed:', err?.message ?? err);
+    return null;
+  }
 }

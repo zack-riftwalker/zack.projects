@@ -7,6 +7,9 @@ import * as gemini from '../services/gemini';
 import * as hours from '../services/hours';
 import * as orders from '../services/orders';
 import * as rules from '../services/rules';
+import { sendToStaff } from '../services/topics';
+import { storeCustomerSummary } from '../../bridge';
+import { customerCardLines } from '../views';
 import type { MonshiCtx } from '../types';
 import { notifyAll } from './common';
 
@@ -37,7 +40,8 @@ export async function onBusinessConnection(ctx: MonshiCtx): Promise<void> {
     `🔹 مجوز mark-as-read: ${canRead ? 'دارد ✅' : 'ندارد ❌ (برای خوانده‌شدن چت‌ها لازم است)'}\n\n` +
     'برای مشاهده وضعیت: /status';
   try {
-    await app.api.sendMessage(bc.user_chat_id, text);
+    if (app.cfg.allNotifyIds.includes(bc.user_chat_id)) await sendToStaff(app, bc.user_chat_id, 'system', text);
+    else await app.api.sendMessage(bc.user_chat_id, text);
   } catch (err: any) {
     console.error('Failed to send connection confirmation', err?.message ?? err);
   }
@@ -68,16 +72,30 @@ async function markRead(app: MonshiApp, bcid: string, chatId: number, messageId:
 async function notifyAdmin(
   app: MonshiApp, sender: { id: number; first_name?: string; username?: string } | undefined,
   chatId: number, messageType: string, text: string | null | undefined, reason: string,
+  customer?: { first_seen_at: string | null } | null,
+  suggestedFaqs: { id: number; question: string }[] = [],
 ): Promise<void> {
   const name = sender?.first_name || 'ناشناس';
   const link = sender?.username ? `https://t.me/${sender.username}` : sender ? `tg://user?id=${sender.id}` : '—';
   const preview = text ? text.slice(0, 200) : `[${messageType}]`;
-  const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n🔗 ${link}`;
-  // pause button: with one tap the bot steps away from this chat while the owner continues by hand
-  const markup = Markup.inlineKeyboard([[
-    Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`),
-  ]]);
-  await notifyAll(app, notif, markup);
+  // what the store knows about this customer (their chat id is their Telegram id) — never blocks the notification
+  const card = customerCardLines(await storeCustomerSummary(app.apps, chatId), customer, app.apps.now());
+  const canReply = !!(await app.ctx.getConnection());
+  const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n` + card.map((l) => l + '\n').join('') + `🔗 ${link}` +
+    (canReply ? '\n↩️ برای جواب دادن، روی همین پیام Reply بزنید.' : '');
+  // up to 3 FAQs that may answer it (one tap sends the answer), then the pause button: with one tap the bot
+  // steps away from this chat while the owner continues by hand
+  const markup = Markup.inlineKeyboard([
+    ...suggestedFaqs.slice(0, 3).map((f) => [Markup.button.callback('📚 ' + f.question.slice(0, 28), `hfaq:${chatId}:${f.id}`)]),
+    [Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`)],
+  ]);
+  const sent = await notifyAll(app, notif, markup, 'handoff');
+  // remember which customer each notification is about, so a Reply to it can be forwarded
+  try {
+    await app.db.saveNotifyLinks(sent.map((s) => ({ recipientChatId: s.userId, messageId: s.messageId, customerChatId: chatId })));
+  } catch (err: any) {
+    console.warn('Could not store notification links', err?.message ?? err);
+  }
 }
 
 /** Generic «use the sales bot» answer for price questions without an FAQ. true = handled. */
@@ -152,7 +170,8 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
 
   // 1) the owner's own manual message → store + pause auto-replies in this chat
   if (sender && sender.id === ownerId) {
-    await app.db.saveMessage(chatId, msg.message_id, 'owner', messageType, text, bcid);
+    // already stored = a reply sent through the notification bridge (or a redelivered update): handled there
+    if (!(await app.db.saveMessage(chatId, msg.message_id, 'owner', messageType, text, bcid))) return;
     await app.db.markChatAnsweredByHuman(chatId);
     await rules.pauseChat(app, chatId);
     console.log(`Owner replied manually in chat ${chatId} -> paused`);
@@ -163,7 +182,8 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   const { isNew: isNewCustomer, customer } = await app.db.upsertCustomer(
     chatId, sender?.id ?? null, sender?.username ?? null, sender?.first_name ?? null,
   );
-  if (!(await app.db.saveMessage(chatId, msg.message_id, 'in', messageType, text, bcid))) return; // duplicate
+  const messageRowId = await app.db.saveMessage(chatId, msg.message_id, 'in', messageType, text, bcid);
+  if (!messageRowId) return; // duplicate
 
   // 3) automation off or chat paused → store only
   if (!(await rules.isAutomationEnabled(app)) || rules.isChatPaused(customer, app.apps.now())) return;
@@ -171,7 +191,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   // 4) silence rule: media / sensitive content → notify the owner, no reply
   if (rules.isSensitive(text, messageType)) {
     await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
-    await notifyAdmin(app, sender, chatId, messageType, text, 'حساس/مدیا');
+    await notifyAdmin(app, sender, chatId, messageType, text, 'حساس/مدیا', customer);
     return;
   }
 
@@ -217,7 +237,10 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
           if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;
         }
         await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
-        await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)');
+        const suggestions = geminiResult.candidates.length
+          ? geminiResult.candidates
+          : faq.topMatches(text, await app.ctx.getEnabledFaqs(), 3);
+        await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)', customer, suggestions);
         return;
       }
     } else if (route === 'order_status') {
@@ -260,7 +283,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
 
   // no match → record for repeated-unanswered detection
   if (text) {
-    await app.db.recordUnanswered(chatId, text, normalizeText(text));
+    await app.db.recordUnanswered(chatId, text, normalizeText(text), messageRowId);
     // price question without an FAQ → point to the sales bot
     if (faq.isPriceQuery(normalizeText(text))) {
       if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;

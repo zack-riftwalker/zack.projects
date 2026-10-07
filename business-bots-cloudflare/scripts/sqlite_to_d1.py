@@ -29,15 +29,15 @@ from pathlib import Path
 MAX_STATEMENT_BYTES = 100_000
 EMBEDDING_VERSION = "3-768"
 
-# (table, target columns) in import order — must match migrations/*/0001_init.sql (guarded by a test).
+# (table, target columns) in import order — must match migrations/*/*.sql (guarded by a test).
 STORE_TABLES = [
-    ("customers", ["id", "telegram_id", "display_name", "created_at"]),
-    ("customer_products", ["id", "name", "price", "terms_text", "terms_entities", "duration_days", "warranty_days", "is_active", "created_at"]),
-    ("discount_codes", ["id", "code", "customer_product_id", "discount_type", "discount_value", "max_uses", "expires_at", "is_active", "created_at"]),
+    ("customers", ["id", "telegram_id", "display_name", "created_at", "ref_code"]),
+    ("customer_products", ["id", "name", "price", "terms_text", "terms_entities", "duration_days", "warranty_days", "is_active", "created_at", "is_available"]),
+    ("discount_codes", ["id", "code", "customer_product_id", "discount_type", "discount_value", "max_uses", "expires_at", "is_active", "created_at", "owner_telegram_id", "source"]),
     ("orders", ["id", "customer_telegram_id", "customer_product_id", "product_name", "price", "receipt_file_id", "receipt_type",
                 "purchase_source", "status", "created_at", "decided_at", "decided_by", "discount_code_id", "duration_days",
                 "warranty_days", "delivered_at", "expires_at", "warranty_expires_at", "reminded_7d", "reminded_3d",
-                "reminded_expired", "stalled_alert_sent", "last_warranty_claim_at", "paid_failed_handled"]),
+                "reminded_expired", "stalled_alert_sent", "last_warranty_claim_at", "paid_failed_handled", "reject_reason", "receipt_unique_id"]),
     ("discount_code_redemptions", ["id", "discount_code_id", "customer_telegram_id", "order_id", "redeemed_at"]),
     ("manual_purchase_claims", ["id", "creation_key", "token_hash", "customer_product_id", "product_name", "price", "duration_days",
                                 "warranty_days", "approved_by", "approved_at", "status", "claimed_by", "claimed_at", "order_id"]),
@@ -53,7 +53,7 @@ MONSHI_TABLES = [
     ("faqs", ["id", "question", "answer", "keywords", "enabled", "priority", "embedding", "hit_count", "created_at", "updated_at"]),
     ("messages", ["id", "chat_id", "telegram_message_id", "direction", "message_type", "text", "received_at", "answered_by", "faq_id",
                   "business_connection_id"]),
-    ("unanswered", ["id", "chat_id", "text", "normalized_text", "count", "last_seen_at", "status"]),
+    ("unanswered", ["id", "chat_id", "text", "normalized_text", "count", "last_seen_at", "status", "last_message_row_id"]),
     ("reply_log", ["chat_id", "reply_key", "sent_at"]),
     ("orders", ["id", "chat_id", "title", "status", "checklist_message_id", "business_connection_id", "note", "external_order_id",
                 "created_at", "updated_at"]),

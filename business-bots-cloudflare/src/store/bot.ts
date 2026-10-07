@@ -7,13 +7,17 @@ import { isAdminId } from './config';
 import { registerAdminPanelHandler, adminPanelKeyboard } from './handlers/adminPanel';
 import { announceWizard } from './handlers/announceWizard';
 import { customerProductsWizard, customerProductsDeactivateWizard } from './handlers/customerProducts';
-import { registerStorefrontHandler, customerStorefrontKeyboard } from './handlers/storefront';
+import { customerProductsEditWizard } from './handlers/customerProductsEdit';
+import { registerStorefrontHandler, customerKeyboard } from './handlers/storefront';
+import { registerSalesReportHandler } from './handlers/salesReport';
 import {
   discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, registerDiscountCodeHandler,
 } from './handlers/discountCodes';
 import { storeSettingsWizard } from './handlers/storeSettings';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
+import { registerReferralHandler } from './handlers/referralPanel';
+import { REF_PAYLOAD_RE, handleRefStart } from './referrals';
 import type { StoreContext, StoreSession } from './types';
 
 export function logBotError(err: BotError<any>): void {
@@ -58,13 +62,13 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   }));
 
   const stage = new Stage<StoreContext>([
-    announceWizard, customerProductsWizard, customerProductsDeactivateWizard,
+    announceWizard, customerProductsWizard, customerProductsDeactivateWizard, customerProductsEditWizard,
     discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard,
     storeSettingsWizard,
     manualPurchaseWizard,
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
-    bypass: (ctx) => /^order_(confirm|reject|deliver)_\d+$/.test(ctx.callbackQuery?.data ?? ''),
+    bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
     // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
     exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
   });
@@ -85,10 +89,20 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
         return;
       }
 
-      await ctx.app.db.upsertCustomer({
+      const upserted = await ctx.app.db.upsertCustomer({
         telegramId: ctx.from!.id,
         displayName: ctx.from!.first_name || ctx.from!.username || String(ctx.from!.id),
       });
+
+      // /start ref_<code>: remember who invited this (brand-new) customer; never blocks the welcome
+      const refMatch = REF_PAYLOAD_RE.exec(payload);
+      if (refMatch) {
+        try {
+          await handleRefStart(ctx.app, ctx.from!.id, refMatch[1], upserted.changes === 1);
+        } catch (err: any) {
+          console.error('❌ [Bot] referral attribution failed:', err.message);
+        }
+      }
 
       if (await handleManualPurchaseStart(ctx, payload)) return;
 
@@ -96,7 +110,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
         '👋 *سلام!*\n\n' +
         'به ربات فروشگاه خوش آمدید. 🎓\n\n' +
         'برای مشاهده محصولات و خرید، دکمه زیر را بزنید:',
-        { parse_mode: 'Markdown', ...customerStorefrontKeyboard() },
+        { parse_mode: 'Markdown', ...(await customerKeyboard(ctx.app)) },
       );
     } catch (err: any) {
       console.error('❌ [Bot] /start handler error:', err.message);
@@ -108,10 +122,12 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
       await ctx.reply('🎛 پنل مدیریت:', adminPanelKeyboard());
       return;
     }
-    await ctx.reply('🛍 فروشگاه:', customerStorefrontKeyboard());
+    await ctx.reply('🛍 فروشگاه:', await customerKeyboard(ctx.app));
   });
 
   registerAdminPanelHandler(bot, isAdmin);
+  registerSalesReportHandler(bot, isAdmin);
+  registerReferralHandler(bot, isAdmin);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);
   registerStorefrontHandler(bot);
