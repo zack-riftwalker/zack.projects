@@ -9,6 +9,7 @@ import { announceWizard } from './handlers/announceWizard';
 import { customerProductsWizard, customerProductsDeactivateWizard } from './handlers/customerProducts';
 import { customerProductsEditWizard } from './handlers/customerProductsEdit';
 import { registerStorefrontHandler, customerStorefrontKeyboard } from './handlers/storefront';
+import { registerSalesReportHandler } from './handlers/salesReport';
 import {
   discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, registerDiscountCodeHandler,
 } from './handlers/discountCodes';
@@ -113,6 +114,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   });
 
   registerAdminPanelHandler(bot, isAdmin);
+  registerSalesReportHandler(bot, isAdmin);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);
   registerStorefrontHandler(bot);

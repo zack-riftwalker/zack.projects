@@ -1,10 +1,11 @@
 import type { Bot } from 'grammy';
 import { Markup } from '../../lib/markup';
-import { MANUAL_PURCHASE_LABEL } from '../labels';
+import { MANUAL_PURCHASE_LABEL, REPORT_LABEL } from '../labels';
 import type { StoreContext } from '../types';
 
 const LABEL = {
   announce: '📢 اطلاعیه‌ها',
+  report: REPORT_LABEL,
   addProduct: '➕ افزودن محصول',
   editProduct: '✏️ ویرایش محصول',
   deactProduct: '🗑 حذف محصول',
@@ -15,7 +16,7 @@ const LABEL = {
 
 export function adminPanelKeyboard() {
   return Markup.keyboard([
-    [LABEL.announce],
+    [LABEL.announce, LABEL.report],
     [LABEL.addProduct, LABEL.editProduct],
     [LABEL.deactProduct, LABEL.discountCode],
     [LABEL.cardSettings],

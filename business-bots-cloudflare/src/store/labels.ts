@@ -23,3 +23,5 @@ export const REJECT_REASONS: { code: string; button: string; text: string }[] = 
 ];
 export const DUPLICATE_REASON_TEXT = REJECT_REASONS.find((r) => r.code === 'duplicate')!.text;
 export const MAX_REJECT_REASON_LENGTH = 200;
+
+export const REPORT_LABEL = '📊 گزارش فروش';
