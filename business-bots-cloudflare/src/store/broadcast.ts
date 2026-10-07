@@ -47,14 +47,29 @@ export async function processBroadcastBatch(app: StoreApp, opts: { reserve: numb
   }
 
   if (finished) {
+    let summary =
+      '✅ *اطلاعیه ارسال شد.*\n\n' +
+      '📨 ارسال موفق: ' + sent + ' مشتری\n' +
+      (failed > 0 ? '⚠️ ارسال ناموفق: ' + failed + ' مشتری\n' : '');
+    const waitMatch = /^waitlist:(\d+)$/.exec(job!.audience ?? '');
+    if (waitMatch) {
+      // the restock notice went out: those customers leave the waitlist (later joiners stay)
+      const pid = parseInt(waitMatch[1], 10);
+      try {
+        const product = await app.db.getCustomerProductById(pid);
+        if (job!.created_at) await app.db.clearWaitlist(pid, job!.created_at);
+        summary =
+          '✅ به ' + sent + ' نفر از لیست انتظار «' + (product?.name ?? pid) + '» خبر داده شد.\n' +
+          (failed > 0 ? '⚠️ ارسال ناموفق: ' + failed + ' نفر\n' : '');
+        await app.api.sendMessage(job!.admin_chat_id, summary);
+        console.log('📢 [Announce] Waitlist notice for product ' + pid + ': ' + sent + ' ok, ' + failed + ' failed.');
+      } catch (err: any) {
+        console.warn('⚠️ [Announce] Waitlist cleanup/summary failed:', err.message);
+      }
+      return;
+    }
     try {
-      await app.api.sendMessage(
-        job!.admin_chat_id,
-        '✅ *اطلاعیه ارسال شد.*\n\n' +
-          '📨 ارسال موفق: ' + sent + ' مشتری\n' +
-          (failed > 0 ? '⚠️ ارسال ناموفق: ' + failed + ' مشتری\n' : ''),
-        { parse_mode: 'Markdown' },
-      );
+      await app.api.sendMessage(job!.admin_chat_id, summary, { parse_mode: 'Markdown' });
     } catch (err: any) {
       console.warn('⚠️ [Announce] Summary to admin failed:', err.message);
     }

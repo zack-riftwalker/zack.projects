@@ -21,7 +21,7 @@ export interface DiscountCode {
 export interface BroadcastJob {
   id: number; admin_chat_id: number; text: string; entities: any[] | null; status: string;
   cursor_customer_id: number; total: number; sent: number; failed: number;
-  audience?: string; reply_markup?: string | null;
+  audience?: string; reply_markup?: string | null; created_at?: string;
 }
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
 
@@ -133,6 +133,49 @@ export class StoreDb {
   `, p.name, p.price, p.termsText || null, p.termsEntities?.length ? JSON.stringify(p.termsEntities) : null,
       p.durationDays || null, p.warrantyDays || null).run();
     return { lastInsertRowid: r.meta.last_row_id };
+  }
+
+  /** Edits an ACTIVE product; columns come from a fixed whitelist. changes = 0 → missing or deactivated. */
+  async updateCustomerProduct(id: number, patch: Partial<{
+    name: string; price: number; termsText: string | null; termsEntities: any[] | null;
+    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean;
+  }>) {
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    const add = (col: string, v: unknown) => { sets.push(col + ' = ?'); args.push(v); };
+    if (patch.name !== undefined) add('name', patch.name);
+    if (patch.price !== undefined) add('price', patch.price);
+    if (patch.termsText !== undefined) add('terms_text', patch.termsText || null);
+    if (patch.termsEntities !== undefined) add('terms_entities', patch.termsEntities?.length ? JSON.stringify(patch.termsEntities) : null);
+    if (patch.durationDays !== undefined) add('duration_days', patch.durationDays || null);
+    if (patch.warrantyDays !== undefined) add('warranty_days', patch.warrantyDays || null);
+    if (patch.isAvailable !== undefined) add('is_available', patch.isAvailable ? 1 : 0);
+    if (!sets.length) return { changes: 0 };
+    const r = await this.q('UPDATE customer_products SET ' + sets.join(', ') + ' WHERE id = ? AND is_active = 1', ...args, id).run();
+    return { changes: r.meta.changes };
+  }
+
+  /** Active fixed-amount codes that would make `price` free (value ≥ price). */
+  async getFixedCodesAtLeast(productId: number, price: number): Promise<DiscountCode[]> {
+    return (await this.q(
+      "SELECT * FROM discount_codes WHERE customer_product_id = ? AND is_active = 1 AND discount_type = 'fixed' AND discount_value >= ?",
+      productId, price,
+    ).all<DiscountCode>()).results;
+  }
+
+  // ─── Waitlist ────────────────────────────────────────────────────────────
+  /** true = newly added, false = already on the list */
+  async addToWaitlist(productId: number, customerTelegramId: number): Promise<boolean> {
+    const r = await this.q('INSERT INTO product_waitlist (product_id, customer_telegram_id) VALUES (?, ?) ON CONFLICT DO NOTHING', productId, customerTelegramId).run();
+    return r.meta.changes === 1;
+  }
+
+  async countWaitlist(productId: number): Promise<number> {
+    return (await this.q('SELECT COUNT(*) AS n FROM product_waitlist WHERE product_id = ?', productId).first<{ n: number }>())!.n;
+  }
+
+  async clearWaitlist(productId: number, upToCreatedAt: string) {
+    await this.q('DELETE FROM product_waitlist WHERE product_id = ? AND created_at <= ?', productId, upToCreatedAt).run();
   }
 
   async deactivateCustomerProduct(id: number) {

@@ -7,6 +7,7 @@ import { isAdminId } from './config';
 import { registerAdminPanelHandler, adminPanelKeyboard } from './handlers/adminPanel';
 import { announceWizard } from './handlers/announceWizard';
 import { customerProductsWizard, customerProductsDeactivateWizard } from './handlers/customerProducts';
+import { customerProductsEditWizard } from './handlers/customerProductsEdit';
 import { registerStorefrontHandler, customerStorefrontKeyboard } from './handlers/storefront';
 import {
   discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, registerDiscountCodeHandler,
@@ -58,7 +59,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   }));
 
   const stage = new Stage<StoreContext>([
-    announceWizard, customerProductsWizard, customerProductsDeactivateWizard,
+    announceWizard, customerProductsWizard, customerProductsDeactivateWizard, customerProductsEditWizard,
     discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard,
     storeSettingsWizard,
     manualPurchaseWizard,

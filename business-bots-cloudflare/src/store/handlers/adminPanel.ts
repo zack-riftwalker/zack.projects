@@ -6,6 +6,7 @@ import type { StoreContext } from '../types';
 const LABEL = {
   announce: '📢 اطلاعیه‌ها',
   addProduct: '➕ افزودن محصول',
+  editProduct: '✏️ ویرایش محصول',
   deactProduct: '🗑 حذف محصول',
   discountCode: '🎟 کد تخفیف',
   cardSettings: '💳 شماره کارت',
@@ -15,9 +16,8 @@ const LABEL = {
 export function adminPanelKeyboard() {
   return Markup.keyboard([
     [LABEL.announce],
-    [LABEL.addProduct],
-    [LABEL.deactProduct],
-    [LABEL.discountCode],
+    [LABEL.addProduct, LABEL.editProduct],
+    [LABEL.deactProduct, LABEL.discountCode],
     [LABEL.cardSettings],
     [LABEL.manualPurchase],
   ]).resize();
@@ -38,6 +38,11 @@ export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: 
   bot.hears(LABEL.addProduct, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.scene.enter('customer-products-wizard');
+  });
+
+  bot.hears(LABEL.editProduct, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    await ctx.scene.enter('customer-products-edit-wizard');
   });
 
   bot.hears(LABEL.deactProduct, async (ctx) => {

@@ -3,7 +3,7 @@ import { Markup } from '../../lib/markup';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
 import {
-  escapeMarkdown, formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTime,
+  escapeMarkdown, formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTime, catalogLabel,
 } from '../utils';
 import {
   validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, DISCOUNT_ERROR_LABEL,
@@ -40,7 +40,7 @@ export function customerStorefrontKeyboard() {
 const CATALOG_CANCEL_BTN = Markup.button.callback('❌ بستن', 'cust_catalog_close');
 
 function catalogKeyboard(products: CustomerProduct[], page: number) {
-  return productPickerKeyboard(products, page, 'cust_prod_', 'cust_catalog_page_', CATALOG_CANCEL_BTN);
+  return productPickerKeyboard(products, page, 'cust_prod_', 'cust_catalog_page_', CATALOG_CANCEL_BTN, catalogLabel);
 }
 
 // ─── Discount-question step (shared by catalog pick and renew button) ────────
@@ -255,6 +255,10 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       await ctx.answerCallbackQuery({ text: '❌ این محصول در حال حاضر موجود نیست. با پشتیبانی تماس بگیرید.', show_alert: true });
       return;
     }
+    if (product.is_available === 0) {
+      await ctx.answerCallbackQuery({ text: '⛔️ این محصول فعلاً ناموجود است.', show_alert: true });
+      return;
+    }
 
     await ctx.answerCallbackQuery();
     await ctx.reply(RENEWAL_NOTE);
@@ -285,7 +289,34 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     }
 
     await ctx.answerCallbackQuery();
+    if (product.is_available === 0) {
+      await ctx.reply(
+        '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
+        'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
+        Markup.inlineKeyboard([[Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id)]]),
+      );
+      return;
+    }
     await sendDiscountPrompt(ctx, product);
+  });
+
+  // ── «🔔 موجود شد خبرم کن» ───────────────────────────────────────────────────
+  bot.callbackQuery(/^waitlist_join_(\d+)$/, async (ctx) => {
+    const product = await ctx.app.db.getCustomerProductById(parseInt(ctx.match![1], 10));
+    if (!product || !product.is_active) {
+      await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
+      return;
+    }
+    if (product.is_available !== 0) {
+      await ctx.answerCallbackQuery('✅ این محصول الان موجود است. از «🛍 لیست محصولات» می‌توانید بخرید.');
+      return;
+    }
+    if (await ctx.app.db.addToWaitlist(product.id, ctx.from.id)) {
+      await ctx.answerCallbackQuery('✅ ثبت شد');
+      await ctx.editMessageText('🔔 ثبت شد. به‌محض موجود شدن «' + product.name + '» خبرتان می‌کنیم.').catch(() => {});
+    } else {
+      await ctx.answerCallbackQuery('ℹ️ قبلاً ثبت شده‌اید.');
+    }
   });
 
   // ── No discount code → straight to terms at the original price ─────────────
@@ -294,6 +325,11 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     if (!product || !product.is_active) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
       await ctx.editMessageText('❌ این محصول دیگر موجود نیست.').catch(() => {});
+      return;
+    }
+    if (product.is_available === 0) {
+      await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
+      await ctx.editMessageText('⛔️ این محصول فعلاً ناموجود است.').catch(() => {});
       return;
     }
 
@@ -312,6 +348,11 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       await ctx.editMessageText('❌ این محصول دیگر موجود نیست.').catch(() => {});
       return;
     }
+    if (product.is_available === 0) {
+      await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
+      await ctx.editMessageText('⛔️ این محصول فعلاً ناموجود است.').catch(() => {});
+      return;
+    }
 
     ctx.session.awaitingDiscountCodeFor = product.id;
 
@@ -328,6 +369,11 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     if (!product || !product.is_active) {
       ctx.session.awaitingDiscountCodeFor = null;
       await ctx.reply('❌ این محصول دیگر موجود نیست.');
+      return;
+    }
+    if (product.is_available === 0) {
+      ctx.session.awaitingDiscountCodeFor = null;
+      await ctx.reply('⛔️ این محصول فعلاً ناموجود است.');
       return;
     }
 
@@ -356,6 +402,11 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     if (!product || !product.is_active) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
       await ctx.editMessageText('❌ این محصول دیگر موجود نیست.').catch(() => {});
+      return;
+    }
+    if (product.is_available === 0) {
+      await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
+      await ctx.editMessageText('⛔️ این محصول فعلاً ناموجود است.').catch(() => {});
       return;
     }
 

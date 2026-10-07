@@ -33,6 +33,8 @@ describe('store hot queries use indexes', () => {
     ['running broadcast', "SELECT * FROM broadcast_jobs WHERE status = 'running' ORDER BY id LIMIT 1", []],
     ['session read', 'SELECT value FROM sessions WHERE key = ?', ['k']],
     ['customer lookup', 'SELECT * FROM customers WHERE telegram_id = ?', [1]],
+    ['waitlist count', 'SELECT COUNT(*) AS n FROM product_waitlist WHERE product_id = ?', [1]],
+    ['waitlist clear', 'DELETE FROM product_waitlist WHERE product_id = ? AND created_at <= ?', [1, 'x']],
   ];
   for (const [label, sql, args] of cases) {
     it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));
