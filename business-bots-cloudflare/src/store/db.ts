@@ -1,4 +1,5 @@
 import type { Db, Stmt } from '../lib/budget';
+import { audienceFilter } from './audience';
 
 export interface CustomerProduct {
   id: number; name: string; price: number; terms_text: string | null;
@@ -420,11 +421,20 @@ export class StoreDb {
   }
 
   // ─── Broadcast queue ─────────────────────────────────────────────────────
-  async enqueueBroadcast(p: { adminChatId: number; text: string; entities: any[] | null }): Promise<number> {
-    const total = (await this.q('SELECT COUNT(*) AS n FROM customers').first<{ n: number }>())!.n;
+  async countAudience(audience: string): Promise<number> {
+    const f = audienceFilter(audience);
+    return (await this.q('SELECT COUNT(*) AS n FROM customers c WHERE ' + f.where, ...f.args).first<{ n: number }>())!.n;
+  }
+
+  async enqueueBroadcast(p: {
+    adminChatId: number; text: string; entities: any[] | null; audience?: string; replyMarkup?: any | null;
+  }): Promise<number> {
+    const audience = p.audience ?? 'all';
+    const total = await this.countAudience(audience);
     const r = await this.q(
-      'INSERT INTO broadcast_jobs (admin_chat_id, text, entities, total) VALUES (?, ?, ?, ?)',
-      p.adminChatId, p.text, p.entities?.length ? JSON.stringify(p.entities) : null, total,
+      'INSERT INTO broadcast_jobs (admin_chat_id, text, entities, total, audience, reply_markup) VALUES (?, ?, ?, ?, ?, ?)',
+      p.adminChatId, p.text, p.entities?.length ? JSON.stringify(p.entities) : null, total, audience,
+      p.replyMarkup ? JSON.stringify(p.replyMarkup) : null,
     ).run();
     return r.meta.last_row_id;
   }
@@ -462,8 +472,12 @@ export class StoreDb {
     await this.q("UPDATE app_state SET value = '0' WHERE key = 'broadcast_lease' AND value = ?", String(token)).run();
   }
 
-  async getCustomerBatch(afterId: number, limit: number): Promise<{ id: number; telegram_id: number }[]> {
-    return (await this.q('SELECT id, telegram_id FROM customers WHERE id > ? ORDER BY id LIMIT ?', afterId, limit).all<{ id: number; telegram_id: number }>()).results;
+  async getCustomerBatch(afterId: number, limit: number, audience = 'all'): Promise<{ id: number; telegram_id: number }[]> {
+    const f = audienceFilter(audience);
+    return (await this.q(
+      'SELECT c.id, c.telegram_id FROM customers c WHERE c.id > ? AND (' + f.where + ') ORDER BY c.id LIMIT ?',
+      afterId, ...f.args, limit,
+    ).all<{ id: number; telegram_id: number }>()).results;
   }
 
   async updateBroadcastProgress(id: number, cursor: number, sent: number, failed: number) {

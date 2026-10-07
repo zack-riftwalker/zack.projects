@@ -3,6 +3,8 @@ import type { StoreApp } from '../apps';
 import { BudgetExceededError } from '../lib/budget';
 import type { BroadcastJob } from './db';
 
+export { audienceFilter } from './audience';
+
 const BATCH_SIZE = 40;
 /** Longer than any batch can take (40 sends + the 25 s webhook window); expires on its own if never released. */
 const LEASE_MS = 90_000;
@@ -66,7 +68,15 @@ async function sendBatch(
   const n = Math.min(BATCH_SIZE, app.apps.budget.remaining() - opts.reserve - 4);
   if (n <= 0) return null;
 
-  const customers = await app.db.getCustomerBatch(job.cursor_customer_id, n);
+  const customers = await app.db.getCustomerBatch(job.cursor_customer_id, n, job.audience ?? 'all');
+  let markup: any;
+  if (job.reply_markup) {
+    try {
+      markup = JSON.parse(job.reply_markup);
+    } catch {
+      markup = undefined;
+    }
+  }
   let cursor = job.cursor_customer_id;
   let sent = job.sent;
   let failed = job.failed;
@@ -74,7 +84,7 @@ async function sendBatch(
 
   for (const c of customers) {
     try {
-      await app.api.sendMessage(c.telegram_id, job.text, { entities: job.entities || undefined });
+      await app.api.sendMessage(c.telegram_id, job.text, { entities: job.entities || undefined, ...(markup ? { reply_markup: markup } : {}) });
       sent++;
     } catch (err: any) {
       if (err instanceof BudgetExceededError) {

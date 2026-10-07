@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FakeD1 } from './helpers/fakeD1';
 import { REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
+import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
@@ -35,6 +36,12 @@ describe('store hot queries use indexes', () => {
   ];
   for (const [label, sql, args] of cases) {
     it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));
+  }
+  for (const audience of ['all', 'active', 'expired', 'never', 'buyers:1', 'waitlist:1']) {
+    it('broadcast batch: ' + audience, () => {
+      const fl = audienceFilter(audience);
+      assertNoScan(plan(f, 'SELECT c.id, c.telegram_id FROM customers c WHERE c.id > ? AND (' + fl.where + ') ORDER BY c.id LIMIT ?', 0, ...fl.args, 40), 'broadcast ' + audience);
+    });
   }
 });
 
