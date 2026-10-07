@@ -40,6 +40,12 @@ export class MonshiContext {
     this.state.set(key, value);
   }
 
+  async deleteState(key: string): Promise<void> {
+    await this.load();
+    await this.db.deleteAppState(key);
+    this.state.delete(key);
+  }
+
   async getEnabledFaqs(): Promise<FaqRow[]> {
     if (!this.faqs) this.faqs = await this.db.getEnabledFaqs();
     return this.faqs;

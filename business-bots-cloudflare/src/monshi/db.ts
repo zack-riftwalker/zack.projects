@@ -69,6 +69,10 @@ export class MonshiDb {
     ).run();
   }
 
+  async deleteAppState(key: string): Promise<void> {
+    await this.q('DELETE FROM app_state WHERE key = ?', key).run();
+  }
+
   async clearFaqEmbeddings(): Promise<void> {
     await this.q('UPDATE faqs SET embedding = NULL').run();
   }

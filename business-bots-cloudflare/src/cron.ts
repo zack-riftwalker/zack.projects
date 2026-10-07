@@ -50,7 +50,7 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
       if ((await monshi.ctx.getSetting('digest_enabled')) !== '1') return;
       if ((await monshi.ctx.getState('last_digest_day')) === t.day) return;
       const { text, markup } = await buildDigest(monshi);
-      await notifyAll(monshi, text, markup);
+      await notifyAll(monshi, text, markup, 'reports');
       await monshi.ctx.setState('last_digest_day', t.day);
     });
   }

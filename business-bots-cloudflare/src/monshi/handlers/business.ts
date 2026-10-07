@@ -7,6 +7,7 @@ import * as gemini from '../services/gemini';
 import * as hours from '../services/hours';
 import * as orders from '../services/orders';
 import * as rules from '../services/rules';
+import { sendToStaff } from '../services/topics';
 import type { MonshiCtx } from '../types';
 import { notifyAll } from './common';
 
@@ -37,7 +38,8 @@ export async function onBusinessConnection(ctx: MonshiCtx): Promise<void> {
     `🔹 مجوز mark-as-read: ${canRead ? 'دارد ✅' : 'ندارد ❌ (برای خوانده‌شدن چت‌ها لازم است)'}\n\n` +
     'برای مشاهده وضعیت: /status';
   try {
-    await app.api.sendMessage(bc.user_chat_id, text);
+    if (app.cfg.allNotifyIds.includes(bc.user_chat_id)) await sendToStaff(app, bc.user_chat_id, 'system', text);
+    else await app.api.sendMessage(bc.user_chat_id, text);
   } catch (err: any) {
     console.error('Failed to send connection confirmation', err?.message ?? err);
   }
@@ -77,7 +79,7 @@ async function notifyAdmin(
   const markup = Markup.inlineKeyboard([[
     Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`),
   ]]);
-  await notifyAll(app, notif, markup);
+  await notifyAll(app, notif, markup, 'handoff');
 }
 
 /** Generic «use the sales bot» answer for price questions without an FAQ. true = handled. */
