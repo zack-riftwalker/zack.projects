@@ -19,7 +19,7 @@ export interface OrderRow {
   created_at: string; updated_at: string;
 }
 export interface MessageRow { direction: string; text: string | null; message_type: string | null }
-export interface UnansweredRow { id: number; chat_id: number; text: string; normalized_text: string; count: number; last_seen_at: string; status: string }
+export interface UnansweredRow { id: number; chat_id: number; text: string; normalized_text: string; count: number; last_seen_at: string; status: string; last_message_row_id?: number | null }
 
 const OPEN_STATUSES = ORDER_STATUS_FLOW.slice(0, -1);
 export const ORDER_STATUS_DELIVERED = ORDER_STATUS_FLOW[ORDER_STATUS_FLOW.length - 1];

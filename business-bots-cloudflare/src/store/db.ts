@@ -2,7 +2,7 @@ import type { Db, Stmt } from '../lib/budget';
 
 export interface CustomerProduct {
   id: number; name: string; price: number; terms_text: string | null;
-  terms_entities: any[] | null; duration_days: number | null; warranty_days: number | null; is_active?: number;
+  terms_entities: any[] | null; duration_days: number | null; warranty_days: number | null; is_active?: number; is_available?: number;
 }
 export interface Order {
   id: number; customer_telegram_id: number; customer_product_id: number; product_name: string; price: number;
@@ -10,15 +10,17 @@ export interface Order {
   created_at: string; decided_at: string | null; decided_by: number | null; discount_code_id: number | null;
   duration_days: number | null; warranty_days: number | null; delivered_at: string | null;
   expires_at: string | null; warranty_expires_at: string | null; reminded_7d: number; reminded_3d: number;
-  reminded_expired: number; stalled_alert_sent: number; last_warranty_claim_at: string | null; paid_failed_handled: number;
+  reminded_expired: number; stalled_alert_sent: number; reject_reason?: string | null; receipt_unique_id?: string | null; last_warranty_claim_at: string | null; paid_failed_handled: number;
 }
 export interface DiscountCode {
   id: number; code: string; customer_product_id: number; discount_type: 'percent' | 'fixed';
   discount_value: number; max_uses: number | null; expires_at: string; is_active: number; created_at: string;
+  owner_telegram_id?: number | null; source?: string;
 }
 export interface BroadcastJob {
   id: number; admin_chat_id: number; text: string; entities: any[] | null; status: string;
   cursor_customer_id: number; total: number; sent: number; failed: number;
+  audience?: string; reply_markup?: string | null;
 }
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
 
@@ -94,7 +96,7 @@ export class StoreDb {
   async getAllActiveCustomerProducts(): Promise<CustomerProduct[]> {
     try {
       const r = await this.q(`
-      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days
+      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available
       FROM   customer_products
       WHERE  is_active = 1
       ORDER  BY id ASC
@@ -109,7 +111,7 @@ export class StoreDb {
   async getCustomerProductById(id: number): Promise<CustomerProduct | undefined> {
     try {
       const row = await this.q(`
-      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active
+      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available
       FROM   customer_products
       WHERE  id = ?
     `, id).first();

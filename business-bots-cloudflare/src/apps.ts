@@ -3,6 +3,7 @@ import type { Env } from './env';
 import { Budget, countedD1, installBudget, type Db } from './lib/budget';
 import { storeConfig, type StoreConfig } from './store/config';
 import { StoreDb } from './store/db';
+import { StoreKv } from './store/kv';
 import { monshiConfig, type MonshiConfig } from './monshi/config';
 import { MonshiDb } from './monshi/db';
 import { MonshiContext } from './monshi/context';
@@ -19,6 +20,7 @@ export interface StoreApp {
   kind: 'store';
   cfg: StoreConfig;
   db: StoreDb;
+  kv: StoreKv;
   raw: Db;
   api: Api;
   apps: Apps;
@@ -66,7 +68,7 @@ export function createApps(env: Env, deps: Deps = {}): Apps {
   const sc = storeConfig(env);
   if (sc) {
     const raw = countedD1(env.STORE_DB, budget);
-    apps.store = { kind: 'store', cfg: sc, db: new StoreDb(raw), raw, api: makeApi(sc.token), apps };
+    apps.store = { kind: 'store', cfg: sc, db: new StoreDb(raw), kv: new StoreKv(raw), raw, api: makeApi(sc.token), apps };
   }
   const mc = monshiConfig(env);
   if (mc) {

@@ -4,7 +4,7 @@ import { REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
-const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions'];
+const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links'];
 
 function plan(f: FakeD1, sql: string, ...args: unknown[]): string[] {
   return (f.sqlite.prepare('EXPLAIN QUERY PLAN ' + sql).all(...(args as any[])) as any[]).map((r) => String(r.detail));
