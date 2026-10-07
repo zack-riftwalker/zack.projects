@@ -45,7 +45,7 @@ export function photoUpdate(user: User, fileId = 'photo-large'): any {
       message_id: mid++, date: 1700000000, chat: { id: user.id, type: 'private' }, from: u(user),
       photo: [
         { file_id: 'small', file_unique_id: 's', width: 10, height: 10 },
-        { file_id: fileId, file_unique_id: 'l', width: 100, height: 100 },
+        { file_id: fileId, file_unique_id: 'u-' + fileId, width: 100, height: 100 },
       ],
     },
   };
@@ -56,7 +56,7 @@ export function documentUpdate(user: User, fileId = 'doc-1'): any {
     update_id: uid++,
     message: {
       message_id: mid++, date: 1700000000, chat: { id: user.id, type: 'private' }, from: u(user),
-      document: { file_id: fileId, file_unique_id: 'd' },
+      document: { file_id: fileId, file_unique_id: 'u-' + fileId },
     },
   };
 }

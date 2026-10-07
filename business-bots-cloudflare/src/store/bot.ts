@@ -65,7 +65,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     manualPurchaseWizard,
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
-    bypass: (ctx) => /^order_(confirm|reject|deliver)_\d+$/.test(ctx.callbackQuery?.data ?? ''),
+    bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
     // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
     exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
   });

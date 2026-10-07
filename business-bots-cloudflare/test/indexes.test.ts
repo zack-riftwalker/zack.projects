@@ -33,6 +33,7 @@ describe('store hot queries use indexes', () => {
     ['running broadcast', "SELECT * FROM broadcast_jobs WHERE status = 'running' ORDER BY id LIMIT 1", []],
     ['session read', 'SELECT value FROM sessions WHERE key = ?', ['k']],
     ['customer lookup', 'SELECT * FROM customers WHERE telegram_id = ?', [1]],
+    ['receipt duplicate lookup', 'SELECT id, status, customer_telegram_id FROM orders WHERE receipt_unique_id = ? ORDER BY id DESC LIMIT 1', ['x']],
     ['waitlist count', 'SELECT COUNT(*) AS n FROM product_waitlist WHERE product_id = ?', [1]],
     ['waitlist clear', 'DELETE FROM product_waitlist WHERE product_id = ? AND created_at <= ?', [1, 'x']],
   ];

@@ -30,6 +30,12 @@ const DISCOUNT_SUBMENU_KB = Markup.inlineKeyboard([
 ]);
 
 export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: number | undefined) => boolean) {
+  // Any panel button abandons a half-typed input (e.g. a custom reject reason waiting for text).
+  bot.hears(Object.values(LABEL), async (ctx, next) => {
+    if (isAdmin(ctx.from?.id) && ctx.session) ctx.session.awaitingRejectReasonFor = null;
+    return next();
+  });
+
   bot.hears(LABEL.announce, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.scene.enter('announce-wizard');

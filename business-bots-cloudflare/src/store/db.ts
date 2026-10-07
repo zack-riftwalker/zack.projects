@@ -186,14 +186,19 @@ export class StoreDb {
   // ─── Orders ──────────────────────────────────────────────────────────────
   async createOrder(p: {
     customerTelegramId: number; customerProductId: number; productName: string; price: number;
-    receiptFileId: string; receiptType: string; discountCodeId?: number | null;
+    receiptFileId: string; receiptType: string; discountCodeId?: number | null; receiptUniqueId?: string | null;
   }) {
     const r = await this.q(`
     INSERT INTO orders
-      (customer_telegram_id, customer_product_id, product_name, price, receipt_file_id, receipt_type, discount_code_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, p.customerTelegramId, p.customerProductId, p.productName, p.price, p.receiptFileId, p.receiptType, p.discountCodeId || null).run();
+      (customer_telegram_id, customer_product_id, product_name, price, receipt_file_id, receipt_type, discount_code_id, receipt_unique_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, p.customerTelegramId, p.customerProductId, p.productName, p.price, p.receiptFileId, p.receiptType, p.discountCodeId || null, p.receiptUniqueId || null).run();
     return { lastInsertRowid: r.meta.last_row_id };
+  }
+
+  /** The newest earlier order that used the same receipt file (duplicate detection). */
+  async findOrderByReceiptUniqueId(uniqueId: string): Promise<{ id: number; status: string; customer_telegram_id: number } | null> {
+    return this.q('SELECT id, status, customer_telegram_id FROM orders WHERE receipt_unique_id = ? ORDER BY id DESC LIMIT 1', uniqueId).first();
   }
 
   async getOrderById(id: number): Promise<Order | undefined> {
@@ -257,12 +262,12 @@ export class StoreDb {
     return { changes: r.meta.changes };
   }
 
-  async decideOrder(id: number, { status, decidedBy }: { status: string; decidedBy: number }) {
+  async decideOrder(id: number, { status, decidedBy, rejectReason }: { status: string; decidedBy: number; rejectReason?: string | null }) {
     const r = await this.q(`
     UPDATE orders
-    SET    status = ?, decided_at = datetime('now', '+03:30'), decided_by = ?
+    SET    status = ?, decided_at = datetime('now', '+03:30'), decided_by = ?, reject_reason = ?
     WHERE  id = ? AND status = 'pending'
-  `, status, decidedBy, id).run();
+  `, status, decidedBy, rejectReason ?? null, id).run();
     return { changes: r.meta.changes };
   }
 

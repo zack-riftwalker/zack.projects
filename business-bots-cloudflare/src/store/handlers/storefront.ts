@@ -10,7 +10,9 @@ import {
 } from './discountCodes';
 import { formatCardNumber } from './storeSettings';
 import { buildReceiptCaption, deliverReceiptToAdmins } from '../services/receiptDelivery';
-import { ACTIVATION_CONTACT, MY_SUBS_LABEL, RENEWAL_NOTE, STOREFRONT_LABEL } from '../labels';
+import {
+  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL,
+} from '../labels';
 import type { StoreContext } from '../types';
 import type { CustomerProduct, Order } from '../db';
 
@@ -466,15 +468,30 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     }
 
     let receiptFileId: string;
+    let receiptUniqueId: string | null;
     let receiptType: 'photo' | 'document';
     if (ctx.message.photo?.length) {
       receiptType = 'photo';
-      receiptFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id; // largest size
+      const largest = ctx.message.photo[ctx.message.photo.length - 1]; // largest size
+      receiptFileId = largest.file_id;
+      receiptUniqueId = largest.file_unique_id ?? null;
     } else if (ctx.message.document) {
       receiptType = 'document';
       receiptFileId = ctx.message.document.file_id;
+      receiptUniqueId = ctx.message.document.file_unique_id ?? null;
     } else {
       return next();
+    }
+
+    // The same receipt file used before? Only a warning for the admin — never an automatic rejection.
+    let duplicateOf: { id: number; status: string; customerId: number } | null = null;
+    if (receiptUniqueId) {
+      try {
+        const dup = await ctx.app.db.findOrderByReceiptUniqueId(receiptUniqueId);
+        if (dup) duplicateOf = { id: dup.id, status: dup.status, customerId: dup.customer_telegram_id };
+      } catch (err: any) {
+        console.error('❌ [Storefront] duplicate-receipt lookup failed:', err.message);
+      }
     }
 
     const { productId, productName, price, discountCodeId } = pending;
@@ -483,7 +500,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       const result = await ctx.app.db.createOrder({
         customerTelegramId: ctx.from.id,
         customerProductId: productId,
-        productName, price, receiptFileId, receiptType, discountCodeId,
+        productName, price, receiptFileId, receiptType, discountCodeId, receiptUniqueId,
       });
       orderId = result.lastInsertRowid;
     } catch (err: any) {
@@ -499,6 +516,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         username: ctx.from.username || null,
       },
       order: { productName, price },
+      duplicateOf,
     });
     const delivery = await deliverReceiptToAdmins({
       api: ctx.api,
@@ -556,8 +574,126 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   });
 
   // ── Admin decision: confirm/reject ──────────────────────────────────────────
-  bot.callbackQuery(/^order_confirm_(\d+)$/, (ctx) => handleOrderDecision(ctx, 'confirmed'));
-  bot.callbackQuery(/^order_reject_(\d+)$/, (ctx) => handleOrderDecision(ctx, 'rejected'));
+  bot.callbackQuery(/^order_confirm_(\d+)$/, (ctx) => handleOrderDecision(ctx, 'confirmed', parseInt(ctx.match![1], 10)));
+  bot.callbackQuery(/^order_reject_(\d+)$/, onRejectPressed);
+  bot.callbackQuery(/^order_rejr_(\d+)_([a-z]+)$/, onRejectReasonPicked);
+  bot.callbackQuery(/^reupload_(\d+)$/, onReupload);
+
+  // ── Admin typing a custom reject reason ─────────────────────────────────────
+  bot.on('message:text', async (ctx, next) => {
+    const waiting = ctx.session?.awaitingRejectReasonFor;
+    if (!waiting || !isAdmin(ctx)) return next();
+    if (ctx.app.apps.now().getTime() - waiting.at > REJECT_INPUT_TTL_MS) {
+      ctx.session.awaitingRejectReasonFor = null;
+      return next();
+    }
+    const text = ctx.message.text.trim();
+    if (text.startsWith('/')) {
+      ctx.session.awaitingRejectReasonFor = null;
+      if (/^\/cancel(@\w+)?$/.test(text)) {
+        await ctx.reply('❌ رد رسید لغو شد. برای رد کردن دوباره، دکمه «❌ رد پرداخت» زیر رسید را بزنید.');
+        return;
+      }
+      return next();
+    }
+    if (!text) return next();
+    ctx.session.awaitingRejectReasonFor = null;
+    await handleOrderDecision(ctx, 'rejected', waiting.orderId, {
+      reason: text.slice(0, MAX_REJECT_REASON_LENGTH),
+      msg: { chatId: waiting.chatId, messageId: waiting.messageId, caption: waiting.caption },
+    });
+  });
+}
+
+const REJECT_INPUT_TTL_MS = 15 * 60 * 1000;
+
+const decisionKeyboard = (orderId: number) => Markup.inlineKeyboard([[
+  Markup.button.callback('✅ تایید پرداخت', 'order_confirm_' + orderId),
+  Markup.button.callback('❌ رد پرداخت', 'order_reject_' + orderId),
+]]);
+
+function rejectReasonKeyboard(orderId: number) {
+  const reasons = REJECT_REASONS.map((r) => Markup.button.callback(r.button, 'order_rejr_' + orderId + '_' + r.code));
+  const rows = [];
+  for (let i = 0; i < reasons.length; i += 2) rows.push(reasons.slice(i, i + 2));
+  rows.push([Markup.button.callback('✏️ دلیل دلخواه', 'order_rejr_' + orderId + '_custom')]);
+  rows.push([Markup.button.callback('▫️ بدون دلیل', 'order_rejr_' + orderId + '_none')]);
+  rows.push([Markup.button.callback('🔙 بازگشت', 'order_rejr_' + orderId + '_back')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+/** «❌ رد پرداخت»: instead of deciding at once, ask for a reason (a decided order follows the old «already decided» path). */
+async function onRejectPressed(ctx: StoreContext) {
+  if (!isAdminId(ctx.app.cfg, ctx.from?.id)) return ctx.answerCallbackQuery('⛔️ دسترسی ندارید.');
+  const orderId = parseInt((ctx.match as RegExpMatchArray)[1], 10);
+  const order = await ctx.app.db.getOrderById(orderId);
+  if (!order || order.status !== 'pending') return handleOrderDecision(ctx, 'rejected', orderId);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: rejectReasonKeyboard(orderId).reply_markup }).catch(() => {});
+}
+
+async function onRejectReasonPicked(ctx: StoreContext) {
+  if (!isAdminId(ctx.app.cfg, ctx.from?.id)) return ctx.answerCallbackQuery('⛔️ دسترسی ندارید.');
+  const orderId = parseInt((ctx.match as RegExpMatchArray)[1], 10);
+  const code = (ctx.match as RegExpMatchArray)[2];
+
+  if (code === 'back') {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageReplyMarkup({ reply_markup: decisionKeyboard(orderId).reply_markup }).catch(() => {});
+    return;
+  }
+
+  if (code === 'custom') {
+    const order = await ctx.app.db.getOrderById(orderId);
+    if (!order || order.status !== 'pending') return handleOrderDecision(ctx, 'rejected', orderId);
+    const message = ctx.callbackQuery?.message as any;
+    await ctx.scene.leave(); // an abandoned wizard must not swallow the reason text
+    ctx.session.awaitingRejectReasonFor = {
+      orderId, chatId: message.chat.id, messageId: message.message_id,
+      caption: message.caption || '', at: ctx.app.apps.now().getTime(),
+    };
+    await ctx.answerCallbackQuery();
+    await ctx.reply('✏️ دلیل رد سفارش #' + orderId + ' را بنویسید (حداکثر ' + MAX_REJECT_REASON_LENGTH + ' کاراکتر):');
+    return;
+  }
+
+  if (code === 'none') return handleOrderDecision(ctx, 'rejected', orderId, { reason: null });
+  const reason = REJECT_REASONS.find((r) => r.code === code);
+  if (!reason) {
+    await ctx.answerCallbackQuery('⚠️ انتخاب نامعتبر.');
+    return;
+  }
+  return handleOrderDecision(ctx, 'rejected', orderId, { reason: reason.text });
+}
+
+/** «📸 ارسال مجدد رسید» under a rejection message. */
+async function onReupload(ctx: StoreContext) {
+  const order = await ctx.app.db.getOrderById(parseInt(ctx.match![1], 10));
+  // Callback data is forgeable → re-check ownership and state.
+  if (!order || order.customer_telegram_id !== ctx.from?.id || order.status !== 'rejected') {
+    await ctx.answerCallbackQuery('❌ سفارش یافت نشد.');
+    return;
+  }
+  const product = await ctx.app.db.getCustomerProductById(order.customer_product_id);
+  if (!product || !product.is_active) {
+    await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
+    return;
+  }
+  if (product.is_available === 0) {
+    await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
+    return;
+  }
+  ctx.session.awaitingReceiptFor = {
+    productId: product.id, productName: order.product_name, price: order.price,
+    discountCodeId: order.discount_code_id, createdAt: ctx.app.apps.now().getTime(),
+  };
+  ctx.session.pendingPurchase = null;
+  await ctx.answerCallbackQuery();
+  const settings = await ctx.app.db.getStoreSettings();
+  await ctx.reply(
+    '📸 لطفاً رسید جدید پرداخت «' + order.product_name + '» به مبلغ ' + formatPrice(order.price) + ' تومان را ارسال کنید.' +
+    (settings ? '\n\n💳 شماره کارت: ' + formatCardNumber(settings.card_number) + '\n👤 به نام: ' + settings.card_holder_name : ''),
+  );
 }
 
 const DISCOUNT_REASON_ADMIN: Record<string, string> = {
@@ -571,33 +707,50 @@ const DISCOUNT_REASON_ADMIN: Record<string, string> = {
 };
 
 /** Shared confirm/reject handler. Double-tap / second-admin safe via decideOrder's status guard. */
-async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rejected') {
-  if (!isAdminId(ctx.app.cfg, ctx.from?.id)) return ctx.answerCallbackQuery('⛔️ دسترسی ندارید.');
+interface DecisionOpts {
+  /** reject only: what the customer is told (null = no reason) */
+  reason?: string | null;
+  /** the receipt message to edit when the decision did not come from a button on it (custom reason typed) */
+  msg?: { chatId: number; messageId: number; caption: string };
+}
 
-  const orderId = parseInt((ctx.match as RegExpMatchArray)[1], 10);
+async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rejected', orderId: number, opts: DecisionOpts = {}) {
+  // Button presses answer the callback; the typed custom reason has no callback → plain chat replies.
+  const answer = async (arg: string | { text: string; show_alert?: boolean }) => {
+    if (ctx.callbackQuery) await ctx.answerCallbackQuery(arg as any).catch(() => {});
+    else await ctx.reply(typeof arg === 'string' ? arg : arg.text).catch(() => {});
+  };
+  const editCaption = async (caption: string) => {
+    if (opts.msg) await ctx.api.editMessageCaption(opts.msg.chatId, opts.msg.messageId, { caption }).catch(() => {});
+    else await ctx.editMessageCaption({ caption }).catch(() => {});
+  };
+
+  if (!isAdminId(ctx.app.cfg, ctx.from?.id)) return answer('⛔️ دسترسی ندارید.');
+
   const order = await ctx.app.db.getOrderById(orderId);
   if (!order) {
-    await ctx.answerCallbackQuery('❌ سفارش یافت نشد.');
+    await answer('❌ سفارش یافت نشد.');
     return;
   }
 
+  const reason = status === 'rejected' ? (opts.reason ?? null) : null;
   let result;
   try {
-    result = await ctx.app.db.decideOrder(orderId, { status, decidedBy: ctx.from!.id });
+    result = await ctx.app.db.decideOrder(orderId, { status, decidedBy: ctx.from!.id, rejectReason: reason });
   } catch (err: any) {
     console.error('❌ [Storefront] decideOrder failed:', err.message);
-    await ctx.answerCallbackQuery('❌ خطا در ثبت تصمیم.');
+    await answer('❌ خطا در ثبت تصمیم.');
     return;
   }
 
-  const originalCaption = (ctx.callbackQuery?.message as any)?.caption || '';
+  const originalCaption = opts.msg?.caption ?? (ctx.callbackQuery?.message as any)?.caption ?? '';
 
   if (result.changes === 0) {
     // Already decided — by a double-tap or another admin.
     const current = await ctx.app.db.getOrderById(orderId);
-    const label = current?.status === 'confirmed' ? '✅ قبلاً تایید شده' : '❌ قبلاً رد شده';
-    await ctx.answerCallbackQuery('ℹ️ قبلاً بررسی شده.');
-    await ctx.editMessageCaption({ caption: originalCaption + '\n\n' + label + '.' }).catch(() => {});
+    const label = current?.status === 'confirmed' || current?.status === 'delivered' ? '✅ قبلاً تایید شده' : '❌ قبلاً رد شده';
+    await answer('ℹ️ قبلاً بررسی شده.');
+    await editCaption(originalCaption + '\n\n' + label + '.');
     return;
   }
 
@@ -646,18 +799,20 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
   }
 
   const label = status === 'confirmed' ? '✅ تایید شد' : '❌ رد شد';
-  await ctx.answerCallbackQuery(discountWarning
-    ? { text: label + discountWarning, show_alert: true }
-    : label).catch(() => {});
-  await ctx.editMessageCaption({ caption: originalCaption + '\n\n' + label + ' (توسط ادمین).' + discountWarning }).catch(() => {});
+  await answer(discountWarning ? { text: label + discountWarning, show_alert: true } : label);
+  await editCaption(originalCaption + '\n\n' + label + ' (توسط ادمین).' + (reason ? '\n📝 دلیل: ' + reason : '') + discountWarning);
 
   const customerMsg = status === 'confirmed'
     ? '✅ پرداخت شما تایید شد! سفارش «' + order.product_name + '» با موفقیت ثبت شد.\n\n' +
       '📩 برای انجام فرایند فعال‌سازی «' + order.product_name + '» به این آیدی پیام بدید: ' + ACTIVATION_CONTACT
-    : '❌ متاسفانه رسید پرداخت شما تایید نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.';
+    : '❌ متاسفانه رسید پرداخت شما تایید نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.' +
+      (reason ? '\n\n📝 دلیل: ' + reason : '');
+  const customerExtra = status === 'rejected' && reason !== DUPLICATE_REASON_TEXT
+    ? Markup.inlineKeyboard([[Markup.button.callback('📸 ارسال مجدد رسید', 'reupload_' + orderId)]])
+    : {};
 
   try {
-    await ctx.api.sendMessage(order.customer_telegram_id, customerMsg);
+    await ctx.api.sendMessage(order.customer_telegram_id, customerMsg, customerExtra);
   } catch (err: any) {
     console.warn('⚠️ [Storefront] Failed to notify customer ' + order.customer_telegram_id + ':', err.message);
   }
