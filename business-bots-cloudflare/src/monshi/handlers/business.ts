@@ -73,18 +73,29 @@ async function notifyAdmin(
   app: MonshiApp, sender: { id: number; first_name?: string; username?: string } | undefined,
   chatId: number, messageType: string, text: string | null | undefined, reason: string,
   customer?: { first_seen_at: string | null } | null,
+  suggestedFaqs: { id: number; question: string }[] = [],
 ): Promise<void> {
   const name = sender?.first_name || 'ناشناس';
   const link = sender?.username ? `https://t.me/${sender.username}` : sender ? `tg://user?id=${sender.id}` : '—';
   const preview = text ? text.slice(0, 200) : `[${messageType}]`;
   // what the store knows about this customer (their chat id is their Telegram id) — never blocks the notification
   const card = customerCardLines(await storeCustomerSummary(app.apps, chatId), customer, app.apps.now());
-  const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n` + card.map((l) => l + '\n').join('') + `🔗 ${link}`;
-  // pause button: with one tap the bot steps away from this chat while the owner continues by hand
-  const markup = Markup.inlineKeyboard([[
-    Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`),
-  ]]);
-  await notifyAll(app, notif, markup, 'handoff');
+  const canReply = !!(await app.ctx.getConnection());
+  const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n` + card.map((l) => l + '\n').join('') + `🔗 ${link}` +
+    (canReply ? '\n↩️ برای جواب دادن، روی همین پیام Reply بزنید.' : '');
+  // up to 3 FAQs that may answer it (one tap sends the answer), then the pause button: with one tap the bot
+  // steps away from this chat while the owner continues by hand
+  const markup = Markup.inlineKeyboard([
+    ...suggestedFaqs.slice(0, 3).map((f) => [Markup.button.callback('📚 ' + f.question.slice(0, 28), `hfaq:${chatId}:${f.id}`)]),
+    [Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`)],
+  ]);
+  const sent = await notifyAll(app, notif, markup, 'handoff');
+  // remember which customer each notification is about, so a Reply to it can be forwarded
+  try {
+    await app.db.saveNotifyLinks(sent.map((s) => ({ recipientChatId: s.userId, messageId: s.messageId, customerChatId: chatId })));
+  } catch (err: any) {
+    console.warn('Could not store notification links', err?.message ?? err);
+  }
 }
 
 /** Generic «use the sales bot» answer for price questions without an FAQ. true = handled. */
@@ -159,7 +170,8 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
 
   // 1) the owner's own manual message → store + pause auto-replies in this chat
   if (sender && sender.id === ownerId) {
-    await app.db.saveMessage(chatId, msg.message_id, 'owner', messageType, text, bcid);
+    // already stored = a reply sent through the notification bridge (or a redelivered update): handled there
+    if (!(await app.db.saveMessage(chatId, msg.message_id, 'owner', messageType, text, bcid))) return;
     await app.db.markChatAnsweredByHuman(chatId);
     await rules.pauseChat(app, chatId);
     console.log(`Owner replied manually in chat ${chatId} -> paused`);
@@ -224,7 +236,10 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
           if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;
         }
         await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
-        await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)', customer);
+        const suggestions = geminiResult.candidates.length
+          ? geminiResult.candidates
+          : faq.topMatches(text, await app.ctx.getEnabledFaqs(), 3);
+        await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)', customer, suggestions);
         return;
       }
     } else if (route === 'order_status') {

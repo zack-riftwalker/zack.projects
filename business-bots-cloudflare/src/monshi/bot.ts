@@ -7,6 +7,7 @@ import * as admin from './handlers/admin';
 import * as bridge from './handlers/bridge';
 import { onBusinessConnection, onBusinessMessage } from './handlers/business';
 import { onNotifyStart, onWizardCancel } from './handlers/common';
+import * as replyBridge from './handlers/replyBridge';
 import * as faqAdmin from './handlers/faqAdmin';
 import * as orderAdmin from './handlers/orderAdmin';
 import type { MonshiCtx, MonshiSession } from './types';
@@ -38,7 +39,7 @@ async function onAdminFreeText(ctx: MonshiCtx): Promise<void> {
 export function createMonshiBot(app: MonshiApp, botInfo: UserFromGetMe): Bot<MonshiCtx> {
   const bot = new Bot<MonshiCtx>(app.cfg.token, { botInfo });
   (bot as any).api = app.api; // shared, budget-counted Api
-  const { adminId, notifyIds } = app.cfg;
+  const { adminId, notifyIds, allNotifyIds } = app.cfg;
 
   bot.catch(logBotError);
 
@@ -60,6 +61,13 @@ export function createMonshiBot(app: MonshiApp, botInfo: UserFromGetMe): Bot<Mon
   // Business messages (customer chats on the owner's account)
   bot.on('business_connection', onBusinessConnection);
   bot.on('business_message', onBusinessMessage);
+
+  // A reply to a handoff notification (owner or notify accounts) is forwarded to the customer; anything else falls
+  // through. Must come BEFORE `const owner = bot.filter(...)`: that sub-composer sits in the chain from the moment it
+  // is created, so the handlers added to it later (incl. the owner's free-text handler) would otherwise run first.
+  // Never touches ctx.session (notify accounts have none).
+  bot.filter((ctx) => ctx.chat?.type === 'private' && ctx.from !== undefined && allNotifyIds.includes(ctx.from.id) && !!ctx.message?.reply_to_message)
+    .on('message', (ctx, next) => replyBridge.onStaffReply(ctx, next));
 
   // Admin commands: owner only, only in the direct chat with the bot
   const owner = bot.filter((ctx) => ctx.chat?.type === 'private' && ctx.from?.id === adminId);
@@ -108,6 +116,7 @@ export function createMonshiBot(app: MonshiApp, botInfo: UserFromGetMe): Bot<Mon
   bot.callbackQuery(/^orddlv:/, bridge.onDeliveryCallback);
   bot.callbackQuery(/^(hub_|resume_chat:|pause_chat:)/, admin.onHubCallback);
   bot.callbackQuery(/^st_/, admin.onSettingsCallback);
+  bot.callbackQuery(/^hfaq:/, replyBridge.onHandoffFaqCallback);
   bot.callbackQuery(/^wiz_cancel$/, onWizardCancel);
 
   // Plain owner text while waiting for typed input (custom hours / FAQ text / …)

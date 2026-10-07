@@ -148,6 +148,25 @@ export class MonshiDb {
     await this.q('UPDATE customers SET last_ack_sent_at = ? WHERE chat_id = ?', previous, chatId).run();
   }
 
+  // ── notify_links (reply-from-notification) ──────────────────────────────
+  async saveNotifyLinks(rows: { recipientChatId: number; messageId: number; customerChatId: number }[]): Promise<void> {
+    if (!rows.length) return;
+    const now = utcIsoNow();
+    await this.db.batch(rows.map((r) => this.q(
+      'INSERT INTO notify_links (recipient_chat_id, message_id, customer_chat_id, created_at) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(recipient_chat_id, message_id) DO UPDATE SET customer_chat_id = excluded.customer_chat_id, created_at = excluded.created_at',
+      r.recipientChatId, r.messageId, r.customerChatId, now,
+    )));
+  }
+
+  async getNotifyLink(recipientChatId: number, messageId: number): Promise<number | null> {
+    return (await this.q('SELECT customer_chat_id FROM notify_links WHERE recipient_chat_id = ? AND message_id = ?', recipientChatId, messageId).first<{ customer_chat_id: number }>())?.customer_chat_id ?? null;
+  }
+
+  async deleteNotifyLinksBefore(cutoffIso: string): Promise<void> {
+    await this.q('DELETE FROM notify_links WHERE created_at < ?', cutoffIso).run();
+  }
+
   // ── reply_log ───────────────────────────────────────────────────────────
   async logAutoReply(chatId: number, replyKey: string): Promise<void> {
     await this.q(

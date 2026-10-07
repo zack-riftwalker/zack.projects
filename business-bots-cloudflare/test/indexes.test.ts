@@ -85,6 +85,8 @@ describe('monshi hot queries use indexes', () => {
     ['latest open order for chat', 'SELECT * FROM orders WHERE chat_id = ? AND status NOT IN (?, ?) ORDER BY created_at DESC LIMIT 1', [1, 'delivered', 'cancelled']],
     ['active connection', 'SELECT business_connection_id, owner_user_id FROM connection WHERE is_enabled = 1 ORDER BY updated_at DESC LIMIT 1', []],
     ['reply log', 'SELECT sent_at FROM reply_log WHERE chat_id = ? AND reply_key = ?', [1, 'k']],
+    ['notify link lookup', 'SELECT customer_chat_id FROM notify_links WHERE recipient_chat_id = ? AND message_id = ?', [1, 1]],
+    ['notify links cleanup', 'DELETE FROM notify_links WHERE created_at < ?', ['x']],
     ['ack claim', 'UPDATE customers SET last_ack_sent_at = ? WHERE chat_id = ? AND (last_ack_sent_at IS NULL OR last_ack_sent_at < ?)', ['x', 1, 'y']],
   ];
   for (const [label, sql, args] of cases) {

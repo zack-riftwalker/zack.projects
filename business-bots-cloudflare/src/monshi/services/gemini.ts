@@ -245,7 +245,7 @@ async function classify(app: MonshiApp, text: string, candidates: FaqRow[], hist
  * Gemini's decision plus the matching FAQ row (if any); null when disabled or on any
  * error (the caller must silently fall back to keyword matching).
  */
-export async function getDecision(app: MonshiApp, text: string, chatId: number): Promise<{ decision: FaqDecision; faq: FaqRow | null } | null> {
+export async function getDecision(app: MonshiApp, text: string, chatId: number): Promise<{ decision: FaqDecision; faq: FaqRow | null; candidates: FaqRow[] } | null> {
   if (!(await isEnabled(app)) || !text) return null;
   let candidates: FaqRow[];
   let decision: FaqDecision;
@@ -269,5 +269,5 @@ export async function getDecision(app: MonshiApp, text: string, chatId: number):
     return null;
   }
   const faq = decision.faq_id !== null ? candidates.find((c) => c.id === decision.faq_id) ?? null : null;
-  return { decision, faq };
+  return { decision, faq, candidates };
 }

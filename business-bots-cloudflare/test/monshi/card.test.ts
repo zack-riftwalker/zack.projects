@@ -34,8 +34,9 @@ describe('customer card in handoff notifications', () => {
     const lines = text.split('\n');
     expect(lines.findIndex((l) => l.startsWith('💬'))).toBeLessThan(lines.findIndex((l) => l.includes('🆕 هنوز از فروشگاه خرید نکرده')));
     expect(text).toContain('👋 اولین پیام به پشتیبانی: ');
-    expect(lines.at(-1)).toMatch(/^🔗 https:\/\/t\.me\/cust_user$/);
-    expect(lines.findIndex((l) => l.startsWith('👋'))).toBeLessThan(lines.length - 1);
+    const linkIdx = lines.findIndex((l) => /^🔗 https:\/\/t\.me\/cust_user$/.test(l));
+    expect(linkIdx).toBeGreaterThan(lines.findIndex((l) => l.startsWith('👋')));
+    expect(lines.at(-1)).toBe('↩️ برای جواب دادن، روی همین پیام Reply بزنید.');
   });
 
   it('a buyer: purchase count and spend, active subscriptions (dated and undated), pending and preparing orders', async () => {

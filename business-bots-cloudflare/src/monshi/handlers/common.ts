@@ -3,8 +3,8 @@ import { Markup } from '../../lib/markup';
 import { sendToStaff, type TopicCategory } from '../services/topics';
 import { WIZARD_STATE_KEYS, type MonshiCtx, type MonshiSession } from '../types';
 
-// The only callbacks notify-only accounts may press (the button under a handoff notification)
-export const NOTIFY_ALLOWED_CALLBACK_PREFIXES = ['pause_chat:'];
+// The only callbacks notify-only accounts may press (the buttons under a handoff notification)
+export const NOTIFY_ALLOWED_CALLBACK_PREFIXES = ['pause_chat:', 'hfaq:'];
 
 /** Admin guard for callback handlers (they have no user filter). */
 export function adminGuard(handler: (ctx: MonshiCtx) => Promise<unknown>) {

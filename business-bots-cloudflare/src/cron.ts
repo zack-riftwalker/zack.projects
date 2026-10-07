@@ -1,7 +1,7 @@
 import { createApps, type Deps } from './apps';
 import type { Env } from './env';
 import { getAppState, setAppState } from './lib/appstate';
-import { tehranParts } from './lib/time';
+import { tehranParts, utcIsoNow } from './lib/time';
 import { processBroadcastBatch } from './store/broadcast';
 import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
@@ -22,6 +22,16 @@ async function guarded(name: string, fn: () => Promise<void>): Promise<void> {
 export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {}): Promise<void> {
   const apps = createApps(env, deps);
   const t = tehranParts(now);
+
+  // Monshi: forget old «reply to a notification» links once a day (04:xx Tehran)
+  if (apps.monshi && t.hour === 4) {
+    const monshi = apps.monshi;
+    await guarded('notify-links-cleanup', async () => {
+      if ((await monshi.ctx.getState('notify_links_cleanup_day')) === t.day) return;
+      await monshi.db.deleteNotifyLinksBefore(utcIsoNow(new Date(now.getTime() - 30 * 86400000)));
+      await monshi.ctx.setState('notify_links_cleanup_day', t.day);
+    });
+  }
 
   if (apps.store) {
     const store = apps.store;
