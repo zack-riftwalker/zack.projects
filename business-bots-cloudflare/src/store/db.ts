@@ -304,6 +304,16 @@ export class StoreDb {
     }
   }
 
+  /** Orders the customer is still waiting on (pending / confirmed), recently rejected ones, and delivered ones — one batch. */
+  async getCustomerOrderOverview(telegramId: number): Promise<{ inProgress: Order[]; rejected: Order[]; delivered: Order[] }> {
+    const [a, b, c] = await this.db.batch([
+      this.q("SELECT * FROM orders WHERE customer_telegram_id = ? AND status IN ('pending', 'confirmed') ORDER BY id DESC LIMIT 10", telegramId),
+      this.q("SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'rejected' AND decided_at >= datetime('now', '+03:30', '-7 days') ORDER BY id DESC LIMIT 5", telegramId),
+      this.q("SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'delivered' ORDER BY delivered_at DESC", telegramId),
+    ]);
+    return { inProgress: a.results as Order[], rejected: b.results as Order[], delivered: c.results as Order[] };
+  }
+
   async getOrdersDueForReminder(kind: string): Promise<Order[]> {
     try {
       return (await this.q(REMINDER_QUERIES[kind]).all<Order>()).results;

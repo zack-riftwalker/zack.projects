@@ -174,10 +174,35 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
   // ── Entry point: "📋 اشتراک‌های من" persistent button ───────────────────────
   bot.hears(MY_SUBS_LABEL, async (ctx) => {
-    const orders = await ctx.app.db.getDeliveredOrdersForCustomer(ctx.from!.id);
-    if (orders.length === 0) {
+    const { inProgress, rejected, delivered: orders } = await ctx.app.db.getCustomerOrderOverview(ctx.from!.id);
+    if (inProgress.length === 0 && rejected.length === 0 && orders.length === 0) {
       await ctx.reply('😔 شما هنوز سفارش تحویل‌شده‌ای ندارید.\n\nبعد از تحویل اولین سفارش، وضعیت اشتراک و گارانتی آن اینجا نمایش داده می‌شود.');
       return;
+    }
+
+    if (inProgress.length || rejected.length) {
+      const lines = ['🧾 سفارش‌های در جریان:', ''];
+      for (const o of inProgress) {
+        lines.push(o.status === 'pending'
+          ? '⏳ «' + o.product_name + '» — رسید شما در صف بررسی است (ثبت: ' + formatJalaliDate(o.created_at) + ').'
+          : '🔄 «' + o.product_name + '» — پرداخت تأیید شد؛ در حال آماده‌سازی (حداکثر ۲۴ ساعت).');
+      }
+      for (const o of rejected) {
+        lines.push('❌ «' + o.product_name + '» — رسید تأیید نشد. دلیل: ' + (o.reject_reason || 'نامشخص'));
+      }
+      // «📸 ارسال مجدد رسید» only where it can work: active + available product, and not a reused receipt
+      const retryable = [];
+      if (rejected.length) {
+        const products = await ctx.app.db.getAllActiveCustomerProducts();
+        for (const o of rejected) {
+          const p = products.find((x) => x.id === o.customer_product_id);
+          if (p && p.is_available !== 0 && o.reject_reason !== DUPLICATE_REASON_TEXT) retryable.push(o);
+          if (retryable.length === 3) break;
+        }
+      }
+      await ctx.reply(lines.join('\n'), retryable.length
+        ? Markup.inlineKeyboard(retryable.map((o) => [Markup.button.callback('📸 ارسال مجدد رسید (#' + o.id + ')', 'reupload_' + o.id)]))
+        : {});
     }
 
     for (const order of orders) {
