@@ -1,7 +1,7 @@
 import { WizardScene } from '../../lib/wizard';
 import { Markup } from '../../lib/markup';
 import { processBroadcastBatch } from '../broadcast';
-import { adminProductLabel, formatPrice, parsePrice, productPickerKeyboard } from '../utils';
+import { adminProductLabel, buildPagedKeyboard, formatPrice, parsePrice, productPickerKeyboard } from '../utils';
 import { parseDays, productNameError } from './customerProducts';
 import type { CustomerProduct } from '../db';
 import type { StoreContext } from '../types';
@@ -14,10 +14,30 @@ const FIELD_PROMPTS: Record<string, string> = {
   terms: '📜 متن جدید شرایط و قوانین را وارد کنید:',
   duration: '⏱ مدت اشتراک را به روز وارد کنید (مثال: 30):',
   warranty: '🛡 مدت گارانتی را به روز وارد کنید (مثال: 7):',
+  // grouped options and groups (SUPPLIER_PLAN.md §3.2)
+  label: '🏷 عنوان گزینه را وارد کنید (۱ تا ۴۰ کاراکتر):',
+  grpname: '✏️ نام جدید گروه را وارد کنید (۱ تا ۶۰ کاراکتر):',
+  grpnew: '🗂 نام گروه جدید را وارد کنید (۱ تا ۶۰ کاراکتر):',
+  sort: '🔢 ترتیب گزینه را وارد کنید (عدد صحیح از ۰ تا ۹۹۹):',
+  grpsort: '🔢 ترتیب گروه در فهرست را وارد کنید (عدد صحیح از ۰ تا ۹۹۹):',
 };
+
+const GROUP_PICK_PAGE_PREFIX = 'cprod_edit_grppage_';
 
 const pickerKb = (products: CustomerProduct[], page: number) =>
   productPickerKeyboard(products, page, 'cprod_edit_select_', 'cprod_edit_page_', CANCEL_BTN, adminProductLabel);
+
+/** Default option label: the duration as «N روزه», or the current name. */
+const defaultOptionLabel = (p: CustomerProduct): string => (p.duration_days ? formatPrice(p.duration_days) + ' روزه' : p.name);
+
+/** Groups, paged, with «➕ گروه جدید» and «▫️ بدون گروه» above the back button. */
+function groupPickerKb(groups: { id: number; name: string }[], page: number) {
+  const kb = buildPagedKeyboard(groups, page, (g) => Markup.button.callback(g.name, 'cprod_edit_grp_' + g.id), GROUP_PICK_PAGE_PREFIX,
+    Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu'));
+  const rows = kb.reply_markup.inline_keyboard;
+  rows.splice(rows.length - 1, 0, [Markup.button.callback('➕ گروه جدید', 'cprod_edit_grpnew')], [Markup.button.callback('▫️ بدون گروه', 'cprod_edit_grpnone')]);
+  return kb;
+}
 
 export function productCardText(p: CustomerProduct): string {
   return (
@@ -27,20 +47,52 @@ export function productCardText(p: CustomerProduct): string {
     '📜 شرایط: ' + (p.terms_text ? 'دارد' : 'ندارد') + '\n' +
     '⏱ مدت اشتراک: ' + (p.duration_days ? p.duration_days + ' روز' : 'ندارد') + '\n' +
     '🛡 گارانتی: ' + (p.warranty_days ? p.warranty_days + ' روز' : 'ندارد') + '\n' +
-    '📦 وضعیت: ' + (p.is_available === 0 ? '⛔️ ناموجود' : '✅ موجود') + '\n\n' +
-    'کدام مورد را می‌خواهید تغییر دهید؟'
+    '📦 وضعیت: ' + (p.is_available === 0 ? '⛔️ ناموجود' : '✅ موجود') + '\n' +
+    (p.group_id != null ? '🏷 عنوان گزینه: ' + (p.option_label ?? '') + '\n' : '') +
+    '\nکدام مورد را می‌خواهید تغییر دهید؟'
   );
 }
 
 function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callback>[][] = []) {
+  const grouped = p.group_id != null;
   return Markup.inlineKeyboard([
-    [Markup.button.callback('✏️ نام', 'cprod_edit_f_name'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')],
+    grouped
+      ? [Markup.button.callback('🏷 عنوان گزینه', 'cprod_edit_f_label'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')]
+      : [Markup.button.callback('✏️ نام', 'cprod_edit_f_name'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')],
     [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms')],
     [Markup.button.callback('⏱ مدت اشتراک', 'cprod_edit_f_duration'), Markup.button.callback('🛡 گارانتی', 'cprod_edit_f_warranty')],
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
+    [Markup.button.callback('🗂 گروه', 'cprod_edit_grp_menu'), Markup.button.callback('🔢 ترتیب گزینه', 'cprod_edit_f_sort')],
+    ...(grouped ? [[Markup.button.callback('✏️ نام گروه', 'cprod_edit_f_grpname'), Markup.button.callback('🔢 ترتیب گروه', 'cprod_edit_f_grpsort')]] : []),
     ...extra,
     [Markup.button.callback('✅ پایان', 'cprod_edit_done')],
   ]);
+}
+
+/** Puts the option into the group. Asks for its label first when it has none (the default is offered). */
+async function attachToGroup(ctx: StoreContext, p: CustomerProduct, groupId: number): Promise<'moved' | 'asked' | 'gone'> {
+  if (!p.option_label) {
+    ctx.wizard.state.edit.field = 'label';
+    ctx.wizard.state.edit.pendingGroupId = groupId;
+    await ctx.reply(
+      FIELD_PROMPTS.label,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('▫️ همین پیش‌فرض (' + defaultOptionLabel(p) + ')', 'cprod_edit_label_default')],
+        [Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')],
+      ]),
+    );
+    return 'asked';
+  }
+  return completeMove(ctx, p, groupId, p.option_label);
+}
+
+async function completeMove(ctx: StoreContext, p: CustomerProduct, groupId: number, label: string): Promise<'moved' | 'gone'> {
+  const group = await ctx.app.db.getProductGroup(groupId);
+  if (!group) return 'gone';
+  const r = await ctx.app.db.moveOptionToGroup(p.id, groupId, label, group.name + ' — ' + label);
+  ctx.wizard.state.edit.pendingGroupId = null;
+  ctx.wizard.state.edit.field = null;
+  return r.changes === 1 ? 'moved' : 'gone';
 }
 
 async function loadProduct(ctx: StoreContext): Promise<CustomerProduct | null> {
@@ -72,7 +124,7 @@ async function applyPatch(ctx: StoreContext, patch: Parameters<StoreContext['app
 
 /** Warns when the new price makes active fixed discount codes give the product away. */
 async function priceWarnings(ctx: StoreContext, p: CustomerProduct): Promise<string> {
-  const codes = await ctx.app.db.getFixedCodesAtLeast(p.id, p.price);
+  const codes = await ctx.app.db.getFixedCodesAtLeast(p.id, p.price, p.group_id ?? null);
   return codes
     .map((c) => '\n⚠️ کد تخفیف ' + c.code + ' (مبلغ ثابت ' + formatPrice(c.discount_value) +
       ' تومان) از قیمت جدید بیشتر یا برابر است و محصول را رایگان می‌کند. آن را ویرایش یا غیرفعال کنید.')
@@ -80,6 +132,14 @@ async function priceWarnings(ctx: StoreContext, p: CustomerProduct): Promise<str
 }
 
 const NOTE_SNAPSHOT = '\nℹ️ سفارش‌های قبلی تغییری نمی‌کنند.';
+
+/** 0–999 in Persian or Latin digits; anything else is null. */
+function parseSortOrder(text: string): number | null {
+  const normalised = text.trim().replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+  if (!/^\d{1,3}$/.test(normalised)) return null;
+  const n = Number(normalised);
+  return n <= 999 ? n : null;
+}
 
 export const customerProductsEditWizard = new WizardScene<StoreContext>(
   'customer-products-edit-wizard',
@@ -149,19 +209,86 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
 
       if (data === 'cprod_edit_menu') {
         edit.field = null;
+        edit.termsAll = false;
         await ctx.answerCallbackQuery();
         await showCard(ctx, p, { edit: true });
         return;
       }
 
-      const fieldMatch = data.match(/^cprod_edit_f_(name|price|terms|duration|warranty)$/);
+      // ── groups (SUPPLIER_PLAN.md §3.2) ───────────────────────────────────
+      if (data === 'cprod_edit_grp_menu') {
+        edit.field = null;
+        await ctx.answerCallbackQuery();
+        await ctx.editMessageText('🗂 گروه این گزینه را انتخاب کنید:', groupPickerKb(await ctx.app.db.listGroups(), 0)).catch(() => {});
+        return;
+      }
+
+      const grpPageMatch = data.match(new RegExp('^' + GROUP_PICK_PAGE_PREFIX + '(\\d+)$'));
+      if (grpPageMatch) {
+        await ctx.answerCallbackQuery();
+        const kb = groupPickerKb(await ctx.app.db.listGroups(), parseInt(grpPageMatch[1], 10));
+        await ctx.editMessageReplyMarkup({ reply_markup: kb.reply_markup }).catch(() => {});
+        return;
+      }
+
+      const grpMatch = data.match(/^cprod_edit_grp_(\d+)$/);
+      if (grpMatch) {
+        await ctx.answerCallbackQuery();
+        const r = await attachToGroup(ctx, p, parseInt(grpMatch[1], 10));
+        if (r === 'gone') return productGone(ctx);
+        if (r === 'moved') await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ به گروه اضافه شد.' });
+        return;
+      }
+
+      if (data === 'cprod_edit_grpnew') {
+        edit.field = 'grpnew';
+        await ctx.answerCallbackQuery();
+        await ctx.reply(FIELD_PROMPTS.grpnew, Markup.inlineKeyboard([[Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')]]));
+        return;
+      }
+
+      if (data === 'cprod_edit_grpnone') {
+        await ctx.answerCallbackQuery();
+        if (p.group_id != null) {
+          const r = await ctx.app.db.leaveGroup(p.id);
+          if (r.changes !== 1) return productGone(ctx);
+        }
+        edit.field = null;
+        await showCard(ctx, (await loadProduct(ctx))!, { edit: true, prefix: '✅ از گروه خارج شد.' });
+        return;
+      }
+
+      if (data === 'cprod_edit_label_default' && edit.pendingGroupId) {
+        await ctx.answerCallbackQuery();
+        if ((await completeMove(ctx, p, edit.pendingGroupId, defaultOptionLabel(p))) === 'gone') return productGone(ctx);
+        await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ به گروه اضافه شد.' });
+        return;
+      }
+
+      if (data === 'cprod_edit_terms_all' && p.group_id != null) {
+        edit.field = 'terms';
+        edit.termsAll = true;
+        await ctx.answerCallbackQuery();
+        const group = await ctx.app.db.getProductGroup(p.group_id);
+        await ctx.reply(
+          FIELD_PROMPTS.terms + '\n\nاین شرایط برای همه‌ی گزینه‌های «' + (group?.name ?? '') + '» ذخیره می‌شود.',
+          Markup.inlineKeyboard([[Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')]]),
+        );
+        return;
+      }
+
+      const fieldMatch = data.match(/^cprod_edit_f_(name|price|terms|duration|warranty|label|grpname|grpsort|sort)$/);
       if (fieldMatch) {
         edit.field = fieldMatch[1];
+        edit.termsAll = false;
         await ctx.answerCallbackQuery();
         const extra =
           edit.field === 'terms' ? [[Markup.button.callback('▫️ حذف شرایط', 'cprod_edit_clear_terms')]]
           : edit.field === 'duration' || edit.field === 'warranty' ? [[Markup.button.callback('▫️ ندارد', 'cprod_edit_clear_days')]]
           : [];
+        if (edit.field === 'terms' && p.group_id != null) {
+          extra.push([Markup.button.callback('📋 اعمال روی همه‌ی گزینه‌های گروه', 'cprod_edit_terms_all')]);
+        }
         await ctx.reply(FIELD_PROMPTS[edit.field], Markup.inlineKeyboard([...extra, [Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')]]));
         return;
       }
@@ -245,6 +372,46 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
     }
 
     const field: string = edit.field;
+    const p = await loadProduct(ctx);
+    if (!p) return productGone(ctx);
+
+    // ── group fields (SUPPLIER_PLAN.md §3.2) ───────────────────────────────
+    if (field === 'label' || field === 'grpname' || field === 'grpnew' || field === 'grpsort' || field === 'sort') {
+      const value = text.trim();
+      if (field === 'label' && (value.length < 1 || value.length > 40)) return ctx.reply('⚠️ عنوان گزینه باید بین ۱ تا ۴۰ کاراکتر باشد.');
+      if ((field === 'grpname' || field === 'grpnew') && (value.length < 1 || value.length > 60)) {
+        return ctx.reply('⚠️ نام گروه باید بین ۱ تا ۶۰ کاراکتر باشد.');
+      }
+      const order = field === 'sort' || field === 'grpsort' ? parseSortOrder(text) : null;
+      if ((field === 'sort' || field === 'grpsort') && order === null) {
+        return ctx.reply('⚠️ لطفاً یک عدد صحیح از ۰ تا ۹۹۹ وارد کنید.');
+      }
+
+      if (field === 'grpnew') {
+        const groupId = await ctx.app.db.createGroup(value);
+        edit.field = null;
+        const r = await attachToGroup(ctx, p, groupId);
+        if (r === 'moved') await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ به گروه اضافه شد.' });
+        return;
+      }
+      if (field === 'label' && edit.pendingGroupId) {
+        if ((await completeMove(ctx, p, edit.pendingGroupId, value)) === 'gone') return productGone(ctx);
+        await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ به گروه اضافه شد.' });
+        return;
+      }
+      if (p.group_id == null) return ctx.reply('⚠️ این گزینه در هیچ گروهی نیست.');
+
+      let changed = false;
+      if (field === 'label') changed = (await ctx.app.db.setOptionLabel(p.id, p.group_id, value)).changes === 1;
+      else if (field === 'grpname') { await ctx.app.db.renameGroup(p.group_id, value); changed = true; }
+      else if (field === 'grpsort') { await ctx.app.db.setGroupSortOrder(p.group_id, order!); changed = true; }
+      else changed = (await ctx.app.db.setOptionSortOrder(p.id, order!)).changes === 1;
+      if (!changed) return productGone(ctx);
+      edit.field = null;
+      await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ ذخیره شد.' });
+      return;
+    }
+
     let patch: Parameters<typeof applyPatch>[1];
     let note = '';
     if (field === 'name') {
@@ -280,7 +447,12 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
       note = NOTE_SNAPSHOT;
     }
 
-    if (!(await applyPatch(ctx, patch))) return productGone(ctx);
+    if (field === 'terms' && edit.termsAll && p.group_id != null) {
+      await ctx.app.db.setGroupTerms(p.group_id, patch.termsText ?? null, patch.termsEntities ?? null);
+      edit.termsAll = false;
+    } else if (!(await applyPatch(ctx, patch))) {
+      return productGone(ctx);
+    }
     edit.field = null;
     const fresh = (await loadProduct(ctx))!;
     const warn = field === 'price' ? await priceWarnings(ctx, fresh) : '';

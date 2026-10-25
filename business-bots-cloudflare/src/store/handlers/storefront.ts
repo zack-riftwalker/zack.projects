@@ -7,8 +7,11 @@ import { Markup } from '../../lib/markup';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
 import {
-  escapeMarkdown, escapeHtml, formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTime, catalogLabel,
+  escapeMarkdown, escapeHtml, formatPrice, buildPagedKeyboard, formatJalaliDate, parseLocalDateTime,
 } from '../utils';
+import {
+  loadCatalogEntries, sortOptions, optionButtonLabel, groupHeaderText, type CatalogEntry,
+} from '../catalog';
 import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
   validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, DISCOUNT_ERROR_LABEL,
@@ -49,11 +52,27 @@ export async function customerKeyboard(app: StoreApp) {
 
 const CATALOG_CANCEL_BTN = Markup.button.callback('❌ بستن', 'cust_catalog_close');
 
-function catalogKeyboard(products: CustomerProduct[], page: number) {
-  return productPickerKeyboard(products, page, 'cust_prod_', 'cust_catalog_page_', CATALOG_CANCEL_BTN, catalogLabel);
+const CATALOG_TEXT = '🛍 *فهرست محصولات*\n\nمحصول مورد نظر خود را انتخاب کنید:';
+
+function catalogKeyboard(entries: CatalogEntry[], page: number) {
+  return buildPagedKeyboard(entries, page, (e) => Markup.button.callback(e.label, e.callback), 'cust_catalog_page_', CATALOG_CANCEL_BTN);
 }
 
 // ─── Discount-question step (shared by catalog pick and renew button) ────────
+
+/** A product was picked: answer the callback, then the waitlist (unavailable) or the discount question. */
+async function openProduct(ctx: StoreContext, product: CustomerProduct) {
+  await ctx.answerCallbackQuery();
+  if (product.is_available === 0) {
+    await ctx.reply(
+      '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
+      'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
+      Markup.inlineKeyboard([[Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id)]]),
+    );
+    return;
+  }
+  await sendDiscountPrompt(ctx, product);
+}
 
 async function sendDiscountPrompt(ctx: StoreContext, product: CustomerProduct) {
   // A fresh product selection supersedes any half-finished discount-code entry.
@@ -168,16 +187,13 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
   // ── Entry point: "🛍 لیست محصولات" persistent button ────────────────────────
   bot.hears(STOREFRONT_LABEL, async (ctx) => {
-    const products = await ctx.app.db.getAllActiveCustomerProducts();
-    if (products.length === 0) {
+    const entries = await loadCatalogEntries(ctx.app);
+    if (entries.length === 0) {
       await ctx.reply('😔 فعلاً محصولی در فروشگاه موجود نیست.');
       return;
     }
 
-    await ctx.reply(
-      '🛍 *فهرست محصولات*\n\nمحصول مورد نظر خود را انتخاب کنید:',
-      { parse_mode: 'Markdown', ...catalogKeyboard(products, 0) },
-    );
+    await ctx.reply(CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, 0) });
   });
 
   // ── Entry point: "📋 اشتراک‌های من" persistent button ───────────────────────
@@ -290,12 +306,29 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   });
 
   // ── Catalog pagination ──────────────────────────────────────────────────────
+  // Also the «🔙 بازگشت» target of a group's detail message, so it edits the text back to the list.
   bot.callbackQuery(/^cust_catalog_page_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const products = await ctx.app.db.getAllActiveCustomerProducts();
-    await ctx.editMessageReplyMarkup(
-      { reply_markup: catalogKeyboard(products, parseInt(ctx.match![1], 10)).reply_markup },
-    ).catch(() => {});
+    const entries = await loadCatalogEntries(ctx.app);
+    await ctx.editMessageText(CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, parseInt(ctx.match![1], 10)) }).catch(() => {});
+  });
+
+  // ── Group selected (SUPPLIER_PLAN.md §3.1): one option → same as cust_prod; several → choose the option ──
+  bot.callbackQuery(/^cust_grp_(\d+)$/, async (ctx) => {
+    const { group, options } = await ctx.app.db.getGroupWithOptions(parseInt(ctx.match![1], 10));
+    if (!group || options.length === 0) {
+      await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
+      return;
+    }
+    if (options.length === 1) {
+      await openProduct(ctx, options[0]);
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    const rows = sortOptions(options).map((p) => [Markup.button.callback(optionButtonLabel(p), 'cust_prod_' + p.id)]);
+    rows.push([Markup.button.callback('🔙 بازگشت', 'cust_catalog_page_0')]);
+    await ctx.editMessageText(groupHeaderText(group.name), { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }).catch(() => {});
   });
 
   bot.callbackQuery('cust_catalog_close', async (ctx) => {
@@ -311,17 +344,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
       return;
     }
-
-    await ctx.answerCallbackQuery();
-    if (product.is_available === 0) {
-      await ctx.reply(
-        '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
-        'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
-        Markup.inlineKeyboard([[Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id)]]),
-      );
-      return;
-    }
-    await sendDiscountPrompt(ctx, product);
+    await openProduct(ctx, product);
   });
 
   // ── «🔔 موجود شد خبرم کن» ───────────────────────────────────────────────────
@@ -401,7 +424,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       return;
     }
 
-    const result = await validateDiscountCode(ctx.app, ctx.message.text, productId, ctx.from.id);
+    const result = await validateDiscountCode(ctx.app, ctx.message.text, product, ctx.from.id);
     if (!result.ok) {
       await ctx.reply(
         DISCOUNT_ERROR_LABEL[result.reason] + '\n\nمی‌توانید دوباره تلاش کنید، یا بدون کد ادامه دهید.',
@@ -803,7 +826,7 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
       // Re-check the code's rules at confirm time (not just at code-entry time), then record the
       // redemption atomically — two receipts sent with the same code can't both consume it.
       const revalidation = await validateDiscountCodeForOrder(
-        ctx.app, order.discount_code_id, order.customer_product_id, order.customer_telegram_id,
+        ctx.app, order.discount_code_id, product, order.customer_telegram_id,
       );
       let reason: string | null = revalidation.ok ? null : revalidation.reason;
       if (revalidation.ok) {

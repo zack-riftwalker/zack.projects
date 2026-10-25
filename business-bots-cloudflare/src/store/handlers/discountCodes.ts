@@ -33,13 +33,17 @@ export type DiscountValidation = { ok: true; discountCode: DiscountCode } | { ok
 
 /** active → matches product → not expired → not used by this customer → cap not reached. Fails closed. */
 async function validateDiscountCodeRecord(
-  app: StoreApp, discountCode: DiscountCode | undefined, productId: number, customerTelegramId: number,
+  app: StoreApp, discountCode: DiscountCode | undefined, product: CustomerProduct | undefined, customerTelegramId: number,
 ): Promise<DiscountValidation> {
   if (!discountCode) return { ok: false, reason: 'not_found' };
   if (!discountCode.is_active) return { ok: false, reason: 'inactive' };
   // personal (referral reward) codes work only for their owner
   if (discountCode.owner_telegram_id != null && discountCode.owner_telegram_id !== customerTelegramId) return { ok: false, reason: 'not_owner' };
-  if (discountCode.customer_product_id !== productId) return { ok: false, reason: 'wrong_product' };
+  // a group code is valid for every option of its group (SUPPLIER_PLAN.md §3.3)
+  const matches = discountCode.product_group_id != null
+    ? product?.group_id === discountCode.product_group_id
+    : product !== undefined && discountCode.customer_product_id === product.id;
+  if (!matches) return { ok: false, reason: 'wrong_product' };
   if (discountCode.expires_at < (await app.db.nowLocalDateTimeString())) return { ok: false, reason: 'expired' };
 
   try {
@@ -58,12 +62,12 @@ async function validateDiscountCodeRecord(
   return { ok: true, discountCode };
 }
 
-export async function validateDiscountCode(app: StoreApp, codeText: string, productId: number, customerTelegramId: number) {
-  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeByCode(codeText), productId, customerTelegramId);
+export async function validateDiscountCode(app: StoreApp, codeText: string, product: CustomerProduct | undefined, customerTelegramId: number) {
+  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeByCode(codeText), product, customerTelegramId);
 }
 
-export async function validateDiscountCodeForOrder(app: StoreApp, discountCodeId: number, productId: number, customerTelegramId: number) {
-  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeById(discountCodeId), productId, customerTelegramId);
+export async function validateDiscountCodeForOrder(app: StoreApp, discountCodeId: number, product: CustomerProduct | undefined, customerTelegramId: number) {
+  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeById(discountCodeId), product, customerTelegramId);
 }
 
 // ─── Shared wizard step bodies (used by both Add and Edit wizards) ───────────
@@ -129,6 +133,44 @@ async function receiveDiscountValue(ctx: StoreContext, stateKey: string): Promis
   return true;
 }
 
+const DISC_SCOPE_ONE_ACTION = 'disc_scope_one';
+const DISC_SCOPE_GROUP_ACTION = 'disc_scope_group';
+
+/** After an option of a group is picked: asks whether the code covers only that option or the whole group. */
+async function askDiscountScope(ctx: StoreContext, stateKey: string, cancelBtn: InlineButton): Promise<boolean> {
+  const st = ctx.wizard.state[stateKey];
+  if (!st.pendingGroup) return false;
+  st.scopePending = true;
+  await ctx.reply(
+    '〔 این کد برای کدام؟ 〕',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('فقط «' + st.pendingGroup.label + '»', DISC_SCOPE_ONE_ACTION)],
+      [Markup.button.callback('همه‌ی گزینه‌های «' + st.pendingGroup.groupName + '»', DISC_SCOPE_GROUP_ACTION)],
+      [cancelBtn],
+    ]),
+  );
+  return true;
+}
+
+async function receiveDiscountScope(ctx: StoreContext, stateKey: string): Promise<boolean> {
+  const data = ctx.callbackQuery?.data;
+  const st = ctx.wizard.state[stateKey];
+  if (data !== DISC_SCOPE_ONE_ACTION && data !== DISC_SCOPE_GROUP_ACTION) {
+    await ackStrayCallback(ctx);
+    await ctx.reply('⚠️ لطفاً یکی از دو گزینه بالا را انتخاب کنید.');
+    return false;
+  }
+  await ctx.answerCallbackQuery();
+  if (data === DISC_SCOPE_GROUP_ACTION) {
+    st.productGroupId = st.pendingGroup.id;
+    st.productName = 'همه‌ی گزینه‌های «' + st.pendingGroup.groupName + '»';
+  } else {
+    st.productGroupId = null;
+  }
+  st.scopePending = false;
+  return true;
+}
+
 async function receiveProductSelection(ctx: StoreContext, stateKey: string, cancelBtn: InlineButton): Promise<'page' | 'retry' | 'leave' | 'ok'> {
   if (!ctx.callbackQuery) {
     await ctx.reply('⚠️ لطفاً یک محصول را از لیست بالا انتخاب کنید.');
@@ -161,8 +203,13 @@ async function receiveProductSelection(ctx: StoreContext, stateKey: string, canc
     return 'leave';
   }
 
-  ctx.wizard.state[stateKey].customerProductId = product.id;
-  ctx.wizard.state[stateKey].productName = product.name;
+  const st = ctx.wizard.state[stateKey];
+  st.customerProductId = product.id;
+  st.productName = product.name;
+  st.productGroupId = null;
+  st.scopePending = false;
+  const group = product.group_id != null ? await ctx.app.db.getProductGroup(product.group_id) : undefined;
+  st.pendingGroup = group ? { id: group.id, groupName: group.name, label: product.option_label ?? product.name } : null;
 
   await ctx.answerCallbackQuery();
   return 'ok';
@@ -289,13 +336,18 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
     return ctx.wizard.next();
   },
 
-  // STEP 4: Receive product selection (with pagination), ask for max uses.
+  // STEP 4: Receive product selection (with pagination), ask the scope for a group option, then ask for max uses.
   async (ctx) => {
     if (ctx.callbackQuery?.data === 'disc_add_cancel') return leaveAddCancelled(ctx);
 
-    const outcome = await receiveProductSelection(ctx, 'newDiscountCode', ADD_CANCEL_BTN);
-    if (outcome === 'page' || outcome === 'retry') return;
-    if (outcome === 'leave') return ctx.scene.leave();
+    if (ctx.wizard.state.newDiscountCode.scopePending) {
+      if (!(await receiveDiscountScope(ctx, 'newDiscountCode'))) return;
+    } else {
+      const outcome = await receiveProductSelection(ctx, 'newDiscountCode', ADD_CANCEL_BTN);
+      if (outcome === 'page' || outcome === 'retry') return;
+      if (outcome === 'leave') return ctx.scene.leave();
+      if (await askDiscountScope(ctx, 'newDiscountCode', ADD_CANCEL_BTN)) return;
+    }
 
     await ctx.editMessageText(
       '〔 مرحله ۵ از ۶ 〕\n\n' +
@@ -347,11 +399,11 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
       return;
     }
 
-    const { code, discountType, discountValue, customerProductId, productName, maxUses } =
+    const { code, discountType, discountValue, customerProductId, productName, maxUses, productGroupId } =
       ctx.wizard.state.newDiscountCode;
 
     try {
-      await ctx.app.db.createDiscountCode({ code, customerProductId, discountType, discountValue, maxUses, expiresAt });
+      await ctx.app.db.createDiscountCode({ code, customerProductId, discountType, discountValue, maxUses, expiresAt, productGroupId });
     } catch (err: any) {
       console.error('❌ [DiscountCodes Wizard] DB insert failed:', err.message);
       await ctx.reply('❌ خطا در ذخیره کد تخفیف. لطفاً دوباره تلاش کنید.');
@@ -448,13 +500,18 @@ export const discountCodeEditWizard = new WizardScene<StoreContext>(
     return ctx.wizard.next();
   },
 
-  // STEP 3: Receive product selection (with pagination), ask for max uses.
+  // STEP 3: Receive product selection (with pagination), ask the scope for a group option, then ask for max uses.
   async (ctx) => {
     if (ctx.callbackQuery?.data === 'disc_edit_cancel') return leaveEditCancelled(ctx);
 
-    const outcome = await receiveProductSelection(ctx, 'editDiscountCode', EDIT_CANCEL_BTN);
-    if (outcome === 'page' || outcome === 'retry') return;
-    if (outcome === 'leave') return ctx.scene.leave();
+    if (ctx.wizard.state.editDiscountCode.scopePending) {
+      if (!(await receiveDiscountScope(ctx, 'editDiscountCode'))) return;
+    } else {
+      const outcome = await receiveProductSelection(ctx, 'editDiscountCode', EDIT_CANCEL_BTN);
+      if (outcome === 'page' || outcome === 'retry') return;
+      if (outcome === 'leave') return ctx.scene.leave();
+      if (await askDiscountScope(ctx, 'editDiscountCode', EDIT_CANCEL_BTN)) return;
+    }
 
     await ctx.editMessageText(
       '〔 مرحله ۴ از ۴ 〕\n\n' +
@@ -473,12 +530,12 @@ export const discountCodeEditWizard = new WizardScene<StoreContext>(
     const outcome = await receiveMaxUses(ctx, 'editDiscountCode');
     if (outcome === 'retry') return;
 
-    const { discountType, discountValue, customerProductId, productName } = ctx.wizard.state.editDiscountCode;
+    const { discountType, discountValue, customerProductId, productName, productGroupId } = ctx.wizard.state.editDiscountCode;
     const codeId = ctx.wizard.state.codeId;
     const maxUses = ctx.wizard.state.editDiscountCode.maxUses;
 
     try {
-      const result = await ctx.app.db.updateDiscountCodeDetails(codeId, { discountType, discountValue, customerProductId, maxUses });
+      const result = await ctx.app.db.updateDiscountCodeDetails(codeId, { discountType, discountValue, customerProductId, maxUses, productGroupId });
       if (result.changes === 0) throw new Error('Discount code not found.');
     } catch (err: any) {
       console.error('❌ [DiscountCodes EditWizard] DB update failed:', err.message);
@@ -650,12 +707,13 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
     }
 
     const product = await ctx.app.db.getCustomerProductById(discountCode.customer_product_id);
+    const group = discountCode.product_group_id != null ? await ctx.app.db.getProductGroup(discountCode.product_group_id) : undefined;
     const used = await ctx.app.db.countDiscountCodeRedemptions(id);
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
       '🎟 *' + escapeMarkdown(discountCode.code) + '*\n\n' +
-      '📦 محصول: ' + escapeMarkdown(product ? product.name : '؟') + '\n' +
+      '📦 محصول: ' + escapeMarkdown(group ? 'همه‌ی گزینه‌های «' + group.name + '»' : product ? product.name : '؟') + '\n' +
       '📐 نوع: ' + (discountCode.discount_type === 'percent' ? 'درصدی' : 'مبلغ ثابت') + '\n' +
       '💰 مقدار: ' + (discountCode.discount_type === 'percent' ? discountCode.discount_value + '٪' : formatPrice(discountCode.discount_value) + ' تومان') + '\n' +
       '🔢 استفاده‌شده: ' + used + ' از ' + (discountCode.max_uses ?? 'نامحدود') + '\n' +

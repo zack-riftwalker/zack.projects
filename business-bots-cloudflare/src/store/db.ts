@@ -25,6 +25,7 @@ export interface DiscountCode {
   discount_value: number; max_uses: number | null; expires_at: string; is_active: number; created_at: string;
   owner_telegram_id?: number | null; source?: string; product_group_id?: number | null;
 }
+export interface ProductGroup { id: number; name: string; sort_order: number }
 export interface BroadcastJob {
   id: number; admin_chat_id: number; text: string; entities: any[] | null; status: string;
   cursor_customer_id: number; total: number; sent: number; failed: number;
@@ -114,7 +115,8 @@ export class StoreDb {
   async getAllActiveCustomerProducts(): Promise<CustomerProduct[]> {
     try {
       const r = await this.q(`
-      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available
+      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
+             group_id, option_label, sort_order
       FROM   customer_products
       WHERE  is_active = 1
       ORDER  BY id ASC
@@ -129,7 +131,8 @@ export class StoreDb {
   async getCustomerProductById(id: number): Promise<CustomerProduct | undefined> {
     try {
       const row = await this.q(`
-      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available
+      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
+             group_id, option_label, sort_order
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -172,12 +175,107 @@ export class StoreDb {
     return { changes: r.meta.changes };
   }
 
-  /** Active fixed-amount codes that would make `price` free (value ≥ price). */
-  async getFixedCodesAtLeast(productId: number, price: number): Promise<DiscountCode[]> {
+  /** Active fixed-amount codes that would make `price` free (value ≥ price), including group codes of `groupId`. */
+  async getFixedCodesAtLeast(productId: number, price: number, groupId: number | null = null): Promise<DiscountCode[]> {
     return (await this.q(
-      "SELECT * FROM discount_codes WHERE customer_product_id = ? AND is_active = 1 AND discount_type = 'fixed' AND discount_value >= ?",
-      productId, price,
+      `SELECT * FROM discount_codes
+       WHERE (customer_product_id = ? OR (product_group_id IS NOT NULL AND product_group_id = ?))
+         AND is_active = 1 AND discount_type = 'fixed' AND discount_value >= ?`,
+      productId, groupId, price,
     ).all<DiscountCode>()).results;
+  }
+
+  // ─── Product groups (SUPPLIER_PLAN.md §3) ────────────────────────────────
+  /** Products and the groups they belong to, in one batch (the storefront catalog). */
+  async getCatalogData(): Promise<{ products: CustomerProduct[]; groups: ProductGroup[] }> {
+    const [p, g] = await this.db.batch([
+      this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
+                     group_id, option_label, sort_order
+              FROM customer_products WHERE is_active = 1 ORDER BY id ASC`),
+      this.q('SELECT id, name, sort_order FROM product_groups WHERE id IN (SELECT group_id FROM customer_products WHERE is_active = 1 AND group_id IS NOT NULL)'),
+    ]);
+    return {
+      products: p.results.map((x) => this.parseProductRow(x)!),
+      groups: g.results as ProductGroup[],
+    };
+  }
+
+  async getProductGroup(groupId: number): Promise<ProductGroup | undefined> {
+    return (await this.q('SELECT id, name, sort_order FROM product_groups WHERE id = ?', groupId).first<ProductGroup>()) ?? undefined;
+  }
+
+  async listGroups(): Promise<ProductGroup[]> {
+    return (await this.q('SELECT id, name, sort_order FROM product_groups ORDER BY sort_order, id').all<ProductGroup>()).results;
+  }
+
+  /** A group with its active options, for the group's detail message (one batch). */
+  async getGroupWithOptions(groupId: number): Promise<{ group: ProductGroup | null; options: CustomerProduct[] }> {
+    const [g, o] = await this.db.batch([
+      this.q('SELECT id, name, sort_order FROM product_groups WHERE id = ?', groupId),
+      this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
+                     group_id, option_label, sort_order
+              FROM customer_products WHERE group_id = ? AND is_active = 1`, groupId),
+    ]);
+    return { group: (g.results[0] as ProductGroup) ?? null, options: o.results.map((x) => this.parseProductRow(x)!) };
+  }
+
+  /** Every option of the group (active or not) — its display names are rewritten together. */
+  private syncOptionNamesStmt(groupId: number): Stmt {
+    return this.q(
+      "UPDATE customer_products SET name = (SELECT name FROM product_groups WHERE id = ?) || ' — ' || COALESCE(option_label, '') WHERE group_id = ?",
+      groupId, groupId,
+    );
+  }
+
+  async createGroup(name: string): Promise<number> {
+    const r = await this.q('INSERT INTO product_groups (name) VALUES (?)', name).run();
+    return r.meta.last_row_id;
+  }
+
+  /** Renames the group and rewrites every option's display name in the same batch. */
+  async renameGroup(groupId: number, name: string): Promise<void> {
+    await this.db.batch([this.q('UPDATE product_groups SET name = ? WHERE id = ?', name, groupId), this.syncOptionNamesStmt(groupId)]);
+  }
+
+  async setGroupSortOrder(groupId: number, sortOrder: number): Promise<void> {
+    await this.q('UPDATE product_groups SET sort_order = ? WHERE id = ?', sortOrder, groupId).run();
+  }
+
+  /** Changes an option's label and refreshes the display names of its group. */
+  async setOptionLabel(productId: number, groupId: number, label: string): Promise<{ changes: number }> {
+    const [r] = await this.db.batch([
+      this.q('UPDATE customer_products SET option_label = ? WHERE id = ? AND group_id = ? AND is_active = 1', label, productId, groupId),
+      this.syncOptionNamesStmt(groupId),
+    ]);
+    return { changes: r.meta.changes };
+  }
+
+  /** Puts an option into a group (`name` = group name + ' — ' + label, computed by the caller). */
+  async moveOptionToGroup(productId: number, groupId: number, label: string, name: string): Promise<{ changes: number }> {
+    const r = await this.q('UPDATE customer_products SET group_id = ?, option_label = ?, name = ? WHERE id = ? AND is_active = 1', groupId, label, name, productId).run();
+    return { changes: r.meta.changes };
+  }
+
+  /** Takes an option out of its group: it becomes an ordinary product named by its label. */
+  async leaveGroup(productId: number): Promise<{ changes: number }> {
+    const r = await this.q(
+      'UPDATE customer_products SET name = COALESCE(option_label, name), group_id = NULL, option_label = NULL WHERE id = ? AND is_active = 1',
+      productId,
+    ).run();
+    return { changes: r.meta.changes };
+  }
+
+  async setOptionSortOrder(productId: number, sortOrder: number): Promise<{ changes: number }> {
+    const r = await this.q('UPDATE customer_products SET sort_order = ? WHERE id = ? AND is_active = 1', sortOrder, productId).run();
+    return { changes: r.meta.changes };
+  }
+
+  /** Terms for the whole group (one statement). */
+  async setGroupTerms(groupId: number, termsText: string | null, termsEntities: any[] | null): Promise<void> {
+    await this.q(
+      'UPDATE customer_products SET terms_text = ?, terms_entities = ? WHERE group_id = ? AND is_active = 1',
+      termsText || null, termsEntities?.length ? JSON.stringify(termsEntities) : null, groupId,
+    ).run();
   }
 
   // ─── Waitlist ────────────────────────────────────────────────────────────
@@ -393,14 +491,14 @@ export class StoreDb {
 
   async createDiscountCode(p: {
     code: string; customerProductId: number; discountType: string; discountValue: number; maxUses: number | null; expiresAt: string;
-    ownerTelegramId?: number | null; source?: 'admin' | 'referral';
+    ownerTelegramId?: number | null; source?: 'admin' | 'referral'; productGroupId?: number | null;
   }) {
     const r = await this.q(`
     INSERT INTO discount_codes
-      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source, product_group_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, p.code.toUpperCase(), p.customerProductId, p.discountType, p.discountValue, p.maxUses ?? null, p.expiresAt,
-      p.ownerTelegramId ?? null, p.source ?? 'admin').run();
+      p.ownerTelegramId ?? null, p.source ?? 'admin', p.productGroupId ?? null).run();
     return { lastInsertRowid: r.meta.last_row_id };
   }
 
@@ -432,12 +530,14 @@ export class StoreDb {
     }
   }
 
-  async updateDiscountCodeDetails(id: number, p: { discountType: string; discountValue: number; customerProductId: number; maxUses: number | null }) {
+  async updateDiscountCodeDetails(id: number, p: {
+    discountType: string; discountValue: number; customerProductId: number; maxUses: number | null; productGroupId?: number | null;
+  }) {
     const r = await this.q(`
     UPDATE discount_codes
-    SET    discount_type = ?, discount_value = ?, customer_product_id = ?, max_uses = ?
+    SET    discount_type = ?, discount_value = ?, customer_product_id = ?, max_uses = ?, product_group_id = ?
     WHERE  id = ?
-  `, p.discountType, p.discountValue, p.customerProductId, p.maxUses ?? null, id).run();
+  `, p.discountType, p.discountValue, p.customerProductId, p.maxUses ?? null, p.productGroupId ?? null, id).run();
     return { changes: r.meta.changes };
   }
 
