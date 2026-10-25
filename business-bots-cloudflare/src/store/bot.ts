@@ -17,6 +17,7 @@ import { storeSettingsWizard } from './handlers/storeSettings';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
+import { registerSupplierPanel } from './handlers/supplierPanel';
 import { REF_PAYLOAD_RE, handleRefStart } from './referrals';
 import type { StoreContext, StoreSession } from './types';
 
@@ -68,7 +69,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     manualPurchaseWizard,
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
-    bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
+    bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+|sup_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
     // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
     exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
   });
@@ -77,6 +78,10 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   // /start — admins go straight into the panel, everyone else into the storefront.
   bot.command('start', async (ctx) => {
     try {
+      if (ctx.session && isAdmin(ctx.from?.id)) {
+        ctx.session.awaitingSupplierInput = null;
+        ctx.session.supplierWizard = null;
+      }
       const payload = typeof ctx.match === 'string' ? ctx.match.trim() : '';
       if (isAdmin(ctx.from?.id)) {
         if (await handleManualPurchaseStart(ctx, payload)) return;
@@ -119,6 +124,10 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   });
 
   bot.command('panel', async (ctx) => {
+    if (ctx.session && isAdmin(ctx.from?.id)) {
+      ctx.session.awaitingSupplierInput = null;
+      ctx.session.supplierWizard = null;
+    }
     if (isAdmin(ctx.from?.id)) {
       await ctx.reply('🎛 پنل مدیریت:', adminPanelKeyboard());
       return;
@@ -129,6 +138,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   registerAdminPanelHandler(bot, isAdmin);
   registerSalesReportHandler(bot, isAdmin);
   registerReferralHandler(bot, isAdmin);
+  registerSupplierPanel(bot, isAdmin);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);
   registerStorefrontHandler(bot);

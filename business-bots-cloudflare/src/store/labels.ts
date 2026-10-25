@@ -27,3 +27,5 @@ export const MAX_REJECT_REASON_LENGTH = 200;
 export const REPORT_LABEL = '📊 گزارش فروش';
 
 export const REFERRAL_LABEL = '🎁 دعوت دوستان';
+
+export const SUPPLIER_LABEL = '🔌 API تأمین‌کننده';

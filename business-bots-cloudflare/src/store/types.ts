@@ -19,6 +19,12 @@ export interface StoreSession extends SceneSession {
   awaitingReferralInput?: 'required' | 'minAmount' | 'discValue' | 'discValidDays' | null;
   /** admin typing a custom reject reason for a receipt (expires after 15 min) */
   awaitingRejectReasonFor?: { orderId: number; chatId: number; messageId: number; caption: string; at: number } | null;
+  /** admin typing one value of the supplier panel (expires after 15 min) */
+  awaitingSupplierInput?: {
+    kind: 'sup_key_edit' | 'sup_uid' | 'def_percent' | 'def_fixed'; ref: string; at: number;
+  } | null;
+  /** add-supplier steps: the step name and the values typed so far (the key only until the test) */
+  supplierWizard?: { step: string; data: Record<string, any> } | null;
 }
 
 export type StoreContext = Context & SessionFlavor<StoreSession> & WizardFlavor & { app: StoreApp };
