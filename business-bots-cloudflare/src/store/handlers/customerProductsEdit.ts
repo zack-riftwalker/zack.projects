@@ -64,6 +64,7 @@ function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callb
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
     [Markup.button.callback('🗂 گروه', 'cprod_edit_grp_menu'), Markup.button.callback('🔢 ترتیب گزینه', 'cprod_edit_f_sort')],
     ...(grouped ? [[Markup.button.callback('✏️ نام گروه', 'cprod_edit_f_grpname'), Markup.button.callback('🔢 ترتیب گروه', 'cprod_edit_f_grpsort')]] : []),
+    [Markup.button.callback('🔌 منابع و قیمت', 'sup_src_' + p.id)],
     ...extra,
     [Markup.button.callback('✅ پایان', 'cprod_edit_done')],
   ]);

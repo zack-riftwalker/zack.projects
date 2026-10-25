@@ -11,6 +11,9 @@ import {
 import type { Catalog, SupplierRow } from '../suppliers/types';
 import { getSupplierDefaults, setSupplierDefaults } from '../supplierDefaults';
 import type { StoreContext } from '../types';
+import { handleImportCallback, handleImportText, startImport } from './supplierImport';
+import { handleSourcesCallback, handleSourcesText } from './supplierSources';
+import { recomputeOption } from '../suppliers/recompute';
 
 const INPUT_TTL_MS = 15 * 60_000;
 const ITEMS_PAGE_PREFIX = 'sup_items_';
@@ -222,6 +225,7 @@ function clearInputs(ctx: StoreContext) {
   if (!ctx.session) return;
   ctx.session.awaitingSupplierInput = null;
   ctx.session.supplierWizard = null;
+  ctx.session.supplierImport = null;
 }
 
 /** One add-supplier step: name → url → key (message deleted) → user id → connection test. */
@@ -269,6 +273,22 @@ async function handleWizardText(ctx: StoreContext, step: string, text: string): 
   await testAndMaybeSave(ctx, d);
 }
 
+/** Recomputes every automatic option that has no own markup (SUPPLIER_PLAN.md §4.5). Returns how many. */
+async function applyDefaultsToAuto(ctx: StoreContext): Promise<number> {
+  const rows = (await ctx.app.raw.prepare(`
+    SELECT id FROM customer_products
+    WHERE pricing_mode = 'auto' AND markup_percent IS NULL AND markup_fixed IS NULL
+      AND EXISTS (SELECT 1 FROM product_sources s WHERE s.customer_product_id = customer_products.id)`)
+    .bind().all<{ id: number }>()).results;
+  let count = 0;
+  for (const r of rows) {
+    if (ctx.app.apps.budget.remaining() < 10) break;
+    await recomputeOption(ctx.app, r.id);
+    count++;
+  }
+  return count;
+}
+
 // ─── Registration ────────────────────────────────────────────────────────────
 
 export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: number | undefined) => boolean) {
@@ -300,6 +320,14 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
       clearInputs(ctx);
       await ctx.answerCallbackQuery();
       await ctx.editMessageText('❌ انصراف شد.').catch(() => {});
+      return;
+    }
+    if (await handleSourcesCallback(ctx, data)) return;
+    if (await handleImportCallback(ctx, data)) return;
+    if (data === 'sup_defapply') {
+      await ctx.answerCallbackQuery();
+      const count = await applyDefaultsToAuto(ctx);
+      await ctx.reply('🔁 ' + fa(count) + ' محصول به‌روز شد.');
       return;
     }
 
@@ -360,9 +388,11 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
       if (!s) return show(await listView(app));
       return show(await itemsView(app, s, parseInt(itemsMatch[2], 10)));
     }
-    if (/^sup_imp_\d+_[A-Za-z0-9_-]+$/.test(data)) {
-      // the import preview is part of the next milestone (SUPPLIER_PLAN.md §5.1)
-      await ctx.answerCallbackQuery({ text: 'وارد کردن محصول در نسخه‌ی بعدی اضافه می‌شود.', show_alert: true });
+    const impMatch = data.match(/^sup_imp_(\d+)_([A-Za-z0-9_-]+)$/);
+    if (impMatch) {
+      const started = await startImport(ctx, parseInt(impMatch[1], 10), impMatch[2]);
+      if (!started) return ctx.answerCallbackQuery({ text: '❌ این محصول دیگر در کاتالوگ نیست.', show_alert: true });
+      await ctx.answerCallbackQuery();
       return;
     }
     const keyMatch = data.match(/^sup_key_(\d+)$/);
@@ -399,6 +429,12 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
       return;
     }
 
+    if (await handleImportText(ctx, pending!.kind, pending!.ref, text)) {
+      ctx.session.awaitingSupplierInput = null;
+      return;
+    }
+    if (await handleSourcesText(ctx, pending!.kind, pending!.ref, text)) return;
+
     const problem = await applyTypedInput(ctx, pending!.kind, pending!.ref, text);
     if (pending!.kind === 'sup_key_edit') await ctx.deleteMessage().catch(() => {});
     if (problem) {
@@ -408,7 +444,10 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
     ctx.session.awaitingSupplierInput = null;
     if (pending!.kind.startsWith('def_')) {
       const v = await defaultsView(ctx.app);
-      await ctx.reply('✅ ذخیره شد.\n\n' + v.text, { ...html, ...v.keyboard });
+      await ctx.reply('✅ ذخیره شد.\n\n' + v.text, { ...html, ...kb([
+        [cb('🔁 اعمال روی همه‌ی گزینه‌های خودکاری که سود اختصاصی ندارند', 'sup_defapply')],
+        [cb('🔙 بازگشت', 'sup_menu')],
+      ]) });
       return;
     }
     const s = await getSupplier(ctx.app, parseInt(pending!.ref, 10));

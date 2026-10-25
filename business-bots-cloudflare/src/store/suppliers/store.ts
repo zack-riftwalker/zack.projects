@@ -34,9 +34,11 @@ export async function getSupplier(app: StoreApp, id: number): Promise<SupplierRo
 
 /** Saves the supplier and, when given, its first catalog. Returns the new id. */
 export async function insertSupplier(app: StoreApp, s: NewSupplier, catalog: Catalog | null): Promise<number> {
+  // a saved catalog came from a successful connection just now, so the first periodic sync is not due at once
+  const now = catalog ? tehranDateTime(app.apps.now()) : null;
   const r = await app.raw.prepare(
-    'INSERT INTO suppliers (kind, name, base_url, api_key, remote_user_id) VALUES (?, ?, ?, ?, ?)',
-  ).bind(s.kind, s.name, s.baseUrl, s.apiKey, s.remoteUserId).run();
+    'INSERT INTO suppliers (kind, name, base_url, api_key, remote_user_id, last_sync_at, last_sync_ok_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).bind(s.kind, s.name, s.baseUrl, s.apiKey, s.remoteUserId, now, now).run();
   const id = r.meta.last_row_id;
   if (catalog) await writeCatalog(app, id, catalog);
   return id;

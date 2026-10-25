@@ -1,6 +1,7 @@
 import type { StoreApp } from '../apps';
 import { storeOrderPaid } from '../bridge';
 import { BudgetExceededError } from '../lib/budget';
+import { codeFloorViolation } from './suppliers/floor';
 import { Markup } from '../lib/markup';
 import { formatJalaliDate, tehranParts } from '../lib/time';
 import { getReferralConfig, type ReferralConfig } from './referralConfig';
@@ -157,6 +158,12 @@ async function issueReward(app: StoreApp, referrerId: number, rewardId: number, 
 
   const product = cfg.discProductId ? await app.db.getCustomerProductById(cfg.discProductId) : undefined;
   if (!product || !product.is_active) throw new Error('محصول کد تخفیف موجود نیست');
+  // a reward code must not sell below the supplier cost (SUPPLIER_PLAN.md §5.4): no code, reward marked failed
+  const floor = await codeFloorViolation(app, { customerProductId: product.id, productGroupId: null }, { discount_type: cfg.discType, discount_value: cfg.discValue });
+  if (floor) {
+    console.warn('⚠️ [Referral] reward code for «' + product.name + '» would be below cost — not issued');
+    throw new Error('کد تخفیف زیر قیمت خرید است');
+  }
   const expiresAt = expiryAfterDays(app.apps.now(), cfg.discValidDays);
   let code = '';
   let codeId = 0;

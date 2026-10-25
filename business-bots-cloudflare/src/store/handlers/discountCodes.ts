@@ -8,6 +8,7 @@ import {
 import type { StoreContext } from '../types';
 import type { StoreApp } from '../../apps';
 import type { CustomerProduct, DiscountCode } from '../db';
+import { codeFloorViolation, floorMessage } from '../suppliers/floor';
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ export const DISCOUNT_ERROR_LABEL: Record<string, string> = {
   max_uses: '❌ ظرفیت استفاده از این کد تخفیف تمام شده است.',
   already_used: 'ℹ️ شما قبلاً از این کد تخفیف استفاده کرده‌اید.',
   check_failed: '❌ خطا در بررسی کد تخفیف. لطفاً دوباره تلاش کنید.',
+  below_cost: '❌ این کد برای این محصول قابل استفاده نیست.',
 };
 
 export type DiscountValidation = { ok: true; discountCode: DiscountCode } | { ok: false; reason: string };
@@ -59,6 +61,10 @@ async function validateDiscountCodeRecord(
     return { ok: false, reason: 'check_failed' };
   }
 
+  // never below the supplier cost (SUPPLIER_PLAN.md §5.4), checked last
+  if (product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {
+    return { ok: false, reason: 'below_cost' };
+  }
   return { ok: true, discountCode };
 }
 
@@ -402,6 +408,12 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
     const { code, discountType, discountValue, customerProductId, productName, maxUses, productGroupId } =
       ctx.wizard.state.newDiscountCode;
 
+    const floor = await codeFloorViolation(ctx.app, { customerProductId, productGroupId }, { discount_type: discountType, discount_value: discountValue });
+    if (floor) {
+      await ctx.reply(floorMessage(floor));
+      return ctx.scene.leave();
+    }
+
     try {
       await ctx.app.db.createDiscountCode({ code, customerProductId, discountType, discountValue, maxUses, expiresAt, productGroupId });
     } catch (err: any) {
@@ -533,6 +545,12 @@ export const discountCodeEditWizard = new WizardScene<StoreContext>(
     const { discountType, discountValue, customerProductId, productName, productGroupId } = ctx.wizard.state.editDiscountCode;
     const codeId = ctx.wizard.state.codeId;
     const maxUses = ctx.wizard.state.editDiscountCode.maxUses;
+
+    const floor = await codeFloorViolation(ctx.app, { customerProductId, productGroupId }, { discount_type: discountType, discount_value: discountValue });
+    if (floor) {
+      await ctx.reply(floorMessage(floor));
+      return ctx.scene.leave();
+    }
 
     try {
       const result = await ctx.app.db.updateDiscountCodeDetails(codeId, { discountType, discountValue, customerProductId, maxUses, productGroupId });

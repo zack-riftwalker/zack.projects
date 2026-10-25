@@ -81,6 +81,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
       if (ctx.session && isAdmin(ctx.from?.id)) {
         ctx.session.awaitingSupplierInput = null;
         ctx.session.supplierWizard = null;
+        ctx.session.supplierImport = null;
       }
       const payload = typeof ctx.match === 'string' ? ctx.match.trim() : '';
       if (isAdmin(ctx.from?.id)) {
@@ -127,6 +128,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     if (ctx.session && isAdmin(ctx.from?.id)) {
       ctx.session.awaitingSupplierInput = null;
       ctx.session.supplierWizard = null;
+      ctx.session.supplierImport = null;
     }
     if (isAdmin(ctx.from?.id)) {
       await ctx.reply('🎛 پنل مدیریت:', adminPanelKeyboard());

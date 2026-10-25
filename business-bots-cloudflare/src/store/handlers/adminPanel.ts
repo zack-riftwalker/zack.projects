@@ -41,6 +41,7 @@ export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: 
       ctx.session.awaitingReferralInput = null;
       ctx.session.awaitingSupplierInput = null;
       ctx.session.supplierWizard = null;
+      ctx.session.supplierImport = null;
     }
     return next();
   });

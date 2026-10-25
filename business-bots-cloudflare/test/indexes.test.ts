@@ -69,6 +69,23 @@ describe('store hot queries use indexes', () => {
   }
 });
 
+describe('supplier hot queries use indexes', () => {
+  const f = new FakeD1().migrate('store');
+  const cases: [string, string, unknown[]][] = [
+    ['sources of an option', `SELECT s.id FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
+      WHERE s.customer_product_id = ? ORDER BY s.priority, s.id`, [1]],
+    ['sources of a supplier (apply)', 'SELECT s.id FROM product_sources s WHERE s.supplier_id = ? ORDER BY s.id', [1]],
+    ['options of a group', 'SELECT id FROM customer_products WHERE group_id = ? AND is_active = 1', [1]],
+    ['catalog products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id', []],
+    ['supplier fetch due', "SELECT * FROM suppliers WHERE is_enabled = 1 AND (last_sync_at IS NULL OR last_sync_at < ?) ORDER BY COALESCE(last_sync_at, '') LIMIT 3", ['x']],
+    ['catalog to apply', 'SELECT supplier_id FROM supplier_catalogs WHERE applied_hash IS NULL OR applied_hash <> items_hash LIMIT 1', []],
+    ['linked options of a supplier', 'SELECT COUNT(DISTINCT customer_product_id) AS n FROM product_sources WHERE supplier_id = ?', [1]],
+  ];
+  for (const [label, sql, args] of cases) {
+    it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));
+  }
+});
+
 describe('monshi hot queries use indexes', () => {
   const f = new FakeD1().migrate('monshi');
   const cases: [string, string, unknown[]][] = [

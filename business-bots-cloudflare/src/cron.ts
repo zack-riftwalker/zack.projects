@@ -7,6 +7,7 @@ import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
 import { checkStalledOrders, sendReminders } from './store/scheduler';
 import { sweepReferralRewards } from './store/referrals';
+import { processSupplierSync } from './store/suppliers/sync';
 
 const REMINDER_HOUR_TEHRAN = 11;
 
@@ -67,6 +68,8 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
 
   if (apps.store) {
     const store = apps.store;
+    // supplier catalogs (SUPPLIER_PLAN.md §6): before the broadcast, which keeps its reserve
+    await guarded('supplier-sync', () => processSupplierSync(store, t.minute, now.getTime()));
     await guarded('broadcast', () => processBroadcastBatch(store, { reserve: 2 }));
   }
 }

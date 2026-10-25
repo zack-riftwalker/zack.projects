@@ -132,7 +132,7 @@ export class StoreDb {
     try {
       const row = await this.q(`
       SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
-             group_id, option_label, sort_order
+             group_id, option_label, sort_order, cost_toman
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -213,7 +213,7 @@ export class StoreDb {
     const [g, o] = await this.db.batch([
       this.q('SELECT id, name, sort_order FROM product_groups WHERE id = ?', groupId),
       this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
-                     group_id, option_label, sort_order
+                     group_id, option_label, sort_order, cost_toman
               FROM customer_products WHERE group_id = ? AND is_active = 1`, groupId),
     ]);
     return { group: (g.results[0] as ProductGroup) ?? null, options: o.results.map((x) => this.parseProductRow(x)!) };
@@ -268,6 +268,15 @@ export class StoreDb {
   async setOptionSortOrder(productId: number, sortOrder: number): Promise<{ changes: number }> {
     const r = await this.q('UPDATE customer_products SET sort_order = ? WHERE id = ? AND is_active = 1', sortOrder, productId).run();
     return { changes: r.meta.changes };
+  }
+
+  /** Active codes that can apply to this option (its own codes and its group's). */
+  async getActiveCodesForProduct(productId: number, groupId: number | null): Promise<DiscountCode[]> {
+    return (await this.q(
+      `SELECT * FROM discount_codes
+       WHERE is_active = 1 AND (customer_product_id = ? OR (product_group_id IS NOT NULL AND product_group_id = ?))`,
+      productId, groupId,
+    ).all<DiscountCode>()).results;
   }
 
   /** Terms for the whole group (one statement). */
