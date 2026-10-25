@@ -149,13 +149,17 @@ describe('subscriptions & warranty', () => {
     expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toContain('حداکثر یک درخواست در روز');
   });
 
-  it('warranty claim from a username with "_" reaches the admins (Markdown-escaped)', async () => {
+  it('warranty claim is HTML: customer id, @username, tg:// link and the chat button reach the admins', async () => {
     const t = makeTestEnv({ monshi: false });
     await delivered(t);
     await t.send('store', callbackUpdate({ ...CUSTOMER, username: 'ali_reza' }, 'warranty_claim_1'));
     const sent = t.tg.of('sendMessage').filter((c) => c.payload.text?.includes('درخواست گارانتی جدید'));
     expect(sent.map((c) => c.payload.chat_id)).toEqual([1001, 1002]);
-    expect(sent[0].payload.text).toContain('@ali\\_reza');
+    expect(sent[0].payload.parse_mode).toBe('HTML');
+    expect(sent[0].payload.text).toContain('(@ali_reza)');
+    expect(sent[0].payload.text).toContain('<a href="tg://user?id=' + CUSTOMER.id + '">');
+    expect(sent[0].payload.text).toContain('<code>' + CUSTOMER.id + '</code>');
+    expect(sent[0].payload.reply_markup.inline_keyboard[0][0]).toEqual({ text: '💬 چت با مشتری', url: 'https://t.me/ali_reza' });
     expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('ثبت و به ادمین اطلاع داده شد');
   });
 

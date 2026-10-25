@@ -66,10 +66,25 @@ export class FakeD1 {
   async exec(sql: string) {
     this.sqlite.exec(sql);
   }
+  /**
+   * Applies one migration file inside its own BEGIN/COMMIT. D1 runs each migration in an implicit
+   * transaction, which `PRAGMA defer_foreign_keys` needs (see SUPPLIER_PLAN.md §2.1).
+   */
+  applyMigration(sql: string) {
+    this.sqlite.exec('BEGIN');
+    try {
+      this.sqlite.exec(sql);
+      this.sqlite.exec('COMMIT');
+    } catch (err) {
+      this.sqlite.exec('ROLLBACK');
+      throw err;
+    }
+    return this;
+  }
   migrate(dir: 'store' | 'monshi') {
     const base = join(process.cwd(), 'migrations', dir);
     for (const f of readdirSync(base).filter((n) => n.endsWith('.sql')).sort()) {
-      this.sqlite.exec(readFileSync(join(base, f), 'utf8'));
+      this.applyMigration(readFileSync(join(base, f), 'utf8'));
     }
     return this;
   }

@@ -92,6 +92,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
       const upserted = await ctx.app.db.upsertCustomer({
         telegramId: ctx.from!.id,
         displayName: ctx.from!.first_name || ctx.from!.username || String(ctx.from!.id),
+        username: ctx.from!.username ?? null,
       });
 
       // /start ref_<code>: remember who invited this (brand-new) customer; never blocks the welcome

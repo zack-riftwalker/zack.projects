@@ -7,8 +7,9 @@ import { Markup } from '../../lib/markup';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
 import {
-  escapeMarkdown, formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTime, catalogLabel,
+  escapeMarkdown, escapeHtml, formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTime, catalogLabel,
 } from '../utils';
+import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
   validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, DISCOUNT_ERROR_LABEL,
 } from './discountCodes';
@@ -246,25 +247,14 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       return;
     }
 
-    const customerLabel = escapeMarkdown(ctx.from.first_name || 'مشتری') +
-      (ctx.from.username ? ' (@' + escapeMarkdown(ctx.from.username) + ')' : '');
     const adminMsg =
-      '🛠 *درخواست گارانتی جدید*\n\n' +
-      '👤 مشتری: ' + customerLabel + '\n' +
-      '🆔 آیدی: ' + ctx.from.id + '\n' +
-      '📦 محصول: ' + escapeMarkdown(order.product_name) + ' (سفارش #' + order.id + ')\n' +
+      '🛠 <b>درخواست گارانتی جدید</b>\n\n' +
+      customerRefHtml({ id: ctx.from.id, name: ctx.from.first_name || 'مشتری', username: ctx.from.username }) + '\n' +
+      '📦 محصول: ' + escapeHtml(order.product_name) + ' (سفارش #' + order.id + ')\n' +
       '📅 تاریخ تحویل: ' + formatJalaliDate(order.delivered_at!) + '\n' +
       '🛡 گارانتی تا: ' + formatJalaliDate(order.warranty_expires_at!);
 
-    let delivered = 0;
-    for (const adminId of ctx.app.cfg.adminIds) {
-      try {
-        await ctx.api.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
-        delivered++;
-      } catch (err: any) {
-        console.warn('⚠️ [Storefront] Failed to deliver warranty claim to admin ' + adminId + ':', err.message);
-      }
-    }
+    const delivered = await sendToAdmins(ctx.app, adminMsg, [customerContactRow(ctx.from.id, ctx.from.username, order.id)]);
 
     // No admin got it → don't start the once-a-day lock and don't claim success; the customer may retry.
     if (delivered === 0) {
@@ -533,6 +523,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         customerTelegramId: ctx.from.id,
         customerProductId: productId,
         productName, price, receiptFileId, receiptType, discountCodeId, receiptUniqueId,
+        customerUsername: ctx.from.username ?? null,
       });
       orderId = result.lastInsertRowid;
     } catch (err: any) {

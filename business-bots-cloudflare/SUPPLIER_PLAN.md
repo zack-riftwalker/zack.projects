@@ -348,6 +348,8 @@ CREATE INDEX IF NOT EXISTS idx_ledger_supplier ON wallet_ledger(supplier_id, id)
 PRAGMA defer_foreign_keys = off;
 ```
 
+D1 runs each migration file in an implicit transaction, which `defer_foreign_keys` needs; `FakeD1.migrate()` mirrors this by wrapping each file in BEGIN/COMMIT.
+
 Then:
 - **Update `src/store/db.ts`:** the `Order`, `CustomerProduct`, `DiscountCode` types and every `SELECT` that lists columns explicitly. Grep for `FROM orders` and `customer_products`.
 - **`STALLED_QUERY`:** add `AND (fulfillment IS NULL OR fulfillment <> 'supplier')`. Supplier orders get their own 20 h handling (§7.6). The index test must still pass.

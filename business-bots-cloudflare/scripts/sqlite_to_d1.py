@@ -31,16 +31,20 @@ EMBEDDING_VERSION = "3-768"
 
 # (table, target columns) in import order — must match migrations/*/*.sql (guarded by a test).
 STORE_TABLES = [
-    ("customers", ["id", "telegram_id", "display_name", "created_at", "ref_code"]),
-    ("customer_products", ["id", "name", "price", "terms_text", "terms_entities", "duration_days", "warranty_days", "is_active", "created_at", "is_available"]),
-    ("discount_codes", ["id", "code", "customer_product_id", "discount_type", "discount_value", "max_uses", "expires_at", "is_active", "created_at", "owner_telegram_id", "source"]),
+    ("customers", ["id", "telegram_id", "display_name", "created_at", "ref_code", "username"]),
+    ("customer_products", ["id", "name", "price", "terms_text", "terms_entities", "duration_days", "warranty_days", "is_active", "created_at", "is_available",
+                           "group_id", "option_label", "sort_order", "pricing_mode", "markup_percent", "markup_fixed", "cost_toman", "stock_mode", "price_updated_at"]),
+    ("discount_codes", ["id", "code", "customer_product_id", "discount_type", "discount_value", "max_uses", "expires_at", "is_active", "created_at", "owner_telegram_id", "source",
+                        "product_group_id"]),
     ("orders", ["id", "customer_telegram_id", "customer_product_id", "product_name", "price", "receipt_file_id", "receipt_type",
                 "purchase_source", "status", "created_at", "decided_at", "decided_by", "discount_code_id", "duration_days",
                 "warranty_days", "delivered_at", "expires_at", "warranty_expires_at", "reminded_7d", "reminded_3d",
-                "reminded_expired", "stalled_alert_sent", "last_warranty_claim_at", "paid_failed_handled", "reject_reason", "receipt_unique_id"]),
+                "reminded_expired", "stalled_alert_sent", "last_warranty_claim_at", "paid_failed_handled", "reject_reason", "receipt_unique_id",
+                "customer_username", "fulfillment", "needs_action_reason", "needs_action_at", "supplier_deadline_at", "cost_toman",
+                "cancel_reason", "cancelled_at", "cancelled_by", "refund_status", "refunded_at"]),
     ("discount_code_redemptions", ["id", "discount_code_id", "customer_telegram_id", "order_id", "redeemed_at"]),
     ("manual_purchase_claims", ["id", "creation_key", "token_hash", "customer_product_id", "product_name", "price", "duration_days",
-                                "warranty_days", "approved_by", "approved_at", "status", "claimed_by", "claimed_at", "order_id"]),
+                                "warranty_days", "approved_by", "approved_at", "status", "claimed_by", "claimed_at", "order_id", "fulfillment", "stock_account_id"]),
     ("store_settings", ["id", "card_number", "card_holder_name"]),
 ]
 STORE_REPLACE = {"store_settings"}

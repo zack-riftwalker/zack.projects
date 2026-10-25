@@ -44,6 +44,11 @@ export function tehranDateTimeString(date: Date = new Date()): string {
   return `${p.day} ${pad2(p.hour)}:${pad2(p.minute)}:${pad2(t.getUTCSeconds())}`;
 }
 
+/** Name used by the supplier code (§2.2); the same format as `datetime('now', '+03:30')`. */
+export function tehranDateTime(date: Date): string {
+  return tehranDateTimeString(date);
+}
+
 export function parseJalaliDateTime(text: string): string | null {
   const normalised = persianToAscii(String(text)).trim();
   const match = normalised.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s+(\d{1,2}):(\d{1,2})$/);

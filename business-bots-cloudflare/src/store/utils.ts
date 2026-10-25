@@ -14,6 +14,11 @@ export function escapeMarkdown(text: unknown): string {
   return String(text).replace(/([_*`\[])/g, '\\$1');
 }
 
+/** HTML parse-mode escaping for dynamic text (names, account values, supplier errors). */
+export function escapeHtml(text: unknown): string {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 export function parsePrice(text: string): number {
   const normalised = text
     .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 0x30))

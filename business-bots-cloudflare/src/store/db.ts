@@ -4,6 +4,9 @@ import { audienceFilter } from './audience';
 export interface CustomerProduct {
   id: number; name: string; price: number; terms_text: string | null;
   terms_entities: any[] | null; duration_days: number | null; warranty_days: number | null; is_active?: number; is_available?: number;
+  // round 3 (SUPPLIER_PLAN.md §2.1); present on rows that select them
+  group_id?: number | null; option_label?: string | null; sort_order?: number; pricing_mode?: string; markup_percent?: number | null;
+  markup_fixed?: number | null; cost_toman?: number | null; stock_mode?: string; price_updated_at?: string | null;
 }
 export interface Order {
   id: number; customer_telegram_id: number; customer_product_id: number; product_name: string; price: number;
@@ -12,11 +15,15 @@ export interface Order {
   duration_days: number | null; warranty_days: number | null; delivered_at: string | null;
   expires_at: string | null; warranty_expires_at: string | null; reminded_7d: number; reminded_3d: number;
   reminded_expired: number; stalled_alert_sent: number; reject_reason?: string | null; receipt_unique_id?: string | null; last_warranty_claim_at: string | null; paid_failed_handled: number;
+  // round 3 (SUPPLIER_PLAN.md §2.1)
+  customer_username?: string | null; fulfillment?: string | null; needs_action_reason?: string | null; needs_action_at?: string | null;
+  supplier_deadline_at?: string | null; cost_toman?: number | null; cancel_reason?: string | null; cancelled_at?: string | null;
+  cancelled_by?: number | null; refund_status?: string | null; refunded_at?: string | null;
 }
 export interface DiscountCode {
   id: number; code: string; customer_product_id: number; discount_type: 'percent' | 'fixed';
   discount_value: number; max_uses: number | null; expires_at: string; is_active: number; created_at: string;
-  owner_telegram_id?: number | null; source?: string;
+  owner_telegram_id?: number | null; source?: string; product_group_id?: number | null;
 }
 export interface BroadcastJob {
   id: number; admin_chat_id: number; text: string; entities: any[] | null; status: string;
@@ -45,6 +52,7 @@ export const STALLED_QUERY = `
       WHERE  status = 'confirmed' AND stalled_alert_sent = 0
         AND  decided_at IS NOT NULL
         AND  decided_at <= datetime('now', '+03:30', ?)
+        AND  (fulfillment IS NULL OR fulfillment <> 'supplier')
     `;
 export const REMINDER_SQL = REMINDER_QUERIES;
 
@@ -65,9 +73,18 @@ export class StoreDb {
     }
   }
 
-  async upsertCustomer({ telegramId, displayName }: { telegramId: number; displayName: string }) {
-    const r = await this.q('INSERT OR IGNORE INTO customers (telegram_id, display_name) VALUES (?, ?)', telegramId, displayName).run();
-    return { changes: r.meta.changes };
+  /**
+   * `changes` is 1 only for a brand-new customer (the INSERT's result). A given `username` (null = none) is written
+   * to existing rows too, without '@'.
+   */
+  async upsertCustomer({ telegramId, displayName, username }: { telegramId: number; displayName: string; username?: string | null }) {
+    const name = username ? username.replace(/^@/, '') : null;
+    const stmts = [this.q('INSERT OR IGNORE INTO customers (telegram_id, display_name, username) VALUES (?, ?, ?)', telegramId, displayName, name)];
+    if (username !== undefined) {
+      stmts.push(this.q('UPDATE customers SET username = ? WHERE telegram_id = ? AND username IS NOT ?', name, telegramId, name));
+    }
+    const [inserted] = await this.db.batch(stmts);
+    return { changes: inserted.meta.changes };
   }
 
   async getAllCustomerTelegramIds(): Promise<number[]> {
@@ -187,12 +204,14 @@ export class StoreDb {
   async createOrder(p: {
     customerTelegramId: number; customerProductId: number; productName: string; price: number;
     receiptFileId: string; receiptType: string; discountCodeId?: number | null; receiptUniqueId?: string | null;
+    customerUsername?: string | null;
   }) {
     const r = await this.q(`
     INSERT INTO orders
-      (customer_telegram_id, customer_product_id, product_name, price, receipt_file_id, receipt_type, discount_code_id, receipt_unique_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, p.customerTelegramId, p.customerProductId, p.productName, p.price, p.receiptFileId, p.receiptType, p.discountCodeId || null, p.receiptUniqueId || null).run();
+      (customer_telegram_id, customer_product_id, product_name, price, receipt_file_id, receipt_type, discount_code_id, receipt_unique_id, customer_username)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, p.customerTelegramId, p.customerProductId, p.productName, p.price, p.receiptFileId, p.receiptType, p.discountCodeId || null, p.receiptUniqueId || null,
+      p.customerUsername || null).run();
     return { lastInsertRowid: r.meta.last_row_id };
   }
 
@@ -239,13 +258,14 @@ export class StoreDb {
           customer_telegram_id, customer_product_id, product_name, price,
           receipt_file_id, receipt_type, purchase_source, status, created_at,
           decided_at, decided_by, duration_days, warranty_days, delivered_at,
-          expires_at, warranty_expires_at
+          expires_at, warranty_expires_at, customer_username
         )
         SELECT ?, c.customer_product_id, c.product_name, c.price, NULL, NULL, 'manual', 'delivered', c.approved_at,
           c.approved_at, c.approved_by, c.duration_days, c.warranty_days, c.approved_at,
           CASE WHEN c.duration_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.duration_days || ' days') END,
-          CASE WHEN c.warranty_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.warranty_days || ' days') END
-        FROM manual_purchase_claims c WHERE c.token_hash = ? AND c.claimed_by = ? AND c.order_id IS NULL`, me, h, me),
+          CASE WHEN c.warranty_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.warranty_days || ' days') END,
+          (SELECT username FROM customers WHERE telegram_id = ?)
+        FROM manual_purchase_claims c WHERE c.token_hash = ? AND c.claimed_by = ? AND c.order_id IS NULL`, me, me, h, me),
       this.q(`UPDATE manual_purchase_claims SET order_id = (SELECT MAX(id) FROM orders)
         WHERE token_hash = ? AND claimed_by = ? AND order_id IS NULL`, h, me),
       this.q('SELECT * FROM manual_purchase_claims WHERE token_hash = ?', h),
@@ -533,9 +553,9 @@ export class StoreDb {
   /** A free-product reward: an already-confirmed 0-Toman order that follows the normal delivery flow. */
   async createRewardOrder(p: { customerTelegramId: number; product: CustomerProduct }): Promise<number> {
     const r = await this.q(`
-    INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, purchase_source, status, decided_at, decided_by, duration_days, warranty_days)
-    VALUES (?, ?, ?, 0, 'manual', 'confirmed', datetime('now', '+03:30'), 0, ?, ?)
-  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null).run();
+    INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, purchase_source, status, decided_at, decided_by, duration_days, warranty_days, customer_username)
+    VALUES (?, ?, ?, 0, 'manual', 'confirmed', datetime('now', '+03:30'), 0, ?, ?, (SELECT username FROM customers WHERE telegram_id = ?))
+  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null, p.customerTelegramId).run();
     return r.meta.last_row_id;
   }
 
