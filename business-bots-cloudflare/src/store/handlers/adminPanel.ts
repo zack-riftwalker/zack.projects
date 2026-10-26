@@ -16,6 +16,9 @@ const LABEL = {
   supplier: SUPPLIER_LABEL,
 };
 
+/** The reply-keyboard buttons of the admin panel. */
+export const ADMIN_PANEL_LABELS: string[] = Object.values(LABEL);
+
 export function adminPanelKeyboard() {
   return Markup.keyboard([
     [LABEL.announce, LABEL.report],

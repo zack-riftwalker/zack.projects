@@ -17,7 +17,8 @@ import { storeSettingsWizard } from './handlers/storeSettings';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
-import { registerSupplierPanel } from './handlers/supplierPanel';
+import { registerSupplierPanel, supplierTextMiddleware } from './handlers/supplierPanel';
+import { STAGE_BYPASS_RE } from './supplierInput';
 import { REF_PAYLOAD_RE, handleRefStart } from './referrals';
 import type { StoreContext, StoreSession } from './types';
 
@@ -62,6 +63,9 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     getSessionKey: (ctx) => (ctx.from && ctx.chat ? `${ctx.from.id}:${ctx.chat.id}` : undefined),
   }));
 
+  // supplier prompts take their typed answer before any wizard can (SUPPLIER_PLAN.md §9.1)
+  bot.use(supplierTextMiddleware(isAdmin));
+
   const stage = new Stage<StoreContext>([
     announceWizard, customerProductsWizard, customerProductsDeactivateWizard, customerProductsEditWizard,
     discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard,
@@ -69,7 +73,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     manualPurchaseWizard,
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
-    bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+|sup_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
+    bypass: (ctx) => STAGE_BYPASS_RE.test(ctx.callbackQuery?.data ?? ''),
     // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
     exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
   });

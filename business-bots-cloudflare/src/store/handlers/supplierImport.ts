@@ -10,6 +10,7 @@ import {
   optionsFromItems, unknownAttributes, type ImportDraft, type ImportOption,
 } from '../suppliers/importDraft';
 import { parseDays } from './customerProducts';
+import { beginSupplierInput, type SupplierInputKind } from '../supplierInput';
 
 const cb = (text: string, data: string): InlineButton => Markup.button.callback(text, data);
 const html = { parse_mode: 'HTML' as const };
@@ -212,8 +213,8 @@ export async function handleImportCallback(ctx: StoreContext, data: string): Pro
   return false;
 }
 
-async function askInput(ctx: StoreContext, kind: NonNullable<StoreContext['session']['awaitingSupplierInput']>['kind'], ref: string, prompt: string): Promise<boolean> {
-  ctx.session.awaitingSupplierInput = { kind, ref, at: ctx.app.apps.now().getTime() };
+async function askInput(ctx: StoreContext, kind: SupplierInputKind, ref: string, prompt: string): Promise<boolean> {
+  await beginSupplierInput(ctx, kind, ref);
   await ctx.answerCallbackQuery();
   await ctx.reply(prompt, Markup.inlineKeyboard([[CANCEL]]));
   return true;

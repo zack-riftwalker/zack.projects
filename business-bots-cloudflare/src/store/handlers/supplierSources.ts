@@ -7,6 +7,7 @@ import { recomputeOption } from '../suppliers/recompute';
 import { getSupplierDefaults } from '../supplierDefaults';
 import type { StoreApp } from '../../apps';
 import { tehranDateTime } from '../../lib/time';
+import { beginSupplierInput } from '../supplierInput';
 
 const cb = (text: string, data: string): InlineButton => Markup.button.callback(text, data);
 const html = { parse_mode: 'HTML' as const };
@@ -206,7 +207,7 @@ export async function handleSourcesCallback(ctx: StoreContext, data: string): Pr
   const pmkInput = m(/^sup_pmk([pf])_(\d+)$/);
   if (pmkInput) {
     const kind = pmkInput[1] === 'p' ? 'src_percent' : 'src_fixed';
-    ctx.session.awaitingSupplierInput = { kind, ref: pmkInput[2], at: app.apps.now().getTime() };
+    await beginSupplierInput(ctx, kind, pmkInput[2]);
     await ctx.answerCallbackQuery();
     await ctx.reply(kind === 'src_percent' ? '٪ درصد سود این محصول را وارد کنید (۰ تا ۵۰۰):' : '＋ مبلغ ثابت سود این محصول را به تومان وارد کنید (۰ مجاز است):');
     return true;

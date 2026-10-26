@@ -4,6 +4,7 @@ import { processBroadcastBatch } from '../broadcast';
 import { adminProductLabel, buildPagedKeyboard, formatPrice, parsePrice, productPickerKeyboard } from '../utils';
 import { parseDays, productNameError } from './customerProducts';
 import type { CustomerProduct } from '../db';
+import { recomputeOption } from '../suppliers/recompute';
 import type { StoreContext } from '../types';
 
 const CANCEL_BTN = Markup.button.callback('❌ انصراف', 'cprod_edit_cancel');
@@ -53,7 +54,7 @@ export function productCardText(p: CustomerProduct): string {
   );
 }
 
-function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callback>[][] = []) {
+function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callback>[][] = [], canAutoStock = false) {
   const grouped = p.group_id != null;
   return Markup.inlineKeyboard([
     grouped
@@ -62,6 +63,7 @@ function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callb
     [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms')],
     [Markup.button.callback('⏱ مدت اشتراک', 'cprod_edit_f_duration'), Markup.button.callback('🛡 گارانتی', 'cprod_edit_f_warranty')],
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
+    ...(canAutoStock ? [[Markup.button.callback('📦 موجودی خودکار', 'cprod_edit_stock_auto')]] : []),
     [Markup.button.callback('🗂 گروه', 'cprod_edit_grp_menu'), Markup.button.callback('🔢 ترتیب گزینه', 'cprod_edit_f_sort')],
     ...(grouped ? [[Markup.button.callback('✏️ نام گروه', 'cprod_edit_f_grpname'), Markup.button.callback('🔢 ترتیب گروه', 'cprod_edit_f_grpsort')]] : []),
     [Markup.button.callback('🔌 منابع و قیمت', 'sup_src_' + p.id)],
@@ -110,7 +112,10 @@ async function productGone(ctx: StoreContext) {
 /** Shows the card as a new message (after text input) or edits the current one (after a button). */
 async function showCard(ctx: StoreContext, p: CustomerProduct, opts: { prefix?: string; edit?: boolean; extra?: any[][] } = {}) {
   const text = (opts.prefix ? opts.prefix + '\n\n' : '') + productCardText(p);
-  const kb = cardKb(p, opts.extra);
+  // a manual stock setting on an option with supplier sources can be handed back to the supplier
+  const canAutoStock = p.stock_mode === 'manual' && (await ctx.app.raw.prepare(
+    'SELECT 1 AS x FROM product_sources WHERE customer_product_id = ? LIMIT 1').bind(p.id).first()) !== null;
+  const kb = cardKb(p, opts.extra, canAutoStock);
   if (opts.edit) {
     await ctx.editMessageText(text, kb).catch(() => {});
   } else {
@@ -313,7 +318,9 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
 
       if (data === 'cprod_edit_toggle_stock') {
         const makeAvailable = p.is_available === 0;
-        if (!(await applyPatch(ctx, { isAvailable: makeAvailable }))) {
+        // a hand-made ⛔️/✅ on a supplier-stocked option must stick: the next recompute leaves manual stock alone
+        const patch = p.stock_mode === 'auto' ? { isAvailable: makeAvailable, stockMode: 'manual' as const } : { isAvailable: makeAvailable };
+        if (!(await applyPatch(ctx, patch))) {
           await ctx.answerCallbackQuery();
           return productGone(ctx);
         }
@@ -330,6 +337,17 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
           }
         }
         await showCard(ctx, fresh, { edit: true, extra });
+        return;
+      }
+
+      if (data === 'cprod_edit_stock_auto') {
+        if (!(await applyPatch(ctx, { stockMode: 'auto' }))) {
+          await ctx.answerCallbackQuery();
+          return productGone(ctx);
+        }
+        await recomputeOption(ctx.app, p.id);
+        await ctx.answerCallbackQuery('📦 موجودی خودکار شد.');
+        await showCard(ctx, (await loadProduct(ctx))!, { edit: true });
         return;
       }
 

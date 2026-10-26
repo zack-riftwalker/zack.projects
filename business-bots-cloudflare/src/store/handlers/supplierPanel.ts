@@ -1,4 +1,4 @@
-import type { Bot } from 'grammy';
+import type { Bot, MiddlewareFn } from 'grammy';
 import type { StoreApp } from '../../apps';
 import { Markup, type InlineButton } from '../../lib/markup';
 import { formatJalaliDateTime } from '../../lib/time';
@@ -11,11 +11,14 @@ import {
 import type { Catalog, SupplierRow } from '../suppliers/types';
 import { getSupplierDefaults, setSupplierDefaults } from '../supplierDefaults';
 import type { StoreContext } from '../types';
+import {
+  INPUT_TTL_MS, KEY_INPUT_KINDS, STAGE_BYPASS_RE, beginSupplierInput, beginSupplierWizard, clearSupplierInputs, type SupplierInputKind,
+} from '../supplierInput';
+import { ADMIN_PANEL_LABELS } from './adminPanel';
 import { handleImportCallback, handleImportText, startImport } from './supplierImport';
 import { handleSourcesCallback, handleSourcesText } from './supplierSources';
 import { recomputeOption } from '../suppliers/recompute';
 
-const INPUT_TTL_MS = 15 * 60_000;
 const ITEMS_PAGE_PREFIX = 'sup_items_';
 const CANCEL_INPUT = Markup.button.callback('❌ انصراف', 'sup_cancel_input');
 
@@ -127,7 +130,7 @@ const WIZ_STEP_TEXT: Record<string, string> = {
 
 async function askWizardStep(ctx: StoreContext, step: string, extra: InlineButton[][] = []) {
   const wizardKb = kb([...extra, [CANCEL_INPUT]]);
-  ctx.session.supplierWizard = { step, data: ctx.session.supplierWizard?.data ?? {} };
+  await beginSupplierWizard(ctx, step, ctx.session.supplierWizard?.data ?? {});
   await ctx.reply(WIZ_STEP_TEXT[step], wizardKb);
 }
 
@@ -151,11 +154,11 @@ async function testAndMaybeSave(ctx: StoreContext, data: Record<string, any>): P
     return;
   }
   if (r.kind === 'auth') {
-    ctx.session.supplierWizard = { step: 'test', data: { ...data, apiKey: undefined } };
+    ctx.session.supplierWizard = { step: 'test', data: { ...data, apiKey: undefined }, at: ctx.app.apps.now().getTime() };
     await ctx.reply('❌ کلید API نامعتبر است.', kb([[cb('🔁 دوباره کلید را می‌فرستم', 'sup_add_retype')], [CANCEL_INPUT]]));
     return;
   }
-  ctx.session.supplierWizard = { step: 'test', data };
+  ctx.session.supplierWizard = { step: 'test', data, at: ctx.app.apps.now().getTime() };
   await ctx.reply(
     '❌ اتصال ناموفق بود: ' + escapeHtml(r.detail.slice(0, 300)),
     { ...html, ...kb([[cb('💾 ذخیره بدون تست', 'sup_add_save_untested')], [cb('🔁 دوباره', 'sup_add_retry')], [CANCEL_INPUT]]) },
@@ -213,25 +216,17 @@ const INPUT_PROMPT: Record<string, string> = {
   def_fixed: '＋ مبلغ ثابت سود پیش‌فرض را به تومان وارد کنید (۰ مجاز است):',
 };
 
-type TypedInput = NonNullable<StoreContext['session']['awaitingSupplierInput']>['kind'];
-
-async function startInput(ctx: StoreContext, kind: TypedInput, ref: string) {
-  ctx.session.awaitingSupplierInput = { kind, ref, at: ctx.app.apps.now().getTime() };
+async function startInput(ctx: StoreContext, kind: SupplierInputKind, ref: string) {
+  await beginSupplierInput(ctx, kind, ref);
   await ctx.answerCallbackQuery();
   await ctx.reply(INPUT_PROMPT[kind], kb([[CANCEL_INPUT]]));
 }
 
-function clearInputs(ctx: StoreContext) {
-  if (!ctx.session) return;
-  ctx.session.awaitingSupplierInput = null;
-  ctx.session.supplierWizard = null;
-  ctx.session.supplierImport = null;
-}
+const clearInputs = clearSupplierInputs;
 
 /** One add-supplier step: name → url → key (message deleted) → user id → connection test. */
 async function handleWizardText(ctx: StoreContext, step: string, text: string): Promise<void> {
   const d = ctx.session.supplierWizard!.data;
-  if (step === 'key') await ctx.deleteMessage().catch(() => {});
 
   if (step === 'name') {
     const name = text.trim();
@@ -333,7 +328,7 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
 
     // add-supplier steps
     if (data === 'sup_add') {
-      ctx.session.supplierWizard = { step: 'name', data: {} };
+      await beginSupplierWizard(ctx, 'name', {});
       await ctx.answerCallbackQuery();
       await ctx.reply(WIZ_STEP_TEXT.name, kb([[cb('آریوباکس (پیش‌فرض)', 'sup_add_name_default')], [CANCEL_INPUT]]));
       return;
@@ -404,59 +399,92 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
 
     await ctx.answerCallbackQuery();
   });
+}
 
-  // typed inputs: the add-supplier steps, and the one open edit or default-markup prompt
-  bot.on('message:text', async (ctx, next) => {
-    if (!isAdmin(ctx.from?.id) || !ctx.session) return next();
-    const text = ctx.message.text;
-    if (text.startsWith('/')) {
-      clearInputs(ctx);
+/**
+ * Typed answers of the supplier prompts: the add-supplier steps and the one open input (SUPPLIER_PLAN.md §9.1).
+ * It runs BEFORE the Stage, so no wizard can take a message that answers a supplier prompt, and an API key
+ * message is deleted before any other handler can see it. Every later text prompt (fo_*, stk_*) goes through here.
+ */
+export function supplierTextMiddleware(isAdmin: (id: number | undefined) => boolean): MiddlewareFn<StoreContext> {
+  return async (ctx, next) => {
+    if (!ctx.session || !isAdmin(ctx.from?.id)) return next();
+
+    // a button of another wizard ends an open supplier prompt: the wizard's next message is its own input
+    const data = ctx.callbackQuery?.data;
+    if (data !== undefined) {
+      if (ctx.session.__scene && !STAGE_BYPASS_RE.test(data)) {
+        ctx.session.awaitingSupplierInput = null;
+        ctx.session.supplierWizard = null;
+      }
       return next();
     }
+
+    const text = ctx.message?.text;
+    if (text === undefined) return next();
     const wiz = ctx.session.supplierWizard;
     const pending = ctx.session.awaitingSupplierInput;
     const wizardStep = wiz && ['name', 'url', 'key', 'user'].includes(wiz.step) ? wiz.step : null;
     if (!wizardStep && !pending) return next();
 
-    if (!wizardStep && pending && ctx.app.apps.now().getTime() - pending.at > INPUT_TTL_MS) {
+    // commands and panel buttons abandon the prompt and run normally
+    if (text.startsWith('/') || ADMIN_PANEL_LABELS.includes(text)) {
+      clearInputs(ctx);
+      return next();
+    }
+
+    // the key is deleted first, whatever happens next (also when the prompt has expired)
+    const isKey = wizardStep === 'key' || (!wizardStep && !!pending && KEY_INPUT_KINDS.includes(pending.kind));
+    if (isKey) {
+      await ctx.deleteMessage().catch(() => {});
+      await ctx.reply('🔑 کلید دریافت و پیام حاوی آن پاک شد.').catch(() => {});
+    }
+
+    const now = ctx.app.apps.now().getTime();
+    const startedAt = wizardStep ? wiz!.at : pending!.at;
+    if (startedAt !== undefined && now - startedAt > INPUT_TTL_MS) {
       clearInputs(ctx);
       await ctx.reply('⌛️ مهلت ورود تمام شد. دوباره از پنل شروع کنید.');
       return;
     }
 
     if (wizardStep) {
+      if (wiz!.at !== undefined) wiz!.at = now;
       await handleWizardText(ctx, wizardStep, text);
       return;
     }
-
-    if (await handleImportText(ctx, pending!.kind, pending!.ref, text)) {
-      ctx.session.awaitingSupplierInput = null;
-      return;
-    }
-    if (await handleSourcesText(ctx, pending!.kind, pending!.ref, text)) return;
-
-    const problem = await applyTypedInput(ctx, pending!.kind, pending!.ref, text);
-    if (pending!.kind === 'sup_key_edit') await ctx.deleteMessage().catch(() => {});
-    if (problem) {
-      await ctx.reply(problem);
-      return;
-    }
-    ctx.session.awaitingSupplierInput = null;
-    if (pending!.kind.startsWith('def_')) {
-      const v = await defaultsView(ctx.app);
-      await ctx.reply('✅ ذخیره شد.\n\n' + v.text, { ...html, ...kb([
-        [cb('🔁 اعمال روی همه‌ی گزینه‌های خودکاری که سود اختصاصی ندارند', 'sup_defapply')],
-        [cb('🔙 بازگشت', 'sup_menu')],
-      ]) });
-      return;
-    }
-    const s = await getSupplier(ctx.app, parseInt(pending!.ref, 10));
-    if (!s) {
-      await ctx.reply('✅ ذخیره شد.');
-      return;
-    }
-    const v = await cardView(ctx.app, s);
-    await ctx.reply('✅ ذخیره شد.\n\n' + v.text, { ...html, ...v.keyboard });
-  });
+    await handleInputText(ctx, pending!, text);
+  };
 }
 
+async function handleInputText(
+  ctx: StoreContext, pending: NonNullable<StoreContext['session']['awaitingSupplierInput']>, text: string,
+): Promise<void> {
+  if (await handleImportText(ctx, pending.kind, pending.ref, text)) {
+    ctx.session.awaitingSupplierInput = null;
+    return;
+  }
+  if (await handleSourcesText(ctx, pending.kind, pending.ref, text)) return;
+
+  const problem = await applyTypedInput(ctx, pending.kind, pending.ref, text);
+  if (problem) {
+    await ctx.reply(problem);
+    return;
+  }
+  ctx.session.awaitingSupplierInput = null;
+  if (pending.kind.startsWith('def_')) {
+    const v = await defaultsView(ctx.app);
+    await ctx.reply('✅ ذخیره شد.\n\n' + v.text, { ...html, ...kb([
+      [cb('🔁 اعمال روی همه‌ی گزینه‌های خودکاری که سود اختصاصی ندارند', 'sup_defapply')],
+      [cb('🔙 بازگشت', 'sup_menu')],
+    ]) });
+    return;
+  }
+  const s = await getSupplier(ctx.app, parseInt(pending.ref, 10));
+  if (!s) {
+    await ctx.reply('✅ ذخیره شد.');
+    return;
+  }
+  const v = await cardView(ctx.app, s);
+  await ctx.reply('✅ ذخیره شد.\n\n' + v.text, { ...html, ...v.keyboard });
+}

@@ -132,7 +132,7 @@ export class StoreDb {
     try {
       const row = await this.q(`
       SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
-             group_id, option_label, sort_order, cost_toman
+             group_id, option_label, sort_order, cost_toman, stock_mode
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -158,7 +158,7 @@ export class StoreDb {
   /** Edits an ACTIVE product; columns come from a fixed whitelist. changes = 0 → missing or deactivated. */
   async updateCustomerProduct(id: number, patch: Partial<{
     name: string; price: number; termsText: string | null; termsEntities: any[] | null;
-    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean;
+    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean; stockMode: 'auto' | 'manual';
   }>) {
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -170,6 +170,7 @@ export class StoreDb {
     if (patch.durationDays !== undefined) add('duration_days', patch.durationDays || null);
     if (patch.warrantyDays !== undefined) add('warranty_days', patch.warrantyDays || null);
     if (patch.isAvailable !== undefined) add('is_available', patch.isAvailable ? 1 : 0);
+    if (patch.stockMode !== undefined) add('stock_mode', patch.stockMode);
     if (!sets.length) return { changes: 0 };
     const r = await this.q('UPDATE customer_products SET ' + sets.join(', ') + ' WHERE id = ? AND is_active = 1', ...args, id).run();
     return { changes: r.meta.changes };

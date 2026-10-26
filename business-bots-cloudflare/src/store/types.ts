@@ -22,7 +22,7 @@ export interface StoreSession extends SceneSession {
   awaitingRejectReasonFor?: { orderId: number; chatId: number; messageId: number; caption: string; at: number } | null;
   /** admin typing one value of the supplier panel (expires after 15 min) */
   awaitingSupplierInput?: {
-    kind: 'sup_key_edit' | 'sup_uid' | 'def_percent' | 'def_fixed'
+    kind: 'sup_key' | 'sup_key_edit' | 'sup_uid' | 'def_percent' | 'def_fixed'
       | 'imp_group' | 'imp_label' | 'imp_duration' | 'imp_warranty' | 'imp_percent' | 'imp_fixed' | 'imp_terms'
       | 'src_percent' | 'src_fixed';
     ref: string; at: number;
@@ -30,7 +30,7 @@ export interface StoreSession extends SceneSession {
   /** the product import being prepared (SUPPLIER_PLAN.md §5.1) */
   supplierImport?: ImportDraft | null;
   /** add-supplier steps: the step name and the values typed so far (the key only until the test) */
-  supplierWizard?: { step: string; data: Record<string, any> } | null;
+  supplierWizard?: { step: string; data: Record<string, any>; at?: number } | null;
 }
 
 export type StoreContext = Context & SessionFlavor<StoreSession> & WizardFlavor & { app: StoreApp };

@@ -871,7 +871,12 @@ After `fo_done` / `fo_text`, ask `💵 هزینه‌ی خرید این اکان�
 ## 9. Wiring (S1–S7)
 
 ### 9.1 `store/bot.ts`
-- **Registration:** `registerSupplierPanel(bot, isAdmin)` and `registerFulfillmentAdmin(bot, isAdmin)` go before `registerStorefrontHandler`. The text-input handler (§9.2) goes after the stage middleware and before the admin `message:text` fallback, next to the existing reject-reason input.
+- **Registration:** `registerSupplierPanel(bot, isAdmin)` and `registerFulfillmentAdmin(bot, isAdmin)` go before `registerStorefrontHandler`.
+- **Handler order for typed input (rule, S5–S9 rely on it):** the supplier text-input middleware (`supplierTextMiddleware`, §9.2) is registered **before** the Stage middleware, right after the session. Whenever `awaitingSupplierInput` or `supplierWizard` is set, it takes the admin's text itself, so no wizard (add/edit product, discount code, ...) can ever receive an answer meant for a supplier prompt. Every new text prompt (`fo_text`, `fo_msg`, `fo_cost`, `stk_*`, ...) is a new `kind` handled by this one middleware; never add a second text handler for it behind the Stage.
+  - Every place that opens a prompt calls `beginSupplierInput` / `beginSupplierWizard` (`src/store/supplierInput.ts`), which also leaves any active scene.
+  - Commands (`/...`) and admin panel buttons end the open prompt and then run normally. A button of another wizard (a callback outside the Stage `bypass` list) ends it too while a scene is active.
+  - **Key prompts** (`sup_key`, `sup_key_edit`, wizard step `key`): the middleware deletes the incoming message first of all, even if the prompt has expired, and confirms with `🔑 کلید دریافت و پیام حاوی آن پاک شد.`
+  - Prompts and the add-supplier wizard expire after 15 minutes (`INPUT_TTL_MS`); expiring clears the session fields, so the API key doesn't stay in the `sessions` row.
 - **Stage `bypass` regex:** extend it to `^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+|fo_\w+|sup_\w+|stk_\w+|acct_show_\d+)$`.
 - **Callback data length:** every callback string must stay ≤ 64 bytes. With ids ≤ 24 characters, `sup_impv_<i>` and `sup_imp_<sid>_<pid>` fit; assert it in a test.
 
