@@ -542,6 +542,12 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     const { productId, productName, price, discountCodeId } = pending;
     let orderId: number;
     try {
+      // keep the customer's @username current: admins see it on the receipt and the contact buttons (SUPPLIER_PLAN.md §2.3)
+      await ctx.app.db.upsertCustomer({
+        telegramId: ctx.from.id,
+        displayName: ctx.from.first_name || ctx.from.username || String(ctx.from.id),
+        username: ctx.from.username ?? null,
+      });
       const result = await ctx.app.db.createOrder({
         customerTelegramId: ctx.from.id,
         customerProductId: productId,
@@ -758,6 +764,7 @@ const DISCOUNT_REASON_ADMIN: Record<string, string> = {
   max_uses: 'ظرفیت کد پر شده',
   already_used: 'مشتری قبلاً از این کد استفاده کرده یا ظرفیت پر شده',
   check_failed: 'بررسی کد ناموفق بود',
+  below_cost: 'قیمت با این کد از قیمت خرید کمتر می‌شود',
 };
 
 /** Shared confirm/reject handler. Double-tap / second-admin safe via decideOrder's status guard. */

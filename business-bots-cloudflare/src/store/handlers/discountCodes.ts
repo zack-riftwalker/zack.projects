@@ -33,9 +33,14 @@ export const DISCOUNT_ERROR_LABEL: Record<string, string> = {
 
 export type DiscountValidation = { ok: true; discountCode: DiscountCode } | { ok: false; reason: string };
 
-/** active → matches product → not expired → not used by this customer → cap not reached. Fails closed. */
+/**
+ * active → matches product → not expired → not used by this customer → cap not reached → (at code entry only)
+ * not below the supplier cost. Fails closed. The cost floor is not re-checked at receipt confirmation: the
+ * customer paid the price they were shown, and skipping the redemption would make a single-use code reusable.
+ */
 async function validateDiscountCodeRecord(
   app: StoreApp, discountCode: DiscountCode | undefined, product: CustomerProduct | undefined, customerTelegramId: number,
+  checkFloor: boolean,
 ): Promise<DiscountValidation> {
   if (!discountCode) return { ok: false, reason: 'not_found' };
   if (!discountCode.is_active) return { ok: false, reason: 'inactive' };
@@ -61,19 +66,19 @@ async function validateDiscountCodeRecord(
     return { ok: false, reason: 'check_failed' };
   }
 
-  // never below the supplier cost (SUPPLIER_PLAN.md §5.4), checked last
-  if (product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {
+  // never below the supplier cost (SUPPLIER_PLAN.md §5.4), checked last, at code entry only
+  if (checkFloor && product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {
     return { ok: false, reason: 'below_cost' };
   }
   return { ok: true, discountCode };
 }
 
 export async function validateDiscountCode(app: StoreApp, codeText: string, product: CustomerProduct | undefined, customerTelegramId: number) {
-  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeByCode(codeText), product, customerTelegramId);
+  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeByCode(codeText), product, customerTelegramId, true);
 }
 
 export async function validateDiscountCodeForOrder(app: StoreApp, discountCodeId: number, product: CustomerProduct | undefined, customerTelegramId: number) {
-  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeById(discountCodeId), product, customerTelegramId);
+  return validateDiscountCodeRecord(app, await app.db.getDiscountCodeById(discountCodeId), product, customerTelegramId, false);
 }
 
 // ─── Shared wizard step bodies (used by both Add and Edit wizards) ───────────

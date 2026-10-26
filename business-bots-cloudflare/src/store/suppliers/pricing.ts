@@ -6,9 +6,18 @@ export const costToman = (priceUsd: number, usdToman: number): number => Math.ro
 /** Rounds up to the next 10,000 Toman. */
 export const roundUp10k = (amount: number): number => Math.ceil(amount / 10_000) * 10_000;
 
-/** ceil((cost × (1 + percent/100) + fixed) / 10000) × 10000 */
+/**
+ * ceil((cost × (1 + percent/100) + fixed) / 10000) × 10000, in integer arithmetic: the percent is taken in
+ * hundredths, so 100000 × 1.10 can't become 110000.00000000001 and round up to 120000.
+ */
 export function finalPrice(cost: number, markup: { percent: number; fixed: number }): number {
-  return roundUp10k(cost * (1 + markup.percent / 100) + markup.fixed);
+  const unit = 10_000;
+  const scale = 10_000; // (1 + percent/100) = (10000 + hundredths) / 10000
+  const hundredths = Math.round(markup.percent * 100);
+  const total = Math.round(cost) * (scale + hundredths) + Math.round(markup.fixed) * scale; // Toman × 10⁻⁴
+  const step = unit * scale;
+  const units = total % step === 0 ? total / step : Math.floor(total / step) + 1;
+  return units * unit;
 }
 
 /**

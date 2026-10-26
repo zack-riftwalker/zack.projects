@@ -6,7 +6,7 @@ import { sendToAdmins } from '../customerRef';
 import { applyDiscount } from '../handlers/discountCodes';
 import { adapterFor } from './index';
 import { catalogHash, readCatalog, sortItems, writeCatalog } from './store';
-import { recomputeOption, type OptionChange } from './recompute';
+import { loadRecomputeEnv, recomputeOption, type OptionChange } from './recompute';
 import type { CatalogItem, SupplierRow } from './types';
 
 /** Statements per apply tick (SUPPLIER_PLAN.md §6.2). */
@@ -119,10 +119,13 @@ export async function applyCatalog(app: StoreApp, supplierId: number): Promise<v
   const optionIds = [...new Set(sources.map((x) => x.customer_product_id))];
   let cursor = Number((await getAppState(app.raw, 'sync_cursor_' + supplierId)) ?? '0');
   if (phase1Done) {
+    const env = await loadRecomputeEnv(app);
     while (cursor < optionIds.length && statements < APPLY_STATEMENTS_PER_TICK && app.apps.budget.remaining() >= APPLY_RESERVE) {
-      const change = await recomputeOption(app, optionIds[cursor++]);
-      statements += 5;
+      // count what the option really cost (recompute plus the report's waitlist and discount-code reads)
+      const usedBefore = app.apps.budget.used;
+      const change = await recomputeOption(app, optionIds[cursor++], env);
       if (change) report.push(...(await changeLines(app, change)));
+      statements += app.apps.budget.used - usedBefore;
     }
   }
 
@@ -160,7 +163,7 @@ async function changeLines(app: StoreApp, c: OptionChange): Promise<string[]> {
     lines.push('⚠️ ' + name + ': قیمت فروش (ثابت) ' + formatPrice(c.newPrice) + ' از قیمت خرید ' + formatPrice(c.cost) + ' کمتر شده');
   }
   if (c.cost !== null) {
-    const codes = await app.db.getActiveCodesForProduct(c.productId, null);
+    const codes = await app.db.getActiveCodesForProduct(c.productId, c.groupId);
     for (const code of codes.filter((x) => x.discount_type === 'fixed')) {
       if (applyDiscount(c.newPrice, code) < c.cost) {
         lines.push('⚠️ کد تخفیف ' + escapeHtml(code.code) + ' روی «' + name + '» حالا قیمت را زیر قیمت خرید می‌برد');
@@ -187,9 +190,28 @@ async function newVariationLines(app: StoreApp, supplierId: number, items: Catal
   return lines;
 }
 
+const CODE_WARNING_PREFIX = '⚠️ کد تخفیف ';
+const CODE_WARNING_MAX = 5;
+
+/** Keeps the first 5 discount-code warnings and counts the rest in one line (SUPPLIER_PLAN.md §6.2). */
+export function capCodeWarnings(lines: string[]): string[] {
+  let seen = 0;
+  let dropped = 0;
+  const kept = lines.filter((l) => {
+    if (!l.startsWith(CODE_WARNING_PREFIX)) return true;
+    seen++;
+    if (seen <= CODE_WARNING_MAX) return true;
+    dropped++;
+    return false;
+  });
+  if (dropped > 0) kept.push('… و ' + formatPrice(dropped) + ' هشدار کد تخفیف دیگر');
+  return kept;
+}
+
 /** One message per finished round, cut to 3,500 characters (SUPPLIER_PLAN.md §6.2). */
-async function flushReport(app: StoreApp, supplierId: number, lines: string[]): Promise<void> {
+async function flushReport(app: StoreApp, supplierId: number, allLines: string[]): Promise<void> {
   await setAppState(app.raw, 'sync_report_' + supplierId, '[]');
+  const lines = capCodeWarnings(allLines);
   if (lines.length === 0) return;
   let text = '🔄 <b>گزارش همگام‌سازی</b>\n';
   let shown = 0;

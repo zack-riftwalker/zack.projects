@@ -17,7 +17,8 @@ import {
 import { ADMIN_PANEL_LABELS } from './adminPanel';
 import { handleImportCallback, handleImportText, startImport } from './supplierImport';
 import { handleSourcesCallback, handleSourcesText } from './supplierSources';
-import { recomputeOption } from '../suppliers/recompute';
+import { handleOrderMessageText } from './orderMessage';
+import { recomputeOption, recomputeSupplierOptions } from '../suppliers/recompute';
 
 const ITEMS_PAGE_PREFIX = 'sup_items_';
 const CANCEL_INPUT = Markup.button.callback('❌ انصراف', 'sup_cancel_input');
@@ -224,6 +225,12 @@ async function startInput(ctx: StoreContext, kind: SupplierInputKind, ref: strin
 
 const clearInputs = clearSupplierInputs;
 
+/** True when the add-supplier steps were last touched more than INPUT_TTL_MS ago. */
+function wizardExpired(ctx: StoreContext): boolean {
+  const at = ctx.session.supplierWizard?.at;
+  return at !== undefined && ctx.app.apps.now().getTime() - at > INPUT_TTL_MS;
+}
+
 /** One add-supplier step: name → url → key (message deleted) → user id → connection test. */
 async function handleWizardText(ctx: StoreContext, step: string, text: string): Promise<void> {
   const d = ctx.session.supplierWizard!.data;
@@ -326,6 +333,14 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
       return;
     }
 
+    // an add-supplier button after the 15 minutes: the wizard (and the key it holds) is gone
+    if (data.startsWith('sup_add_') && wizardExpired(ctx)) {
+      clearInputs(ctx);
+      await ctx.answerCallbackQuery();
+      await ctx.reply('⌛️ مهلت ورود تمام شد. دوباره از پنل شروع کنید.');
+      return;
+    }
+
     // add-supplier steps
     if (data === 'sup_add') {
       await beginSupplierWizard(ctx, 'name', {});
@@ -366,6 +381,8 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
     if (togMatch) {
       const id = parseInt(togMatch[1], 10);
       await toggleSupplier(app, id);
+      // pickActiveSource ignores a disabled supplier, so its options must be recomputed now (the rest by cron)
+      await recomputeSupplierOptions(app, id);
       const s = await getSupplier(app, id);
       if (!s) return show(await listView(app));
       return show(await cardView(app, s));
@@ -465,6 +482,7 @@ async function handleInputText(
     return;
   }
   if (await handleSourcesText(ctx, pending.kind, pending.ref, text)) return;
+  if (await handleOrderMessageText(ctx, pending.kind, pending.ref, text)) return;
 
   const problem = await applyTypedInput(ctx, pending.kind, pending.ref, text);
   if (problem) {

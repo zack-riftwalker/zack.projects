@@ -18,6 +18,7 @@ import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manu
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
 import { registerSupplierPanel, supplierTextMiddleware } from './handlers/supplierPanel';
+import { registerOrderMessage } from './handlers/orderMessage';
 import { STAGE_BYPASS_RE } from './supplierInput';
 import { REF_PAYLOAD_RE, handleRefStart } from './referrals';
 import type { StoreContext, StoreSession } from './types';
@@ -145,6 +146,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   registerSalesReportHandler(bot, isAdmin);
   registerReferralHandler(bot, isAdmin);
   registerSupplierPanel(bot, isAdmin);
+  registerOrderMessage(bot, isAdmin);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);
   registerStorefrontHandler(bot);

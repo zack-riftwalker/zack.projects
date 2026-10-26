@@ -581,6 +581,8 @@ Preview message (HTML):
 3. Create one `product_sources` row per option with priority 1.
 4. Compute prices (§6.3).
 
+**Chunking:** one invocation creates at most `IMPORT_CHUNK` (10) options, so the batch is `1 + 2×10` statements and the invocation stays ≤ 35. The group `INSERT` is the first statement of the first batch (the options take its id with `(SELECT MAX(id) FROM product_groups)`, safe inside one transaction), so a failed batch leaves nothing behind. When more options are selected, the reply is `✅ N گزینه … ساخته شد. M گزینه‌ی دیگر مانده است.` with `[➕ ادامه‌ی ساخت]` (the same `sup_impok`), which adds the next chunk to the same group. A variation with no price (`price` null) is never selectable.
+
 Then reply `✅ «NAME» با N گزینه ساخته شد و در لیست محصولات نمایش داده می‌شود.` with `[🔌 منابع و قیمت] [✏️ ویرایش محصول]`.
 
 ### 5.2 Price formula: `src/store/suppliers/pricing.ts`
@@ -588,6 +590,7 @@ Then reply `✅ «NAME» با N گزینه ساخته شد و در لیست مح
 cost_toman  = round(price_usd × usd_toman)
 final_price = ceil((cost_toman × (1 + percent/100) + fixed) / 10000) × 10000
 ```
+- **Integer-safe:** compute it in integers (the percent in hundredths), never as `cost * 1.1`: `100000 × 1.10` is `110000.00000000001` in floating point and would round up to 120,000. Tests use hard-coded expected prices.
 - `percent`/`fixed` come from the option if either is non-null (a null in an override pair counts as 0), else from `supplier_defaults`.
 - If the defaults are unset and the option has no override, the option keeps its current price and the sync reports `⚠️ سود تعیین نشده`.
 - Pure functions, unit-tested: `costToman`, `roundUp10k`, `finalPrice`.
@@ -602,14 +605,15 @@ final_price = ceil((cost_toman × (1 + percent/100) + fixed) / 10000) × 10000
 ```
 - **Buttons per source:** `⬆️` / `⬇️` (swap priorities) and `⏯` (enable/disable). Also: `🗑 حذف منبع`, `➕ افزودن منبع` (pick supplier → product → variation from the catalog blob), `💲 حالت قیمت: خودکار/ثابت` (switches `pricing_mode`; to "ثابت" keeps the current price), `💹 سود اختصاصی` (set both, or `↩️ استفاده از پیش‌فرض`), `📦 حالت موجودی: خودکار/دستی`, `🔙`.
 - **Last source:** removing it turns the option back into a normal product (`pricing_mode='manual'`, `stock_mode='manual'`, `cost_toman=NULL`) after the confirmation `⚠️ این آخرین منبع است؛ محصول به حالت دستی برمی‌گردد. مطمئنید؟`.
-- **Recompute (§6.3)** after every change on this screen.
+- **Recompute (§6.3)** after every change on this screen, and for every option of a supplier when that supplier is turned off or on (the rest by cron if the budget is short).
+- **Adding a source:** the catalog item is identified by a 12-hex hash of its remote ids in the callback (`sup_srcn_<pid>_<sid>_<ref>`), looked up in the current catalog when tapped; never by position.
 - The existing stock toggle in the edit wizard (`⛔️ ناموجود کن` / `✅ موجود کن`) sets `stock_mode='manual'` when pressed on an auto option. The card shows `📦 موجودی خودکار` to switch back.
 
 ### 5.4 Cost floor («زیر قیمت خرید نرود»)
 A product has a floor when `cost_toman IS NOT NULL`.
 - **Code creation and edit** (add/edit wizards, and `referrals.ts` when it builds a reward code): for each affected option (one, or every option of the group), compute `applyDiscount(price, code)`. If any result `< cost_toman`, refuse with: `⛔️ با این تخفیف، قیمت «NAME» (X تومان) از قیمت خرید (Y تومان) کمتر می‌شود. مقدار کمتری وارد کنید.` For referral reward codes, skip creating the code, mark the reward `failed` the same way the code already does for a missing product, and log a warning.
 - **Customer code entry:** a new reason `below_cost` in `validateDiscountCode` (checked after the other rules). Customer label: `❌ این کد برای این محصول قابل استفاده نیست.`
-- **Receipt confirm:** see the loss guard in §7.2.
+- **Receipt confirm:** `below_cost` is **not** checked again here. The customer paid the price they were shown, and skipping the redemption would make a single-use (referral) code reusable. `validateDiscountCodeForOrder` skips the floor; only `validateDiscountCode` (code entry) applies it. The loss guard at confirmation is the separate rule in §7.2 (S5). The admin warning text has a label for `below_cost` all the same.
 
 ### 5.5 Tests (S4)
 - `parseDuration` table;

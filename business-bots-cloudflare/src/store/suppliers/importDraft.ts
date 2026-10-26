@@ -14,6 +14,8 @@ export interface ImportOption {
   priceUsd: number | null;
   attributes: Record<string, string>;
   selected: boolean;
+  /** already created (an import of many options is made in chunks) */
+  created: boolean;
   /** the product this variation already feeds (set when the item was imported before) */
   existingName: string | null;
 }
@@ -31,6 +33,8 @@ export interface ImportDraft {
   markupFixed: number | null;
   terms: { text: string; entities: any[] | null } | null;
   options: ImportOption[];
+  /** the group once the first chunk is created (later chunks add to it) */
+  groupId: number | null;
   /** the option being edited with «🏷 گزینه» (index into options) */
   editing: number | null;
 }
@@ -88,7 +92,9 @@ export function optionsFromItems(items: CatalogItem[], existing: Map<string, str
       warrantyDays,
       priceUsd: it.priceUsd,
       attributes: it.attributes,
-      selected: existingName === null,
+      // a variation without a price can't be sold or costed: it is not offered for import
+      selected: existingName === null && it.priceUsd !== null,
+      created: false,
       existingName,
     };
   });

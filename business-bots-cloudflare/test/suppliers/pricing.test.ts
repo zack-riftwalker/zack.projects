@@ -106,3 +106,22 @@ describe('floor check on a list of options (§5.4)', () => {
     expect(firstBelowCost(opts, { discount_type: 'fixed', discount_value: 150_000 })).toEqual({ name: 'B', price: 900_000, cost: 800_000 });
   });
 });
+
+describe('price formula is integer-safe (review should-fix 1)', () => {
+  // each line: cost, percent → hard-coded expected price (not computed with finalPrice)
+  const cases: [number, number, number][] = [
+    [100_000, 10, 110_000], [200_000, 10, 220_000], [400_000, 10, 440_000], [700_000, 10, 770_000], [900_000, 10, 990_000],
+    [750_000, 12, 840_000], [1_250_000, 12, 1_400_000],
+    [1_420_848, 15, 1_640_000],
+  ];
+  it.each(cases)('cost $0 + $1 percent → $2', (cost, percent, expected) => {
+    expect(finalPrice(cost, { percent, fixed: 0 })).toBe(expected);
+  });
+
+  it('a fixed amount is added before the round-up, and a fraction of a percent still counts', () => {
+    expect(finalPrice(100_000, { percent: 10, fixed: 10_000 })).toBe(120_000);
+    expect(finalPrice(100_000, { percent: 10, fixed: 1 })).toBe(120_000);
+    expect(finalPrice(100_000, { percent: 12.5, fixed: 0 })).toBe(120_000);
+    expect(finalPrice(80_000, { percent: 12.5, fixed: 0 })).toBe(90_000);
+  });
+});

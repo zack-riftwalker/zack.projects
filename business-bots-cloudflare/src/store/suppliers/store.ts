@@ -24,6 +24,15 @@ export async function catalogHash(items: CatalogItem[], usdToman: number): Promi
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * A short, stable reference to one catalog item for callback data (12 hex characters of the sha-256 of its remote
+ * ids). A position in the catalog blob is not stable: a sync can re-sort it between a list and a tap.
+ */
+export async function itemRef(productId: string, variationId: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(productId + '\u0000' + variationId));
+  return [...new Uint8Array(digest).slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export async function listSuppliers(app: StoreApp): Promise<SupplierRow[]> {
   return (await app.raw.prepare('SELECT * FROM suppliers ORDER BY id').bind().all<SupplierRow>()).results;
 }

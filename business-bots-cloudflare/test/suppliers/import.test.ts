@@ -3,6 +3,7 @@ import { makeTestEnv, ADMIN, type TestEnv } from '../helpers/env';
 import { makeFakeAriobox, type FakeAriobox } from '../helpers/fakeAriobox';
 import { one, q } from '../helpers/seed';
 import { validateDiscountCode } from '../../src/store/handlers/discountCodes';
+import { itemRef } from '../../src/store/suppliers/store';
 import { codeFloorViolation } from '../../src/store/suppliers/floor';
 import { finalPrice, costToman } from '../../src/store/suppliers/pricing';
 import { press, say, addSupplierOk, setDefaults, lastSent } from './helpers';
@@ -134,10 +135,10 @@ describe('sources screen (§5.3)', () => {
     await press(t, 'sup_impv_1');
     await press(t, 'sup_impok');
     const [m1] = products(t).map((r) => r.id);
-    const idx = 1; // the 3-month variation in the catalog order
-    await press(t, 'sup_srcn_' + m1 + '_' + sid + '_' + idx);
+    const ref = await itemRef('1300', '3m'); // the 3-month variation, by its remote ids
+    await press(t, 'sup_srcn_' + m1 + '_' + sid + '_' + ref);
     expect(one(t.storeDb, 'SELECT COUNT(*) n FROM product_sources WHERE customer_product_id = ?', m1).n).toBe(2);
-    await press(t, 'sup_srcn_' + m1 + '_' + sid + '_' + idx);
+    await press(t, 'sup_srcn_' + m1 + '_' + sid + '_' + ref);
     expect(t.tg.texts(ADMIN.id).some((x) => x.includes('از قبل منبع این محصول است'))).toBe(true);
     expect(one(t.storeDb, 'SELECT COUNT(*) n FROM product_sources WHERE customer_product_id = ?', m1).n).toBe(2);
   });

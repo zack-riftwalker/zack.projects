@@ -35,7 +35,7 @@ export async function startImport(ctx: StoreContext, supplierId: number, remoteP
   if (items.length === 0) return false;
   const draft: ImportDraft = {
     supplierId, supplierName: supplier.name, remoteProductId, remoteName: items[0].name, groupName: items[0].name,
-    usdToman: cached.catalog.usdToman, markupPercent: null, markupFixed: null, terms: null, editing: null,
+    groupId: null, usdToman: cached.catalog.usdToman, markupPercent: null, markupFixed: null, terms: null, editing: null,
     options: optionsFromItems(items, await existingVariations(ctx, supplierId, remoteProductId)),
   };
   ctx.session.supplierImport = draft;
@@ -58,8 +58,9 @@ function previewParts(d: ImportDraft, defaults: { markupPercent: number | null; 
     const cost = o.priceUsd === null ? null : costToman(o.priceUsd, d.usdToman);
     const sale = cost !== null && markup ? formatPrice(finalPrice(cost, markup)) + ' ت' : '—';
     const buy = o.priceUsd === null ? '—' : '$' + o.priceUsd.toFixed(2) + ' ≈ ' + formatPrice(cost!) + ' ت';
-    lines.push((o.selected ? '☑️' : '⬜️') + ' ' + escapeHtml(o.label) + ' — مدت ' + days(o.durationDays, 'روز') +
+    lines.push((o.created ? '✅' : o.selected ? '☑️' : '⬜️') + ' ' + escapeHtml(o.label) + ' — مدت ' + days(o.durationDays, 'روز') +
       '، گارانتی ' + days(o.warrantyDays, 'روز') + ' — خرید ' + buy + ' → فروش ' + sale);
+    if (o.priceUsd === null) lines.push('   ⚠️ در تأمین‌کننده قیمت ندارد؛ وارد نمی‌شود');
     if (o.existingName) lines.push('   🔗 قبلاً وارد شده («' + escapeHtml(o.existingName) + '»)');
   }
   const unknown = [...new Set(d.options.flatMap((o) => unknownAttributes(o.attributes)))];
@@ -84,12 +85,19 @@ async function showPreview(ctx: StoreContext, edit: boolean) {
   else await ctx.reply(v.text, { ...html, ...v.keyboard });
 }
 
-/** Creates the group and one product per selected option, each with its supplier source (SUPPLIER_PLAN.md §5.1). */
+/** Options made per invocation: the group plus a chunk is one batch of 1 + 2×N statements (the budget target is ≤ 35). */
+export const IMPORT_CHUNK = 10;
+
+/**
+ * Creates the group and one product per selected option, each with its supplier source (SUPPLIER_PLAN.md §5.1).
+ * One atomic batch per invocation: the first chunk includes the group, so a failure leaves nothing behind. An
+ * import of more than IMPORT_CHUNK options is finished by pressing «ادامه» (the same button) for the rest.
+ */
 async function createFromDraft(ctx: StoreContext): Promise<void> {
   const app = ctx.app;
   const d = ctx.session.supplierImport!;
-  const selected = d.options.filter((o: ImportOption) => o.selected);
-  if (selected.length === 0) {
+  const pending = d.options.map((o: ImportOption, index) => ({ o, index })).filter(({ o }) => o.selected && !o.created && o.priceUsd !== null);
+  if (pending.length === 0) {
     await ctx.answerCallbackQuery({ text: 'حداقل یک گزینه را انتخاب کنید.', show_alert: true });
     return;
   }
@@ -100,33 +108,59 @@ async function createFromDraft(ctx: StoreContext): Promise<void> {
   }
   await ctx.answerCallbackQuery();
 
-  const groupId = await app.db.createGroup(d.groupName);
+  const chunk = pending.slice(0, IMPORT_CHUNK);
   const now = tehranDateTime(app.apps.now());
   const termsText = d.terms?.text ?? null;
   const termsEntities = d.terms?.entities?.length ? JSON.stringify(d.terms.entities) : null;
   const stmts: Stmt[] = [];
-  selected.forEach((o, i) => {
-    const cost = o.priceUsd === null ? null : costToman(o.priceUsd, d.usdToman);
-    const price = cost === null ? 0 : finalPrice(cost, markup);
+  // inside the batch (one transaction) MAX(id) right after our own INSERT is our group
+  const groupRef = d.groupId == null ? '(SELECT MAX(id) FROM product_groups)' : '?';
+  if (d.groupId == null) stmts.push(app.raw.prepare('INSERT INTO product_groups (name) VALUES (?)').bind(d.groupName));
+  for (const { o, index } of chunk) {
+    const cost = costToman(o.priceUsd!, d.usdToman);
+    const price = finalPrice(cost, markup);
+    const args: unknown[] = [
+      d.groupName + ' — ' + o.label, price, termsText, termsEntities, o.durationDays, o.warrantyDays, 1,
+    ];
+    if (d.groupId != null) args.push(d.groupId);
+    args.push(o.label, index, d.markupPercent, d.markupFixed, cost, now);
     stmts.push(app.raw.prepare(`
       INSERT INTO customer_products (name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
         group_id, option_label, sort_order, pricing_mode, markup_percent, markup_fixed, cost_toman, stock_mode, price_updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'auto', ?, ?, ?, 'auto', ?)`).bind(
-      d.groupName + ' — ' + o.label, price, termsText, termsEntities, o.durationDays, o.warrantyDays,
-      cost === null ? 0 : 1, groupId, o.label, i, d.markupPercent, d.markupFixed, cost, now,
-    ));
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ${groupRef}, ?, ?, 'auto', ?, ?, ?, 'auto', ?)`).bind(...args));
     stmts.push(app.raw.prepare(`
       INSERT INTO product_sources (customer_product_id, supplier_id, remote_product_id, remote_variation_id, remote_name,
         attributes_json, price_usd, listed, priority, is_enabled)
       VALUES (last_insert_rowid(), ?, ?, ?, ?, ?, ?, 1, 1, 1)`).bind(
       d.supplierId, d.remoteProductId, o.remoteVariationId, d.remoteName, JSON.stringify(o.attributes), o.priceUsd,
     ));
-  });
-  const results = await app.raw.batch(stmts);
-  const firstId = results[0].meta.last_row_id;
+  }
+
+  let results;
+  try {
+    results = await app.raw.batch(stmts);
+  } catch (err: any) {
+    console.error('❌ [Supplier] import batch failed:', err.message);
+    await ctx.reply('❌ ساخت محصول ناموفق بود؛ هیچ چیزی ذخیره نشد. دوباره تلاش کنید.');
+    return;
+  }
+  const firstProduct = d.groupId == null ? results[1] : results[0];
+  const firstId = firstProduct.meta.last_row_id;
+  if (d.groupId == null) d.groupId = results[0].meta.last_row_id;
+  for (const { o } of chunk) o.created = true;
+
+  const left = pending.length - chunk.length;
+  if (left > 0) {
+    await ctx.reply(
+      '✅ ' + fa(chunk.length) + ' گزینه‌ی «' + escapeHtml(d.groupName) + '» ساخته شد. ' + fa(left) + ' گزینه‌ی دیگر مانده است.',
+      { ...html, ...Markup.inlineKeyboard([[cb('➕ ادامه‌ی ساخت (' + fa(left) + ' گزینه)', 'sup_impok')], [cb('🔌 منابع و قیمت', 'sup_src_' + firstId)]]) },
+    );
+    return;
+  }
+  const total = d.options.filter((o: ImportOption) => o.created).length;
   ctx.session.supplierImport = null;
   await ctx.reply(
-    '✅ «' + escapeHtml(d.groupName) + '» با ' + fa(selected.length) + ' گزینه ساخته شد و در لیست محصولات نمایش داده می‌شود.',
+    '✅ «' + escapeHtml(d.groupName) + '» با ' + fa(total) + ' گزینه ساخته شد و در لیست محصولات نمایش داده می‌شود.',
     { ...html, ...Markup.inlineKeyboard([[cb('🔌 منابع و قیمت', 'sup_src_' + firstId)]]) },
   );
 }
@@ -155,6 +189,13 @@ export async function handleImportCallback(ctx: StoreContext, data: string): Pro
   }
   const toggle = idx(data.match(/^sup_impv_(\d+)$/));
   if (toggle >= 0 && d.options[toggle]) {
+    if (d.options[toggle].priceUsd === null || d.options[toggle].created) {
+      await ctx.answerCallbackQuery({
+        text: d.options[toggle].created ? 'این گزینه ساخته شده است.' : 'این گزینه در تأمین‌کننده قیمت ندارد و وارد نمی‌شود.',
+        show_alert: true,
+      });
+      return true;
+    }
     d.options[toggle].selected = !d.options[toggle].selected;
     await ctx.answerCallbackQuery();
     await showPreview(ctx, true);

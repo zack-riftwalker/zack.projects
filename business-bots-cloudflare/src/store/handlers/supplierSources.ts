@@ -1,11 +1,12 @@
 import { Markup, type InlineButton } from '../../lib/markup';
 import { formatPrice, escapeHtml, buildPagedKeyboard } from '../utils';
 import type { StoreContext } from '../types';
-import { readCatalog, listSuppliers } from '../suppliers/store';
+import { readCatalog, listSuppliers, itemRef } from '../suppliers/store';
 import { costToman, markupFor } from '../suppliers/pricing';
 import { recomputeOption } from '../suppliers/recompute';
 import { getSupplierDefaults } from '../supplierDefaults';
 import type { StoreApp } from '../../apps';
+import type { CatalogItem } from '../suppliers/types';
 import { tehranDateTime } from '../../lib/time';
 import { beginSupplierInput } from '../supplierInput';
 
@@ -236,10 +237,10 @@ export async function handleSourcesCallback(ctx: StoreContext, data: string): Pr
     await showCatalogPage(ctx, page[1], page[2], parseInt(page[3], 10), true);
     return true;
   }
-  const pickItem = m(/^sup_srcn_(\d+)_(\d+)_(\d+)$/);
+  const pickItem = m(/^sup_srcn_(\d+)_(\d+)_([0-9a-f]{12})$/);
   if (pickItem) {
     await ctx.answerCallbackQuery();
-    await addSource(ctx, parseInt(pickItem[1], 10), parseInt(pickItem[2], 10), parseInt(pickItem[3], 10));
+    await addSource(ctx, parseInt(pickItem[1], 10), parseInt(pickItem[2], 10), pickItem[3]);
     return true;
   }
   return false;
@@ -260,21 +261,28 @@ async function showCatalogPage(ctx: StoreContext, pidRaw: string, sidRaw: string
   const sid = parseInt(sidRaw, 10);
   const cached = await readCatalog(ctx.app, sid);
   const items = cached ? cached.catalog.items : [];
-  const indexed = items.map((it, idx) => ({ it, idx }));
-  const keyboard = buildPagedKeyboard(indexed, page, ({ it, idx }) => {
+  const indexed = await Promise.all(items.map(async (it) => ({ it, ref: await itemRef(it.remoteProductId, it.remoteVariationId) })));
+  const keyboard = buildPagedKeyboard(indexed, page, ({ it, ref }) => {
     const variation = it.remoteVariationId ? ' / ' + it.remoteVariationId : '';
     const price = it.priceUsd === null ? '—' : '$' + it.priceUsd.toFixed(2);
-    return cb((it.name + variation).slice(0, 40) + ' — ' + price, 'sup_srcn_' + pid + '_' + sid + '_' + idx);
+    return cb((it.name + variation).slice(0, 40) + ' — ' + price, 'sup_srcn_' + pid + '_' + sid + '_' + ref);
   }, SRC_LIST_PREFIX + pid + '_' + sid + '_', cb('🔙 بازگشت', 'sup_srcadd_' + pid));
   const text = items.length ? '➕ یک گزینه‌ی کاتالوگ را انتخاب کنید:' : 'کاتالوگی از این تأمین‌کننده نداریم. ابتدا همگام‌سازی کنید.';
   if (edit) await ctx.editMessageText(text, keyboard).catch(() => {});
   else await ctx.reply(text, keyboard);
 }
 
-async function addSource(ctx: StoreContext, pid: number, sid: number, idx: number): Promise<void> {
+async function addSource(ctx: StoreContext, pid: number, sid: number, ref: string): Promise<void> {
   const app = ctx.app;
   const cached = await readCatalog(app, sid);
-  const item = cached?.catalog.items[idx];
+  // the item is found by its remote ids in the CURRENT catalog; a sync may have re-sorted or changed it since the list
+  let item: CatalogItem | undefined;
+  for (const it of cached?.catalog.items ?? []) {
+    if ((await itemRef(it.remoteProductId, it.remoteVariationId)) === ref) {
+      item = it;
+      break;
+    }
+  }
   if (!item || !(await loadProduct(app, pid))) {
     await ctx.reply('❌ این گزینه دیگر در کاتالوگ نیست.');
     return;
