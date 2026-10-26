@@ -132,7 +132,7 @@ export class StoreDb {
     try {
       const row = await this.q(`
       SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
-             group_id, option_label, sort_order, cost_toman, stock_mode
+             group_id, option_label, sort_order, cost_toman, stock_mode, pricing_mode, markup_percent, markup_fixed
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -158,7 +158,7 @@ export class StoreDb {
   /** Edits an ACTIVE product; columns come from a fixed whitelist. changes = 0 → missing or deactivated. */
   async updateCustomerProduct(id: number, patch: Partial<{
     name: string; price: number; termsText: string | null; termsEntities: any[] | null;
-    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean; stockMode: 'auto' | 'manual';
+    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean; stockMode: 'auto' | 'manual'; pricingMode: 'auto' | 'manual';
   }>) {
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -171,6 +171,7 @@ export class StoreDb {
     if (patch.warrantyDays !== undefined) add('warranty_days', patch.warrantyDays || null);
     if (patch.isAvailable !== undefined) add('is_available', patch.isAvailable ? 1 : 0);
     if (patch.stockMode !== undefined) add('stock_mode', patch.stockMode);
+    if (patch.pricingMode !== undefined) add('pricing_mode', patch.pricingMode);
     if (!sets.length) return { changes: 0 };
     const r = await this.q('UPDATE customer_products SET ' + sets.join(', ') + ' WHERE id = ? AND is_active = 1', ...args, id).run();
     return { changes: r.meta.changes };
@@ -416,6 +417,21 @@ export class StoreDb {
     WHERE  id = ? AND status = 'confirmed'
   `, id).run();
     return { changes: r.meta.changes };
+  }
+
+  /**
+   * The same conditional UPDATE as markOrderDelivered, as a statement for a batch and with the time given by the
+   * caller (`now` = 'YYYY-MM-DD HH:MM:SS' Tehran), so the clocks follow the app's clock.
+   */
+  markDeliveredStatement(id: number, now: string): Stmt {
+    return this.q(`
+    UPDATE orders
+    SET    status       = 'delivered',
+           delivered_at = ?,
+           expires_at   = CASE WHEN duration_days IS NOT NULL THEN datetime(?, '+' || duration_days || ' days') END,
+           warranty_expires_at = CASE WHEN warranty_days IS NOT NULL THEN datetime(?, '+' || warranty_days || ' days') END
+    WHERE  id = ? AND status = 'confirmed'
+  `, now, now, now, id);
   }
 
   async getDeliveredOrdersForCustomer(telegramId: number): Promise<Order[]> {

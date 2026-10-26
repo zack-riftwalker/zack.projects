@@ -5,6 +5,9 @@ import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
 import { APPLY_DEFAULTS_SQL } from '../src/store/handlers/supplierPanel';
+import {
+  DEADLINE_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
+} from '../src/store/suppliers/engine';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
 const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links',
@@ -84,6 +87,25 @@ describe('supplier hot queries use indexes', () => {
     ['catalog to apply', CATALOG_PENDING_SQL, []],
     ['apply default markup to auto options', APPLY_DEFAULTS_SQL, []],
     ['linked options of a supplier', 'SELECT COUNT(DISTINCT customer_product_id) AS n FROM product_sources WHERE supplier_id = ?', [1]],
+    // the order engine (S5)
+    ['stale placing leases', STALE_LEASE_SQL, ['x', 3]],
+    ['queued and due (LIMIT)', QUEUED_DUE_SQL, ['x', 3]],
+    ['placed and due (LIMIT)', PLACED_DUE_SQL, ['x', 5]],
+    ['completed, not delivered', UNDELIVERED_SQL, ['x', 2]],
+    ['20 h deadline', DEADLINE_SQL, ['x', 3]],
+    ['stranded supplier orders', STRANDED_SQL, ['x', 2]],
+    ['sources to place an order', SOURCE_SELECT + ' WHERE s.customer_product_id = ? ORDER BY s.priority, s.id', [1]],
+    ['forced source', SOURCE_SELECT + ' WHERE s.id = ?', [1]],
+    ['sources and enabled count', 'SELECT COUNT(*) AS total FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id WHERE s.customer_product_id = ?', [1]],
+    ['latest supplier order of an order', 'SELECT so.id FROM supplier_orders so LEFT JOIN suppliers sup ON sup.id = so.supplier_id WHERE so.order_id = ? ORDER BY so.id DESC LIMIT 1', [1]],
+    ['unknown supplier order of an order', "SELECT * FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", [1]],
+    ['live supplier order of an order', "SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('queued', 'placing', 'placed', 'completed')", [1]],
+    ['latest delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? ORDER BY id DESC LIMIT 1', [1]],
+    ['latest sent delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? AND sent_ok = 1 ORDER BY id DESC LIMIT 1', [1]],
+    ['pending delivery of a supplier order', 'SELECT id FROM order_deliveries WHERE order_id = ? AND supplier_order_id = ? AND sent_ok = 0 ORDER BY id DESC LIMIT 1', [1, 1]],
+    ['events of an order', 'SELECT * FROM fulfillment_events WHERE order_id = ? ORDER BY id DESC LIMIT 15', [1]],
+    ['my subscriptions with stored accounts', `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
+      AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`, [1]],
   ];
   for (const [label, sql, args] of cases) {
     it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));

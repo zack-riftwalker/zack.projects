@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeTestEnv } from '../helpers/env';
 import { makeFakeAriobox } from '../helpers/fakeAriobox';
-import { makeAriobox } from '../../src/store/suppliers/ariobox';
+import { classifyRemoteStatus, makeAriobox } from '../../src/store/suppliers/ariobox';
 import type { SupplierRow } from '../../src/store/suppliers/types';
 
 const KEY = 'SECRET-KEY-1234';
@@ -96,11 +96,30 @@ describe('ArioBox placeOrder (§4.3 mapping, never retried)', () => {
     expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'rejected', http: 404 });
   });
 
-  it('400 and other 4xx → rejected', async () => {
+  it('400 → rejected; any other 4xx (not 401/404/409) → retry_later, nothing was bought (Appendix A (a))', async () => {
     const { fake, adapter, s } = setup();
-    fake.state.postQueue.push({ status: 400, body: { detail: 'invalid body' } }, { status: 422, body: { detail: 'nope' } });
+    fake.state.postQueue.push({ status: 400, body: { detail: 'invalid body' } }, { status: 422, body: { detail: 'nope' } }, { status: 403, body: { detail: 'x' } });
     expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'rejected', http: 400 });
-    expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'rejected', http: 422 });
+    expect(await adapter.placeOrder(s, p)).toEqual({ kind: 'retry_later', http: 422, detail: 'nope' });
+    expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'retry_later', http: 403 });
+  });
+
+  it('a refusal that mentions the wallet is flagged lowBalance (case-insensitive); 400 keeps its meaning', async () => {
+    const { fake, adapter, s } = setup();
+    fake.state.postQueue.push(
+      { status: 402, body: { detail: 'Insufficient BALANCE' } }, { status: 503, body: { detail: 'wallet is empty' } },
+      { status: 422, body: { detail: 'not enough credit' } }, { status: 400, body: { detail: 'insufficient funds' } },
+    );
+    expect(await adapter.placeOrder(s, p)).toEqual({ kind: 'retry_later', http: 402, detail: 'Insufficient BALANCE', lowBalance: true });
+    expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'retry_later', http: 503, lowBalance: true });
+    expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'retry_later', lowBalance: true });
+    expect(await adapter.placeOrder(s, p)).toMatchObject({ kind: 'rejected', http: 400 });
+  });
+
+  it('remote status mapping (Appendix A (c)): completed = success; cancelled/failed/refunded/trash = failure; the rest keeps polling', () => {
+    for (const s of ['completed', 'Completed ']) expect(classifyRemoteStatus(s)).toBe('success');
+    for (const s of ['cancelled', 'failed', 'refunded', 'trash', 'FAILED']) expect(classifyRemoteStatus(s)).toBe('failure');
+    for (const s of ['pending', 'processing', 'on-hold', '']) expect(classifyRemoteStatus(s)).toBe('pending');
   });
 
   it('5xx other than 503, timeout and network error → unknown; each one is a single POST', async () => {

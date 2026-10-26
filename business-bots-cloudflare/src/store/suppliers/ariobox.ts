@@ -7,6 +7,37 @@ const ID_RE = /^[A-Za-z0-9_-]{1,24}$/;
 const DETAIL_MAX = 300;
 const RAW_MAX = 4000;
 
+/**
+ * UNVERIFIED ASSUMPTIONS about the live ArioBox API (SUPPLIER_PLAN.md, Appendix A «Assumptions»). Everything the
+ * order engine guesses about ArioBox is here; correct these after the live test, before any deploy.
+ */
+export const ARIOBOX_ASSUMPTIONS = {
+  /** (c) the remote order status that means «the accounts are ready» */
+  successStatuses: ['completed'] as readonly string[],
+  /** (c) final failures; any other status keeps being polled */
+  failureStatuses: ['cancelled', 'failed', 'refunded', 'trash'] as readonly string[],
+  /** (a) a refusal body that mentions one of these is a wallet problem */
+  lowBalanceRe: /balance|wallet|insufficient|credit|funds/i,
+  /** (a) POST /orders answers that are NOT «a plain 4xx → retry_later» (they keep the §4.3 meaning) */
+  definiteStatuses: [400, 401, 404, 409] as readonly number[],
+  /** (b) the reported order price may differ from the catalog price by this much (relative) before it is flagged */
+  priceTolerance: 0.02,
+};
+
+export type RemoteStatusClass = 'success' | 'failure' | 'pending';
+
+/** (c) Maps a remote order status to what the engine does with it. */
+export function classifyRemoteStatus(status: string): RemoteStatusClass {
+  const s = status.trim().toLowerCase();
+  if (ARIOBOX_ASSUMPTIONS.successStatuses.includes(s)) return 'success';
+  if (ARIOBOX_ASSUMPTIONS.failureStatuses.includes(s)) return 'failure';
+  return 'pending';
+}
+
+/** (a) True when a refusal text talks about the wallet / balance. */
+export const isLowBalanceText = (text: string): boolean => ARIOBOX_ASSUMPTIONS.lowBalanceRe.test(text);
+const lowBalance = (text: string): { lowBalance?: true } => (isLowBalanceText(text) ? { lowBalance: true } : {});
+
 type Net = { net: true; detail: string } | { net: false; status: number; text: string; json: any };
 
 const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
@@ -119,10 +150,16 @@ export function makeAriobox(apps: Apps): SupplierAdapter {
         return { kind: 'unknown', http: status, detail: 'no order_id in the answer' };
       }
       if (status === 409) return { kind: 'out_of_stock', http: status, detail };
-      if (status === 503) return { kind: 'retry_later', http: status, detail };
+      if (status === 503) return { kind: 'retry_later', http: status, detail, ...lowBalance(r.text) };
       if (status === 401) return { kind: 'config', http: status, detail };
       if (status === 404 && /user/i.test(detail)) return { kind: 'config', http: status, detail };
-      if (status >= 400 && status < 500) return { kind: 'rejected', http: status, detail };
+      if (status >= 400 && status < 500) {
+        // (a) a 4xx we have no definite meaning for was a refusal (nothing was bought): try again later
+        if (!ARIOBOX_ASSUMPTIONS.definiteStatuses.includes(status)) {
+          return { kind: 'retry_later', http: status, detail, ...lowBalance(r.text) };
+        }
+        return { kind: 'rejected', http: status, detail };
+      }
       return { kind: 'unknown', http: status, detail };
     },
 

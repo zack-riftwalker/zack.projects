@@ -340,6 +340,30 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
         return;
       }
 
+      if (data === 'cprod_edit_fixp_no') {
+        edit.pendingFixedPrice = null;
+        edit.field = null;
+        await ctx.answerCallbackQuery();
+        await showCard(ctx, p, { edit: true, prefix: '❌ قیمت تغییر نکرد.' });
+        return;
+      }
+
+      if (data === 'cprod_edit_fixp_yes') {
+        const price = edit.pendingFixedPrice;
+        await ctx.answerCallbackQuery();
+        if (typeof price !== 'number' || !(price > 0)) {
+          await ctx.reply('⚠️ ابتدا قیمت جدید را وارد کنید.');
+          return;
+        }
+        // «ثابت» keeps the typed price: the sync no longer recomputes it
+        if (!(await applyPatch(ctx, { price, pricingMode: 'manual' }))) return productGone(ctx);
+        edit.pendingFixedPrice = null;
+        edit.field = null;
+        const fresh = (await loadProduct(ctx))!;
+        await showCard(ctx, fresh, { edit: true, prefix: '✅ ذخیره شد؛ قیمت این گزینه ثابت شد.' + NOTE_SNAPSHOT + (await priceWarnings(ctx, fresh)) });
+        return;
+      }
+
       if (data === 'cprod_edit_stock_auto') {
         if (!(await applyPatch(ctx, { stockMode: 'auto' }))) {
           await ctx.answerCallbackQuery();
@@ -445,6 +469,18 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
       const price = parsePrice(text);
       if (isNaN(price)) {
         await ctx.reply('❌ عدد وارد‌شده معتبر نیست.\n\nلطفاً یک عدد مثبت بدون حروف وارد کنید:');
+        return;
+      }
+      if (p.pricing_mode === 'auto') {
+        // the next recompute would silently overwrite a typed price: ask whether to make it fixed
+        edit.pendingFixedPrice = price;
+        await ctx.reply(
+          'این گزینه قیمت خودکار دارد. قیمت ثابت شود؟',
+          Markup.inlineKeyboard([[
+            Markup.button.callback('✅ بله، قیمت ثابت', 'cprod_edit_fixp_yes'),
+            Markup.button.callback('❌ انصراف', 'cprod_edit_fixp_no'),
+          ]]),
+        );
         return;
       }
       patch = { price };

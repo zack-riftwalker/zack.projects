@@ -29,3 +29,9 @@ export const REPORT_LABEL = '📊 گزارش فروش';
 export const REFERRAL_LABEL = '🎁 دعوت دوستان';
 
 export const SUPPLIER_LABEL = '🔌 API تأمین‌کننده';
+
+/** What the customer is told when a receipt for a supplier-fulfilled option is confirmed (SUPPLIER_PLAN.md §7.2). */
+export const SUPPLIER_CONFIRM_TEXT = (productName: string): string =>
+  '✅ پرداخت شما تایید شد! سفارش «' + productName + '» با موفقیت ثبت شد.\n\n' +
+  '⏳ اکانت شما در حال آماده‌سازی است و همین‌جا در ربات برایتان ارسال می‌شود (معمولاً چند دقیقه، حداکثر تا ۲۴ ساعت).\n\n' +
+  'ممنون از صبوری شما 🙏';

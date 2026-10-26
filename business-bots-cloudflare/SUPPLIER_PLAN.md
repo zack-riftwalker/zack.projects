@@ -67,7 +67,7 @@
 9. **Secrets:** never log an API key, never put it in a URL (use the `X-Api-Key` header), and never echo it back in a message (show `••••` + last 4 characters only). Supplier error texts saved to D1 or shown to admins are cut to 300 characters.
 10. **Commits and checks:** run `npm run typecheck && npm test` before every commit; both must pass. One commit per milestone (§13). Push to the branch your session tells you to use. Don't open a PR unless the user asks.
 11. **No remote commands:** don't run `npm run setup`, `wrangler deploy` or any remote D1 command. Code and tests only.
-12. **Stop points:** if **Appendix A is still empty, stop before S5** and tell the user. The S5 error mapping depends on it.
+12. **Stop points:** ~~if Appendix A is empty, stop before S5~~. The owner decided to build S5–S9 on the conservative assumptions listed in Appendix A, and to verify them against the live API before any deploy.
 
 ---
 
@@ -1039,7 +1039,14 @@ To record:
 6. Status names for cancelled/failed/refunded orders (ask the supplier).
 7. Rate limits, if any.
 
-*(empty, to be filled)*
+### Assumptions (unverified, must be checked against the live API before deploy)
+The owner decided to build S5–S9 now with these assumptions instead of waiting for the probe above. They live in **one small mapping**, `ARIOBOX_ASSUMPTIONS` / `classifyRemoteStatus` / `isLowBalanceText` in `src/store/suppliers/ariobox.ts` (plus the price-mismatch check in `src/store/suppliers/engine.ts`), so a correction after the live test is a few lines.
+
+- **(a) `POST /orders` errors.** Any 4xx other than 400, 401, 404 or 409 → `retry_later` (a 4xx means the request was refused, so nothing was bought). If the response body mentions *balance, wallet, insufficient, credit* or *funds* (case-insensitive), the result carries `lowBalance: true` and the card uses the low-balance header of §7.3. 400, 401, 404, 409, 503, other 5xx and timeouts behave as the §4.3 table says.
+- **(b) Cost.** Cost = catalog `price_usd` × `quantity` × `usd_toman`; the ledger `spend` uses the same USD amount (`price_usd × quantity`). `supplier_orders.price_usd` is the catalog **unit** price. The response `price` is stored raw (it stays inside `raw_response`; no new column) and is only compared: if it matches neither the unit price nor the total within 2 %, a `price_mismatch` event is logged and the delivery/admin message gets one extra line.
+- **(c) Remote status.** `completed` = success. `cancelled`, `failed`, `refunded`, `trash` = final failure (`supplier_failed`). Any other status → keep polling.
+
+To verify with the live API (planner session, before deploy): the real low-balance response, whether `price` is per unit or total, the real failure status names, and the status sequence.
 
 ## Appendix B — Migration rehearsal on real data (planner session, after S1)
 With `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`:

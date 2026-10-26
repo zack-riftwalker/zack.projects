@@ -19,8 +19,9 @@ import {
 import { formatCardNumber } from './storeSettings';
 import { buildReceiptCaption, deliverReceiptToAdmins } from '../services/receiptDelivery';
 import {
-  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REFERRAL_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL,
+  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REFERRAL_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL, SUPPLIER_CONFIRM_TEXT,
 } from '../labels';
+import { markSupplierFulfillment, sourceSummary, startSupplierFulfillment } from '../suppliers/engine';
 import type { StoreContext } from '../types';
 import type { CustomerProduct, Order } from '../db';
 
@@ -229,16 +230,28 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         : {});
     }
 
+    // delivered orders whose accounts are stored (supplier / stock / manual text) get «🔑 نمایش اطلاعات اکانت»
+    const viewable = new Set<number>();
+    if (orders.length) {
+      const rows = (await ctx.app.raw.prepare(
+        `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
+         AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`,
+      ).bind(ctx.from!.id).all<{ id: number }>()).results;
+      for (const r of rows) viewable.add(r.id);
+    }
+
     for (const order of orders) {
       const buttons = [];
       if (isWarrantyActive(order)) {
         buttons.push(Markup.button.callback('🛠 مشکل دارم', 'warranty_claim_' + order.id));
       }
       buttons.push(Markup.button.callback('🔄 تمدید / خرید مجدد', 'renew_' + order.customer_product_id));
+      const rows = [buttons];
+      if (viewable.has(order.id)) rows.push([Markup.button.callback('🔑 نمایش اطلاعات اکانت', 'acct_show_' + order.id)]);
 
       await ctx.reply(subscriptionCardText(order), {
         parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([buttons]),
+        ...Markup.inlineKeyboard(rows),
       }).catch((err) => console.warn('⚠️ [Storefront] Subscription card failed for order #' + order.id + ':', err.message));
     }
   });
@@ -816,10 +829,15 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
   }
 
   let discountWarning = '';
+  // supplier-fulfilled option (SUPPLIER_PLAN.md §7.2): the engine delivers it, monshi stays out of it
+  let supplierFulfilled = false;
+  let enabledSources = 0;
+  let confirmedProduct: Awaited<ReturnType<typeof ctx.app.db.getCustomerProductById>>;
   if (status === 'confirmed') {
     // Snapshot the product's subscription/warranty terms onto the order now
     // (the catalog item may change later).
     const product = await ctx.app.db.getCustomerProductById(order.customer_product_id);
+    confirmedProduct = product;
     try {
       await ctx.app.db.setOrderSubscriptionSnapshot(orderId, {
         durationDays: product?.duration_days ?? null,
@@ -827,6 +845,15 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
       });
     } catch (err: any) {
       console.error('❌ [Storefront] setOrderSubscriptionSnapshot failed for order #' + orderId + ':', err.message);
+    }
+
+    try {
+      const sources = await sourceSummary(ctx.app, order.customer_product_id);
+      supplierFulfilled = sources.total > 0;
+      enabledSources = sources.enabled;
+      if (supplierFulfilled) await markSupplierFulfillment(ctx.app, orderId);
+    } catch (err: any) {
+      console.error('❌ [Storefront] supplier check failed for order #' + orderId + ':', err.message);
     }
 
     if (order.discount_code_id) {
@@ -861,11 +888,14 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
 
   const label = status === 'confirmed' ? '✅ تایید شد' : '❌ رد شد';
   await answer(discountWarning ? { text: label + discountWarning, show_alert: true } : label);
-  await editCaption(originalCaption + '\n\n' + label + ' (توسط ادمین).' + (reason ? '\n📝 دلیل: ' + reason : '') + discountWarning);
+  await editCaption(originalCaption + '\n\n' + label + ' (توسط ادمین).' + (reason ? '\n📝 دلیل: ' + reason : '') + discountWarning +
+    (supplierFulfilled ? '\n🔌 تحویل خودکار از تأمین‌کننده' : ''));
 
   const customerMsg = status === 'confirmed'
-    ? '✅ پرداخت شما تایید شد! سفارش «' + order.product_name + '» با موفقیت ثبت شد.\n\n' +
-      '📩 برای انجام فرایند فعال‌سازی «' + order.product_name + '» به این آیدی پیام بدید: ' + ACTIVATION_CONTACT
+    ? supplierFulfilled
+      ? SUPPLIER_CONFIRM_TEXT(order.product_name)
+      : '✅ پرداخت شما تایید شد! سفارش «' + order.product_name + '» با موفقیت ثبت شد.\n\n' +
+        '📩 برای انجام فرایند فعال‌سازی «' + order.product_name + '» به این آیدی پیام بدید: ' + ACTIVATION_CONTACT
     : '❌ متاسفانه رسید پرداخت شما تایید نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.' +
       (reason ? '\n\n📝 دلیل: ' + reason : '');
   const customerExtra = status === 'rejected' && reason !== DUPLICATE_REASON_TEXT
@@ -878,22 +908,31 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
     console.warn('⚠️ [Storefront] Failed to notify customer ' + order.customer_telegram_id + ':', err.message);
   }
 
-  // Tell monshi last, so the customer sees the store's "confirmed" message first.
+  // Tell monshi last, so the customer sees the store's "confirmed" message first. Supplier orders never reach it.
   if (status === 'confirmed') {
-    try {
-      await storeOrderPaid(ctx.app.apps, {
-        order_id: orderId,
-        customer_id: order.customer_telegram_id,
-        product: order.product_name,
-      });
-    } catch (err: any) {
-      console.error('❌ [Storefront] Bridge failed for order #' + orderId + ':', err.message);
+    if (!supplierFulfilled) {
+      try {
+        await storeOrderPaid(ctx.app.apps, {
+          order_id: orderId,
+          customer_id: order.customer_telegram_id,
+          product: order.product_name,
+        });
+      } catch (err: any) {
+        console.error('❌ [Storefront] Bridge failed for order #' + orderId + ':', err.message);
+      }
     }
     // an invited customer's first confirmed purchase counts for their inviter
     try {
       await onPurchaseConfirmed(ctx.app, { id: orderId, customer_telegram_id: order.customer_telegram_id, price: order.price });
     } catch (err: any) {
       console.error('❌ [Storefront] Referral qualification failed for order #' + orderId + ':', err.message);
+    }
+    if (supplierFulfilled) {
+      try {
+        await startSupplierFulfillment(ctx.app, order, confirmedProduct, enabledSources);
+      } catch (err: any) {
+        console.error('❌ [Storefront] Supplier fulfillment failed to start for order #' + orderId + ':', err.message);
+      }
     }
   }
 

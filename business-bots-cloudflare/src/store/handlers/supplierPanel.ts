@@ -18,6 +18,7 @@ import { ADMIN_PANEL_LABELS } from './adminPanel';
 import { handleImportCallback, handleImportText, startImport } from './supplierImport';
 import { handleSourcesCallback, handleSourcesText } from './supplierSources';
 import { handleOrderMessageText } from './orderMessage';
+import { handleFulfillmentText } from './fulfillmentAdmin';
 import { recomputeOption, recomputeSupplierOptions } from '../suppliers/recompute';
 
 const ITEMS_PAGE_PREFIX = 'sup_items_';
@@ -485,6 +486,7 @@ async function handleInputText(
   }
   if (await handleSourcesText(ctx, pending.kind, pending.ref, text)) return;
   if (await handleOrderMessageText(ctx, pending.kind, pending.ref, text)) return;
+  if (await handleFulfillmentText(ctx, pending.kind, pending.ref, text)) return;
 
   const problem = await applyTypedInput(ctx, pending.kind, pending.ref, text);
   if (problem) {
