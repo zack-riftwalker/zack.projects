@@ -338,24 +338,41 @@ export class StoreDb {
     }
   }
 
-  async createManualPurchaseClaim(p: { creationKey: string; tokenHash: string; customerProductId: number; approvedBy: number }): Promise<any> {
-    const [, sel] = await this.db.batch([
+  async createManualPurchaseClaim(p: {
+    creationKey: string; tokenHash: string; customerProductId: number; approvedBy: number;
+    /** 'stock' reserves `stockAccountId` together with the claim; 'supplier' buys when the customer opens the link */
+    fulfillment?: 'outside' | 'stock' | 'supplier'; stockAccountId?: number;
+  }): Promise<any> {
+    const stock = p.fulfillment === 'stock' && p.stockAccountId !== undefined;
+    const stmts = [
+      // the reservation comes first: the claim below is inserted only while it changed a row
+      ...(stock ? [this.q("UPDATE stock_accounts SET status = 'reserved', updated_at = datetime('now', '+03:30') WHERE id = ? AND status = 'available'", p.stockAccountId)] : []),
       this.q(`
       INSERT INTO manual_purchase_claims
-        (creation_key, token_hash, customer_product_id, product_name, price, duration_days, warranty_days, approved_by)
-      SELECT ?, ?, id, name, price, duration_days, warranty_days, ?
-      FROM customer_products WHERE id = ? AND is_active = 1
+        (creation_key, token_hash, customer_product_id, product_name, price, duration_days, warranty_days, approved_by, fulfillment, stock_account_id)
+      SELECT ?, ?, id, name, price, duration_days, warranty_days, ?, ?, ?
+      FROM customer_products WHERE id = ? AND is_active = 1${stock ? ' AND changes() = 1' : ''}
       ON CONFLICT(creation_key) DO NOTHING
-    `, p.creationKey, p.tokenHash, p.approvedBy, p.customerProductId),
+    `, p.creationKey, p.tokenHash, p.approvedBy, p.fulfillment && p.fulfillment !== 'outside' ? p.fulfillment : null, stock ? p.stockAccountId : null, p.customerProductId),
       this.q('SELECT * FROM manual_purchase_claims WHERE creation_key = ?', p.creationKey),
-    ]);
-    const row = sel.results[0];
-    if (!row) throw new Error('Selected customer product is unavailable.');
+    ];
+    const rs = await this.db.batch(stmts);
+    const row = rs[rs.length - 1].results[0];
+    if (!row) {
+      // the product vanished after the reservation: give the account back
+      if (stock) await this.q("UPDATE stock_accounts SET status = 'available' WHERE id = ? AND status = 'reserved' AND order_id IS NULL", p.stockAccountId).run();
+      throw new Error('Selected customer product is unavailable.');
+    }
     return row;
   }
 
-  async redeemManualPurchaseClaim(p: { tokenHash: string; customerTelegramId: number; displayName: string }): Promise<{ outcome: ClaimOutcome; order: Order | null }> {
+  async redeemManualPurchaseClaim(p: {
+    tokenHash: string; customerTelegramId: number; displayName: string;
+    /** the deadline of a supplier-fulfilled purchase (Tehran 'YYYY-MM-DD HH:MM:SS'), now + 20 h */
+    supplierDeadlineAt?: string;
+  }): Promise<{ outcome: ClaimOutcome; order: Order | null; claim: { fulfillment: string | null; stock_account_id: number | null; approved_by: number } | null }> {
     const { tokenHash: h, customerTelegramId: me, displayName } = p;
+    const supplier = "c.fulfillment = 'supplier'";
     const rs = await this.db.batch([
       this.q(`UPDATE manual_purchase_claims
         SET status = 'claimed', claimed_by = ?, claimed_at = datetime('now', '+03:30')
@@ -363,27 +380,38 @@ export class StoreDb {
       this.q(`INSERT INTO customers (telegram_id, display_name)
         SELECT ?, ? WHERE EXISTS (SELECT 1 FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ? AND order_id IS NULL)
         ON CONFLICT(telegram_id) DO UPDATE SET display_name = excluded.display_name`, me, displayName, h, me),
+      // 'supplier': confirmed and not delivered (the clocks start at delivery); 'stock': delivered as always, the account is sent after this batch
       this.q(`INSERT INTO orders (
           customer_telegram_id, customer_product_id, product_name, price,
           receipt_file_id, receipt_type, purchase_source, status, created_at,
           decided_at, decided_by, duration_days, warranty_days, delivered_at,
-          expires_at, warranty_expires_at, customer_username
+          expires_at, warranty_expires_at, customer_username, fulfillment, supplier_deadline_at
         )
-        SELECT ?, c.customer_product_id, c.product_name, c.price, NULL, NULL, 'manual', 'delivered', c.approved_at,
-          c.approved_at, c.approved_by, c.duration_days, c.warranty_days, c.approved_at,
-          CASE WHEN c.duration_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.duration_days || ' days') END,
-          CASE WHEN c.warranty_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.warranty_days || ' days') END,
-          (SELECT username FROM customers WHERE telegram_id = ?)
-        FROM manual_purchase_claims c WHERE c.token_hash = ? AND c.claimed_by = ? AND c.order_id IS NULL`, me, me, h, me),
+        SELECT ?, c.customer_product_id, c.product_name, c.price, NULL, NULL, 'manual',
+          CASE WHEN ${supplier} THEN 'confirmed' ELSE 'delivered' END, c.approved_at,
+          c.approved_at, c.approved_by, c.duration_days, c.warranty_days,
+          CASE WHEN ${supplier} THEN NULL ELSE c.approved_at END,
+          CASE WHEN ${supplier} THEN NULL WHEN c.duration_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.duration_days || ' days') END,
+          CASE WHEN ${supplier} THEN NULL WHEN c.warranty_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.warranty_days || ' days') END,
+          (SELECT username FROM customers WHERE telegram_id = ?),
+          CASE WHEN c.fulfillment IN ('stock', 'supplier') THEN c.fulfillment END,
+          CASE WHEN ${supplier} THEN ? END
+        FROM manual_purchase_claims c WHERE c.token_hash = ? AND c.claimed_by = ? AND c.order_id IS NULL`, me, me, p.supplierDeadlineAt ?? null, h, me),
       this.q(`UPDATE manual_purchase_claims SET order_id = (SELECT MAX(id) FROM orders)
         WHERE token_hash = ? AND claimed_by = ? AND order_id IS NULL`, h, me),
+      // the reserved account of a stock link now knows its order (it turns «delivered» when the message is sent)
+      this.q(`UPDATE stock_accounts SET order_id = (SELECT order_id FROM manual_purchase_claims WHERE token_hash = ?),
+        updated_at = datetime('now', '+03:30')
+        WHERE id = (SELECT stock_account_id FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ?)
+          AND status = 'reserved' AND order_id IS NULL AND changes() = 1`, h, h, me),
       this.q('SELECT * FROM manual_purchase_claims WHERE token_hash = ?', h),
     ]);
-    const claim = rs[4].results[0];
-    if (!claim) return { outcome: 'invalid', order: null };
+    const claim = rs[5].results[0];
+    if (!claim) return { outcome: 'invalid', order: null, claim: null };
     const order = claim.order_id ? (await this.getOrderById(claim.order_id)) ?? null : null;
-    if (rs[0].meta.changes === 1) return { outcome: 'claimed', order };
-    return { outcome: claim.claimed_by === me ? 'already_claimed' : 'claimed_by_other', order };
+    const info = { fulfillment: claim.fulfillment ?? null, stock_account_id: claim.stock_account_id ?? null, approved_by: claim.approved_by };
+    if (rs[0].meta.changes === 1) return { outcome: 'claimed', order, claim: info };
+    return { outcome: claim.claimed_by === me ? 'already_claimed' : 'claimed_by_other', order, claim: info };
   }
 
   async deletePendingOrder(id: number) {

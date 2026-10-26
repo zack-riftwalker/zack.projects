@@ -18,6 +18,9 @@ import { ADMIN_PANEL_LABELS } from './adminPanel';
 import { handleImportCallback, handleImportText, startImport } from './supplierImport';
 import { handleSourcesCallback, handleSourcesText } from './supplierSources';
 import { handleFulfillmentText } from './fulfillmentAdmin';
+import { handleStockText } from './stockAdmin';
+import { handleWalletCallback, handleWalletText } from './supplierWallet';
+import { usd, walletBalance } from '../suppliers/wallet';
 import { recomputeOption, recomputeSupplierOptions } from '../suppliers/recompute';
 
 const ITEMS_PAGE_PREFIX = 'sup_items_';
@@ -44,6 +47,7 @@ async function menuView(app: StoreApp): Promise<{ text: string; keyboard: Return
     text: '🔌 <b>API تأمین‌کننده</b>\n⏸ نیازمند تصمیم: ' + fa(n) + ' سفارش\n\nتأمین‌کننده‌ها را اضافه کنید و محصولاتشان را با قیمت خرید ببینید.',
     keyboard: kb([
       [cb('🏪 تأمین‌کننده‌ها', 'sup_list')],
+      [cb('🛒 خرید مستقیم', 'stk_buy'), cb('📦 اکانت‌های من', 'stk_list_0')],
       [cb('⏸ نیازمند تصمیم (' + fa(n) + ')', 'sup_na')],
       [cb('💹 سود پیش‌فرض', 'sup_def')],
       [cb('❌ بستن', 'sup_close')],
@@ -92,11 +96,13 @@ async function cardView(app: StoreApp, s: SupplierRow): Promise<{ text: string; 
     '💵 نرخ دلار: ' + (cached ? formatPrice(cached.catalog.usdToman) + ' ت' : '—'),
     '📦 محصولات در کاتالوگ: ' + (cached ? fa(cached.catalog.items.length) : '۰'),
     '🔗 گزینه‌های متصل: ' + fa(linked),
+    '💳 موجودی تخمینی: ' + usd(await walletBalance(app, s.id)) + ' (بر اساس شارژهایی که ثبت کرده‌اید)',
   );
   const keyboard = kb([
     [cb('🔄 همگام‌سازی الان', 'sup_sync_' + s.id), cb('📋 محصولات', ITEMS_PAGE_PREFIX + s.id + '_0')],
     [cb('🔑 تغییر کلید', 'sup_key_' + s.id), cb('👤 تغییر user_id', 'sup_uid_' + s.id)],
     [cb(s.is_enabled ? '⏸ غیرفعال کردن' : '▶️ فعال کردن', 'sup_tog_' + s.id)],
+    [cb('💳 ثبت شارژ کیف پول', 'sup_topup_' + s.id), cb('🧾 تاریخچه‌ی کیف پول', 'sup_wal_' + s.id)],
     [cb('🔙 بازگشت', 'sup_list')],
   ]);
   return { text: lines.join('\n'), keyboard };
@@ -347,6 +353,7 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
     }
     if (await handleSourcesCallback(ctx, data)) return;
     if (await handleImportCallback(ctx, data)) return;
+    if (await handleWalletCallback(ctx, data)) return;
     if (data === 'sup_defapply') {
       await ctx.answerCallbackQuery();
       const count = await applyDefaultsToAuto(ctx);
@@ -504,6 +511,8 @@ async function handleInputText(
   }
   if (await handleSourcesText(ctx, pending.kind, pending.ref, text)) return;
   if (await handleFulfillmentText(ctx, pending.kind, pending.ref, text)) return;
+  if (await handleStockText(ctx, pending.kind, pending.ref, text)) return;
+  if (await handleWalletText(ctx, pending.kind, pending.ref, text)) return;
 
   const problem = await applyTypedInput(ctx, pending.kind, pending.ref, text);
   if (problem) {

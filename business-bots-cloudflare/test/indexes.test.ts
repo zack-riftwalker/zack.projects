@@ -6,13 +6,16 @@ import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
 import { APPLY_DEFAULTS_SQL, NEEDS_ACTION_COUNT_SQL, NEEDS_ACTION_LIST_SQL } from '../src/store/handlers/supplierPanel';
 import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
+import { BALANCE_SQL, HISTORY_SQL } from '../src/store/suppliers/wallet';
+import { BATCH_ACCOUNTS_SQL, BATCH_LIST_SQL } from '../src/store/suppliers/stockCards';
+import { CUSTOMER_BY_ID_SQL, CUSTOMER_BY_NAME_SQL, MATCHING_PRODUCTS_SQL } from '../src/store/handlers/stockAdmin';
 import {
   DEADLINE_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
 } from '../src/store/suppliers/engine';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
 const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links',
-  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts'];
+  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger'];
 
 function plan(f: FakeD1, sql: string, ...args: unknown[]): string[] {
   return (f.sqlite.prepare('EXPLAIN QUERY PLAN ' + sql).all(...(args as any[])) as any[]).map((r) => String(r.detail));
@@ -120,6 +123,16 @@ describe('supplier hot queries use indexes', () => {
     ['events of an order', 'SELECT * FROM fulfillment_events WHERE order_id = ? ORDER BY id DESC LIMIT 15', [1]],
     ['my subscriptions with stored accounts', `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
       AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`, [1]],
+    // direct buy, stock accounts, wallet, manual links (S7)
+    ['wallet balance', BALANCE_SQL, [1]],
+    ['wallet history (LIMIT)', HISTORY_SQL, [1, 10]],
+    ['stock batch list (LIMIT)', BATCH_LIST_SQL, []],
+    ['accounts of a batch', BATCH_ACCOUNTS_SQL, [1]],
+    ['products that share an account\'s supplier item', MATCHING_PRODUCTS_SQL, [1]],
+    ['customer by id', CUSTOMER_BY_ID_SQL, [1]],
+    ['customer by username', CUSTOMER_BY_NAME_SQL, ['x']],
+    ['redeem: link the reserved account', `UPDATE stock_accounts SET order_id = (SELECT order_id FROM manual_purchase_claims WHERE token_hash = ?), updated_at = 'x'
+      WHERE id = (SELECT stock_account_id FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ?) AND status = 'reserved' AND order_id IS NULL AND changes() = 1`, ['h', 'h', 1]],
   ];
   for (const [label, sql, args] of cases) {
     it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));

@@ -24,7 +24,9 @@ export interface StoreSession extends SceneSession {
   awaitingSupplierInput?: {
     kind: 'sup_key' | 'sup_key_edit' | 'sup_uid' | 'def_percent' | 'def_fixed'
       | 'imp_group' | 'imp_label' | 'imp_duration' | 'imp_warranty' | 'imp_percent' | 'imp_fixed' | 'imp_terms'
-      | 'src_percent' | 'src_fixed' | 'fo_msg' | 'fo_rid' | 'fo_text' | 'fo_cost' | 'fo_cancel_reason';
+      | 'src_percent' | 'src_fixed' | 'fo_msg' | 'fo_rid' | 'fo_text' | 'fo_cost' | 'fo_cancel_reason'
+      | 'sup_topup' | 'wal_refund' | 'wal_adjust'
+      | 'stk_qty' | 'stk_rid' | 'stk_sold' | 'stk_dnote' | 'stk_batch_profit' | 'stk_send_to' | 'stk_send_price' | 'stk_note';
     ref: string; at: number;
   } | null;
   /** the product import being prepared (SUPPLIER_PLAN.md §5.1) */

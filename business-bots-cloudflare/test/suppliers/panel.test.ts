@@ -33,7 +33,7 @@ describe('supplier panel: menu', () => {
     await say(t, SUPPLIER_LABEL);
     const sent = lastSent(t);
     expect(sent.text).toContain('API تأمین‌کننده');
-    expect(callbackDataOf(sent)).toEqual(['sup_list', 'sup_na', 'sup_def', 'sup_close']);
+    expect(callbackDataOf(sent)).toEqual(['sup_list', 'stk_buy', 'stk_list_0', 'sup_na', 'sup_def', 'sup_close']);
   });
 });
 
@@ -109,7 +109,7 @@ describe('supplier panel: card, items, toggle, sync', () => {
     expect(card).toContain('user_id: <code>42</code>');
     expect(card).not.toContain(KEY);
     expect(callbackDataOf(t.tg.of('editMessageText').at(-1)!.payload)).toEqual(
-      ['sup_sync_' + id, 'sup_items_' + id + '_0', 'sup_key_' + id, 'sup_uid_' + id, 'sup_tog_' + id, 'sup_list'],
+      ['sup_sync_' + id, 'sup_items_' + id + '_0', 'sup_key_' + id, 'sup_uid_' + id, 'sup_tog_' + id, 'sup_topup_' + id, 'sup_wal_' + id, 'sup_list'],
     );
   });
 

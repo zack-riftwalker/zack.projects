@@ -15,6 +15,7 @@ import {
   setOrderCost, startSelfDelivery, undoSelfDelivery,
 } from '../suppliers/fulfillmentActions';
 import { formatAccountsHtml, parseContent } from '../suppliers/format';
+import { availableStockFor } from '../suppliers/stockCards';
 import { costToman } from '../suppliers/pricing';
 import { listSuppliers } from '../suppliers/store';
 import { catalogPicker, findCatalogItem } from './supplierSources';
@@ -275,7 +276,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   const showStock = async (ctx: StoreContext, orderId: number, page: number) => {
     const order = await liveOrder(ctx, orderId);
     if (!order) return;
-    const accounts = await availableStock(ctx.app, order);
+    const accounts = await availableStockFor(ctx.app, order.customer_product_id);
     await ctx.answerCallbackQuery();
     if (accounts.length === 0) {
       await ctx.editMessageText('📦 اکانت آزادی در «اکانت‌های من» نیست.', Markup.inlineKeyboard([[cb('🔙 بازگشت', 'fo_card_' + order.id)]])).catch(() => {});
@@ -532,22 +533,6 @@ async function loadStockAccount(app: StoreApp, id: number): Promise<StockAccount
     id: row.id, status: row.status, content: parseContent(row.content_json),
     unitCost: row.cost_toman !== null && row.quantity > 0 ? Math.round(row.cost_toman / row.quantity) : null,
   };
-}
-
-/** Available accounts, oldest first; the ones from a batch bought for one of this option's sources come first. */
-async function availableStock(app: StoreApp, order: OrderRow): Promise<{ id: number; title: string; match: boolean }[]> {
-  const mine = (await app.raw.prepare('SELECT remote_product_id, remote_variation_id FROM product_sources WHERE customer_product_id = ?')
-    .bind(order.customer_product_id).all<{ remote_product_id: string; remote_variation_id: string }>()).results;
-  const rows = (await app.raw.prepare(`
-    SELECT a.id, b.title, so.remote_product_id, so.remote_variation_id FROM stock_accounts a
-    JOIN stock_batches b ON b.id = a.batch_id LEFT JOIN supplier_orders so ON so.id = b.supplier_order_id
-    WHERE a.status = 'available' ORDER BY a.id LIMIT 48`).bind()
-    .all<{ id: number; title: string; remote_product_id: string | null; remote_variation_id: string | null }>()).results;
-  const items = rows.map((r) => ({
-    id: r.id, title: r.title,
-    match: mine.some((m) => m.remote_product_id === r.remote_product_id && m.remote_variation_id === r.remote_variation_id),
-  }));
-  return [...items.filter((i) => i.match), ...items.filter((i) => !i.match)];
 }
 
 /** After a text / stock delivery: answers the callback and edits the card; true when the customer got it. */

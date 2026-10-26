@@ -1,6 +1,8 @@
 import type { StoreApp } from '../../apps';
 import { tehranDateTime } from '../../lib/time';
 import { eventStatement } from '../events';
+import type { Stmt } from '../../lib/budget';
+import type { FulfillmentEventKind } from '../events';
 import type { DeliveryContent } from './format';
 
 /** What one account of the batch cost: the batch's total cost divided by its size; null when unknown. */
@@ -21,28 +23,38 @@ export interface NewStockBatch {
   note?: string | null;
   createdBy?: number;
   orderId?: number | null;
-  eventKind?: 'diverted_to_stock' | 'placed';
+  eventKind?: FulfillmentEventKind;
   eventDetail?: string;
+  /** a statement that must change a row for the batch to be saved at all (e.g. the supplier order's `placed → completed`), run first in the same batch */
+  claim?: Stmt;
 }
 
 /**
  * Saves a batch and one `available` account per element, in one batch (the accounts take the batch id with
  * `SELECT MAX(id)`, which is safe inside one transaction). Returns the batch id.
  */
-export async function createStockBatch(app: StoreApp, b: NewStockBatch): Promise<number> {
+export async function createStockBatch(app: StoreApp, b: NewStockBatch & { claim: Stmt }): Promise<number | null>;
+export async function createStockBatch(app: StoreApp, b: NewStockBatch): Promise<number>;
+export async function createStockBatch(app: StoreApp, b: NewStockBatch): Promise<number | null> {
   const now = tehranDateTime(app.apps.now());
+  const guard = b.claim ? ' WHERE changes() = 1' : '';
   const stmts = [
+    ...(b.claim ? [b.claim] : []),
     app.raw.prepare(`INSERT INTO stock_batches
       (supplier_id, supplier_order_id, title, quantity, unit_price_usd, usd_toman, cost_toman, note, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${guard}`).bind(
       b.supplierId, b.supplierOrderId, b.title, b.accounts.length, b.unitPriceUsd, b.usdToman, b.costToman, b.note ?? null,
       b.createdBy ?? 0, now),
+    // each account is saved only while the batch statement before it changed a row
     ...b.accounts.map((a) => app.raw.prepare(
-      'INSERT INTO stock_accounts (batch_id, content_json, status, updated_at) VALUES ((SELECT MAX(id) FROM stock_batches), ?, \'available\', ?)',
+      `INSERT INTO stock_accounts (batch_id, content_json, status, updated_at)
+       SELECT (SELECT MAX(id) FROM stock_batches), ?, 'available', ? WHERE changes() = 1`,
     ).bind(JSON.stringify({ accounts: [a] } satisfies DeliveryContent), now)),
   ];
+  const skip = b.claim ? 1 : 0;
   const rs = await app.raw.batch(stmts);
-  const batchId = rs[0].meta.last_row_id;
+  if (b.claim && rs[0].meta.changes !== 1) return null;
+  const batchId = rs[skip].meta.last_row_id;
   if (b.eventKind) {
     await eventStatement(app, {
       orderId: b.orderId ?? null, supplierOrderId: b.supplierOrderId, batchId, kind: b.eventKind, detail: b.eventDetail,

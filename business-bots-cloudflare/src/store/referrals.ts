@@ -3,7 +3,8 @@ import { storeOrderPaid } from '../bridge';
 import { BudgetExceededError } from '../lib/budget';
 import { codeFloorViolation } from './suppliers/floor';
 import { Markup } from '../lib/markup';
-import { formatJalaliDate, tehranParts } from '../lib/time';
+import { formatJalaliDate, tehranDateTime, tehranParts } from '../lib/time';
+import { DEADLINE_HOURS, isSupplierOption, raiseNeedsAction } from './suppliers/engine';
 import { getReferralConfig, type ReferralConfig } from './referralConfig';
 import { formatPrice } from './utils';
 
@@ -13,7 +14,7 @@ export const REF_PAYLOAD_RE = /^ref_([A-Z2-9]{8})$/;
  * Calls one reward round can spend (reads, claim, issue, referrer message, one message per admin).
  * Below this the grant waits for the cron sweep: running out mid-way would strand a «pending» reward.
  */
-const grantBudgetNeeded = (app: StoreApp) => 12 + app.cfg.adminIds.length;
+const grantBudgetNeeded = (app: StoreApp) => 16 + app.cfg.adminIds.length;
 
 const fa = (n: number) => n.toLocaleString('fa-IR');
 
@@ -132,6 +133,13 @@ export async function tryGrantRewards(app: StoreApp, referrerId: number): Promis
   }
 }
 
+/** The reward order becomes a supplier order that waits for the admin's «approve and buy» (reason `approval`). */
+async function markRewardForApproval(app: StoreApp, orderId: number): Promise<void> {
+  const deadline = tehranDateTime(new Date(app.apps.now().getTime() + DEADLINE_HOURS * 3_600_000));
+  await app.raw.prepare("UPDATE orders SET fulfillment = 'supplier', supplier_deadline_at = ? WHERE id = ? AND status = 'confirmed'").bind(deadline, orderId).run();
+  await raiseNeedsAction(app, orderId, 'approval');
+}
+
 async function issueReward(app: StoreApp, referrerId: number, rewardId: number, cfg: ReferralConfig): Promise<void> {
   const intro = '🎉 تبریک! ' + fa(cfg.required) + ' نفر از دوستانتان با لینک شما خرید کردند.\n\n';
 
@@ -145,6 +153,12 @@ async function issueReward(app: StoreApp, referrerId: number, rewardId: number, 
     } catch (err: any) {
       if (err instanceof BudgetExceededError) throw err;
       console.warn('⚠️ [Referral] Reward message to ' + referrerId + ' failed:', err.message);
+    }
+    if (await isSupplierOption(app, product.id)) {
+      // a free product that costs real money: the admin approves the purchase on a decision card (SUPPLIER_PLAN.md §10.3)
+      await markRewardForApproval(app, orderId);
+      await notifyAdmins(app, '🎁 جایزه دعوت صادر شد\n👤 مشتری: ' + referrerId + '\n🎯 ' + fa(cfg.required) + ' دعوت موفق\n🏆 جایزه: سفارش رایگان #' + orderId + ' — کارت تأیید خرید برایتان آمد');
+      return;
     }
     // the normal delivery flow: monshi's «being prepared» message, the delivery button, the 20 h stalled alert
     try {

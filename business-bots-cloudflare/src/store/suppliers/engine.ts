@@ -16,6 +16,8 @@ import { pickActiveSource, recomputeOption, type SourceRow } from './recompute';
 import { costToman } from './pricing';
 import { createStockBatch, stockUnitCost } from './stock';
 import { getSupplier, readCatalog } from './store';
+import { completeStockOrder, notifyStockProblem } from './stockOrders';
+import { usd, walletBalance } from './wallet';
 import { syncSupplier } from './sync';
 import type { SupplierOrderRow, SupplierRow } from './types';
 
@@ -237,9 +239,16 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
   }
 
   // 3. choose the source, then 4. place (a 409 moves on to the next source)
-  const forced = so.forced_source_id !== null;
-  let sources = (await q(app, SOURCE_SELECT + (forced ? ' WHERE s.id = ?' : ' WHERE s.customer_product_id = ? ORDER BY s.priority, s.id'),
-    forced ? so.forced_source_id : so.customer_product_id).all<SourceCandRow>()).results;
+  const forced = so.forced_source_id !== null || so.purpose === 'stock';
+  let sources: SourceCandRow[];
+  if (so.purpose === 'stock') {
+    // a direct buy names its supplier item itself; it has no product source row
+    const direct = await stockCandidate(app, so);
+    sources = direct ? [direct] : [];
+  } else {
+    sources = (await q(app, SOURCE_SELECT + (forced ? ' WHERE s.id = ?' : ' WHERE s.customer_product_id = ? ORDER BY s.priority, s.id'),
+      forced ? so.forced_source_id : so.customer_product_id).all<SourceCandRow>()).results;
+  }
 
   for (;;) {
     const cand = forced ? sources[0] ?? null : (pickActiveSource(sources, nowStr(app)) as SourceCandRow | null);
@@ -262,7 +271,7 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
     const persisted = await app.raw.batch([
       q(app, `UPDATE supplier_orders SET source_id = ?, supplier_id = ?, remote_product_id = ?, remote_variation_id = ?, price_usd = ?, usd_toman = ?,
               cost_toman = ?, lease_until = ?, updated_at = ? WHERE id = ? AND status = 'placing'`,
-      cand.id, cand.supplier_id, cand.remote_product_id, cand.remote_variation_id, basis.priceUsd, basis.usdToman, totalCost,
+      cand.id || null, cand.supplier_id, cand.remote_product_id, cand.remote_variation_id, basis.priceUsd, basis.usdToman, totalCost,
       addMinutes(app, LEASE_MINUTES), nowStr(app), soId),
       eventStatement(app, { orderId: so.order_id, supplierOrderId: soId, kind: 'claim', actor: so.requested_by, detail: 'source ' + cand.id, onlyIfChanged: true }),
     ]);
@@ -327,6 +336,7 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
       }
 
       case 'retry_later': {
+        if (so.purpose === 'stock') return finishFailed(app, so, order, 'retry_later', result.http, result.detail);
         const rs = await app.raw.batch([
           q(app, `UPDATE supplier_orders SET status = 'queued', next_attempt_at = ?, lease_until = NULL, last_http = ?, last_error = ?, updated_at = ?
                   WHERE id = ? AND status = 'placing'`, addMinutes(app, RETRY_MINUTES), result.http, cut(result.detail, 300), at, soId),
@@ -334,9 +344,12 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
         ]);
         if (rs[0].meta.changes === 1 && so.first_fail_notified === 0 && order) {
           await q(app, 'UPDATE supplier_orders SET first_fail_notified = 1 WHERE id = ?', soId).run();
-          await raiseNeedsAction(app, order.id, 'retry_later', result.lowBalance
-            ? { header: '💳 موجودی کیف پول «' + escapeHtml(cand.sup_name) + '» کافی نیست — لطفاً شارژ کنید. (سفارش #' + order.id + ')' }
-            : {});
+          const balance = unit !== null ? await walletBalance(app, cand.supplier_id) : null;
+          await raiseNeedsAction(app, order.id, 'retry_later', {
+            ...(result.lowBalance ? { header: '💳 موجودی کیف پول «' + escapeHtml(cand.sup_name) + '» کافی نیست — لطفاً شارژ کنید. (سفارش #' + order.id + ')' } : {}),
+            ...(balance !== null && unit !== null && balance < unit * so.quantity
+              ? { extraLines: ['💳 موجودی تخمینی (' + usd(balance) + ') کمتر از هزینه است.'] } : {}),
+          });
         }
         return 'queued';
       }
@@ -352,6 +365,28 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
     }
   }
 }
+
+/** The candidate of a direct buy: the supplier item named on the row itself, with the cached price and rate. */
+async function stockCandidate(app: StoreApp, so: SupplierOrderRow): Promise<SourceCandRow | null> {
+  if (so.supplier_id === null || so.remote_product_id === null) return null;
+  const sup = await getSupplier(app, so.supplier_id);
+  if (!sup || !sup.is_enabled) return null;
+  const cached = await readCatalog(app, sup.id);
+  const item = cached?.catalog.items.find((i) => i.remoteProductId === so.remote_product_id && i.remoteVariationId === (so.remote_variation_id ?? ''));
+  return {
+    id: 0, supplier_id: sup.id, remote_product_id: so.remote_product_id, remote_variation_id: so.remote_variation_id ?? '',
+    price_usd: item?.priceUsd ?? null, priority: 1, is_enabled: 1, listed: item ? 1 : 0, oos_until: null, sup_enabled: sup.is_enabled,
+    sup_kind: sup.kind, sup_name: sup.name, base_url: sup.base_url, api_key: sup.api_key, remote_user_id: sup.remote_user_id,
+    usd_toman: cached?.catalog.usdToman ?? null, fetched_at: cached?.fetchedAt ?? null,
+  };
+}
+
+const stockReasonFa = (reason: NeedsActionReason, detail: string): string => ({
+  all_out_of_stock: 'ناموجود است.',
+  retry_later: 'تأمین‌کننده فعلاً سفارش را نپذیرفت (' + detail + '). موجودی کیف پول و وضعیت را بررسی کنید.',
+  config: 'تنظیمات تأمین‌کننده مشکل دارد (' + detail + ').',
+  rejected: 'تأمین‌کننده سفارش را نپذیرفت (' + detail + ').',
+} as Record<string, string>)[reason] ?? detail;
 
 /** The price and rate to buy at: the catalog item itself, after a refetch when the cached catalog is stale. */
 async function costBasis(app: StoreApp, cand: SourceCandRow): Promise<{ priceUsd: number | null; usdToman: number | null }> {
@@ -402,6 +437,7 @@ async function finishFailed(
     eventStatement(app, { orderId: so.order_id, supplierOrderId: so.id, kind: 'place_failed', detail: reason + ' ' + (http ?? '') + ': ' + cut(detail, 300), onlyIfChanged: true }),
   ]);
   if (rs[0].meta.changes === 1 && order) await raiseNeedsAction(app, order.id, reason);
+  if (rs[0].meta.changes === 1 && so.purpose === 'stock') await notifyStockProblem(app, so.id, 'failed', stockReasonFa(reason, detail));
   return 'failed';
 }
 
@@ -418,6 +454,7 @@ export async function markUnknown(app: StoreApp, soId: number, http: number | nu
   if (rs[0].meta.changes !== 1) return;
   const so = await q(app, 'SELECT order_id, purpose FROM supplier_orders WHERE id = ?', soId).first<{ order_id: number | null; purpose: string }>();
   if (so?.order_id) await raiseNeedsAction(app, so.order_id, 'unknown');
+  else if (so?.purpose === 'stock') await notifyStockProblem(app, soId, 'unknown', '');
 }
 
 // ─── Polling ─────────────────────────────────────────────────────────────────
@@ -465,12 +502,13 @@ export async function pollSupplierOrder(app: StoreApp, soId: number, opts: { for
     const previous = so.last_error?.startsWith(EMPTY_MARK) ? Number(so.last_error.slice(EMPTY_MARK.length)) || 0 : 0;
     const seen = previous + 1;
     await save('last_error = ?', EMPTY_MARK + seen).run();
-    if (seen >= EMPTY_POLLS_LIMIT && so.order_id !== null) {
-      await app.raw.batch([
+    if (seen >= EMPTY_POLLS_LIMIT) {
+      const rs = await app.raw.batch([
         q(app, "UPDATE supplier_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'placed'", now, soId),
-        eventStatement(app, { orderId: so.order_id, supplierOrderId: soId, kind: 'poll', detail: 'completed without accounts' }),
+        eventStatement(app, { orderId: so.order_id, supplierOrderId: soId, kind: 'poll', detail: 'completed without accounts', onlyIfChanged: true }),
       ]);
-      await raiseNeedsAction(app, so.order_id, 'completed_no_accounts');
+      if (rs[0].meta.changes === 1 && so.order_id !== null) await raiseNeedsAction(app, so.order_id, 'completed_no_accounts');
+      else if (rs[0].meta.changes === 1) await notifyStockProblem(app, soId, 'empty', 'سفارش در تأمین‌کننده تکمیل شد ولی اکانتی برنگشت. با تأمین‌کننده هماهنگ کنید.');
     }
     return;
   }
@@ -481,6 +519,9 @@ export async function pollSupplierOrder(app: StoreApp, soId: number, opts: { for
       eventStatement(app, { orderId: so.order_id, supplierOrderId: soId, kind: 'poll', detail: 'final failure: ' + r.remoteStatus, onlyIfChanged: true }),
     ]);
     if (rs[0].meta.changes === 1 && so.order_id !== null) await raiseNeedsAction(app, so.order_id, 'supplier_failed');
+    else if (rs[0].meta.changes === 1 && so.purpose === 'stock') {
+      await notifyStockProblem(app, soId, 'failed', 'تأمین‌کننده سفارش را ناموفق اعلام کرد (' + r.remoteStatus + '). اگر مبلغ برگشته در تاریخچه‌ی کیف پول «بازگشت وجه» ثبت کنید.');
+    }
     return;
   }
 
@@ -498,6 +539,10 @@ type Accounts = { fields: { key: string; value: string }[] }[];
  * to «اکانت‌های من» and the customer gets nothing (SUPPLIER_PLAN.md §7.5 step 1).
  */
 async function completeAndDeliver(app: StoreApp, so: SupplierOrderRow, remoteStatus: string, raw: string, accounts: Accounts): Promise<void> {
+  if (so.purpose === 'stock') {
+    await completeStockOrder(app, so, remoteStatus, raw, accounts);
+    return;
+  }
   const now = nowStr(app);
   const order = so.order_id !== null ? await app.db.getOrderById(so.order_id) : undefined;
   const wanted = !!order && order.status === 'confirmed' && order.fulfillment === 'supplier' && so.divert_to_stock === 0;
@@ -700,8 +745,18 @@ export async function resendDelivery(app: StoreApp, orderId: number, actor: numb
 
 export async function recordRemoteOrderId(app: StoreApp, orderId: number, remoteOrderId: string, actor: number): Promise<'ok' | 'none'> {
   const so = await q(app, "SELECT * FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", orderId).first<SupplierOrderRow>();
-  if (!so) return 'none';
+  return so ? recordRemoteId(app, so, remoteOrderId, actor) : 'none';
+}
+
+/** The same for an `unknown` direct buy (no store order): the supplier order goes on as placed and is polled. */
+export async function recordStockRemoteOrderId(app: StoreApp, soId: number, remoteOrderId: string, actor: number): Promise<'ok' | 'none'> {
+  const so = await q(app, "SELECT * FROM supplier_orders WHERE id = ? AND purpose = 'stock' AND status = 'unknown'", soId).first<SupplierOrderRow>();
+  return so ? recordRemoteId(app, so, remoteOrderId, actor) : 'none';
+}
+
+async function recordRemoteId(app: StoreApp, so: SupplierOrderRow, remoteOrderId: string, actor: number): Promise<'ok' | 'none'> {
   const now = nowStr(app);
+  const note = so.purpose === 'customer' ? 'store#' + so.order_id + '/so#' + so.id : 'stock/so#' + so.id;
   const stmts: Stmt[] = [
     q(app, "UPDATE supplier_orders SET status = 'placed', remote_order_id = ?, placed_at = ?, next_check_at = ?, checks = 0, last_error = NULL, updated_at = ? WHERE id = ? AND status = 'unknown'",
       remoteOrderId, now, addMinutes(app, 1), now, so.id),
@@ -709,10 +764,12 @@ export async function recordRemoteOrderId(app: StoreApp, orderId: number, remote
   if (so.price_usd !== null && so.supplier_id !== null) {
     stmts.push(q(app, `INSERT INTO wallet_ledger (supplier_id, kind, amount_usd, supplier_order_id, note, created_by, created_at)
                        SELECT ?, 'spend', ?, ?, ?, ?, ? WHERE changes() = 1`,
-    so.supplier_id, -round6(so.price_usd * so.quantity), so.id, 'store#' + orderId + '/so#' + so.id, actor, now));
+    so.supplier_id, -round6(so.price_usd * so.quantity), so.id, note, actor, now));
   }
-  stmts.push(eventStatement(app, { orderId, supplierOrderId: so.id, kind: 'remote_id_set', actor, detail: remoteOrderId, onlyIfChanged: true }));
-  stmts.push(q(app, "UPDATE orders SET needs_action_reason = NULL, needs_action_at = NULL WHERE id = ? AND needs_action_reason = 'unknown'", orderId));
+  stmts.push(eventStatement(app, { orderId: so.order_id, supplierOrderId: so.id, kind: 'remote_id_set', actor, detail: remoteOrderId, onlyIfChanged: true }));
+  if (so.order_id !== null) {
+    stmts.push(q(app, "UPDATE orders SET needs_action_reason = NULL, needs_action_at = NULL WHERE id = ? AND needs_action_reason = 'unknown'", so.order_id));
+  }
   const rs = await app.raw.batch(stmts);
   return rs[0].meta.changes === 1 ? 'ok' : 'none';
 }

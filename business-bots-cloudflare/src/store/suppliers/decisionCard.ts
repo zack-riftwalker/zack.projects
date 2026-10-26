@@ -110,13 +110,20 @@ export function cardRows(d: CardData): InlineButton[][] {
   // money may already be spent (or a delivery waits): buying from another source would buy twice
   const inFlight = so !== null && ['placing', 'placed', 'completed'].includes(so.status);
   const rows: InlineButton[][] = [];
-  const retry = cb('🔁 تلاش دوباره', 'fo_retry_' + id);
+  const retry = cb(reason === 'approval' ? '✅ تأیید و خرید' : '🔁 تلاش دوباره', 'fo_retry_' + id);
   const src = cb('🔀 خرید از منبع دیگر', 'fo_src_' + id);
   const stock = cb('📦 از اکانت‌های من', 'fo_stock_' + id);
   const text = cb('✍️ ارسال متن اکانت', 'fo_text_' + id);
   const self = cb('🙋 خودم تحویل می‌دهم', 'fo_self_' + id);
   const cancel = cb('❌ لغو سفارش', 'fo_cancel_' + id);
 
+  if (o.status === 'delivered' && reason === 'send_failed') {
+    // a manual-link stock purchase: the order is already delivered, only the message did not reach the customer
+    rows.push([cb('🔁 ارسال دوباره', 'fo_resend_' + id), cb('👁 نمایش اکانت', 'fo_view_' + id)]);
+    rows.push(customerContactRow(o.customer_telegram_id, o.customer_username, id));
+    rows.push([cb('📜 تاریخچه', 'fo_hist_' + id)]);
+    return rows;
+  }
   if (o.status === 'confirmed' && o.fulfillment === 'manual_outside') {
     rows.push([cb('✅ تحویل شد', 'fo_done_' + id)]);
     rows.push(customerContactRow(o.customer_telegram_id, o.customer_username, id));

@@ -88,7 +88,7 @@ export async function recomputeOption(app: StoreApp, productId: number, env?: Re
  * a disabled supplier is never synced, so nothing else would refresh its options). Stops while `reserve` budget is
  * left; whatever did not fit is finished by the minute cron, which re-applies the supplier's catalog.
  */
-export async function recomputeSupplierOptions(app: StoreApp, supplierId: number, reserve = 10): Promise<{ done: number; total: number }> {
+export async function recomputeSupplierOptions(app: StoreApp, supplierId: number, reserve = 12): Promise<{ done: number; total: number }> {
   const ids = (await app.raw.prepare(
     'SELECT DISTINCT customer_product_id AS id FROM product_sources WHERE supplier_id = ? ORDER BY customer_product_id',
   ).bind(supplierId).all<{ id: number }>()).results;
