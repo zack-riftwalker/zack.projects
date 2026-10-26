@@ -157,7 +157,7 @@ describe('delivery (§7.5)', () => {
     expect(events(t, 'send_failed')).toHaveLength(1);
     const card = t.tg.of('sendMessage', ADMIN.id).map((c) => c.payload).find((p) => p.text.includes('تحویل نشد'))!;
     expect(card.text).toContain('Forbidden: bot was blocked by the user');
-    expect(callbackDataOf(card)).toEqual(['fo_resend_' + orderId, 'fo_view_' + orderId, 'fo_msg_' + orderId]);
+    expect(callbackDataOf(card)).toEqual(['fo_resend_' + orderId, 'fo_view_' + orderId, 'fo_self_' + orderId, 'fo_cancel_' + orderId, 'fo_msg_' + orderId, 'fo_hist_' + orderId]);
 
     // later cron minutes never send it again on their own
     t.tg.clearRules();
@@ -201,7 +201,9 @@ describe('delivery (§7.5)', () => {
     await at(t, iso('12:00', day2));
     expect(adminTexts(t, '۲۰ ساعت از تأیید')).toHaveLength(1);
     expect(posts(fake)).toHaveLength(postsAt); // cancelled: no more automatic tries
-    expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).find((c) => c.payload.text.includes('۲۰ ساعت'))!.payload)).toEqual(['fo_retry_' + orderId, 'fo_msg_' + orderId]);
+    expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).find((c) => c.payload.text.includes('۲۰ ساعت'))!.payload)).toEqual([
+      'fo_retry_' + orderId, 'fo_src_' + orderId, 'fo_stock_' + orderId, 'fo_text_' + orderId, 'fo_self_' + orderId, 'fo_cancel_' + orderId, 'fo_msg_' + orderId, 'fo_hist_' + orderId,
+    ]);
     expect(sid).toBeGreaterThan(0);
   });
 

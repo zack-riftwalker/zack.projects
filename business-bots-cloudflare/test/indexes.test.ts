@@ -4,7 +4,8 @@ import { REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
-import { APPLY_DEFAULTS_SQL } from '../src/store/handlers/supplierPanel';
+import { APPLY_DEFAULTS_SQL, NEEDS_ACTION_COUNT_SQL, NEEDS_ACTION_LIST_SQL } from '../src/store/handlers/supplierPanel';
+import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
 import {
   DEADLINE_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
 } from '../src/store/suppliers/engine';
@@ -103,6 +104,19 @@ describe('supplier hot queries use indexes', () => {
     ['latest delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? ORDER BY id DESC LIMIT 1', [1]],
     ['latest sent delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? AND sent_ok = 1 ORDER BY id DESC LIMIT 1', [1]],
     ['pending delivery of a supplier order', 'SELECT id FROM order_deliveries WHERE order_id = ? AND supplier_order_id = ? AND sent_ok = 0 ORDER BY id DESC LIMIT 1', [1, 1]],
+    // decision card, /order, cancel, stock (S6)
+    ['needs-action count', NEEDS_ACTION_COUNT_SQL, []],
+    ['needs-action list (LIMIT)', NEEDS_ACTION_LIST_SQL, []],
+    ['cancel: give the code back', CANCEL_SQL.redemption, [1, 1, 1]],
+    ['cancel: un-qualify the referral', CANCEL_SQL.referral, [1, 1]],
+    ['cancel: release a reserved account', CANCEL_SQL.stock, ['x', 1]],
+    ['card: customer name', 'SELECT display_name FROM customers WHERE telegram_id = (SELECT customer_telegram_id FROM orders WHERE id = ?)', [1]],
+    ['card: product cost', 'SELECT cost_toman FROM customer_products WHERE id = (SELECT customer_product_id FROM orders WHERE id = ?)', [1]],
+    ['card: sources of the option', `SELECT sup.name FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
+      WHERE s.customer_product_id = (SELECT customer_product_id FROM orders WHERE id = ?) ORDER BY s.priority, s.id`, [1]],
+    ['available stock (LIMIT)', `SELECT a.id FROM stock_accounts a JOIN stock_batches b ON b.id = a.batch_id
+      LEFT JOIN supplier_orders so ON so.id = b.supplier_order_id WHERE a.status = 'available' ORDER BY a.id LIMIT 48`, []],
+    ['stock account with its batch', 'SELECT a.id FROM stock_accounts a JOIN stock_batches b ON b.id = a.batch_id WHERE a.id = ?', [1]],
     ['events of an order', 'SELECT * FROM fulfillment_events WHERE order_id = ? ORDER BY id DESC LIMIT 15', [1]],
     ['my subscriptions with stored accounts', `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
       AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`, [1]],

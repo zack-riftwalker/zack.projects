@@ -36,7 +36,9 @@ describe('§7.3 table: one test per result', () => {
     const notice = adminTexts(t, 'همه‌ی منبع‌ها ناموجودند');
     expect(notice).toHaveLength(1);
     expect(notice[0]).toContain('ربات هر ۱۵ دقیقه دوباره تلاش می‌کند تا');
-    expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual(['fo_msg_' + orderId]); // queued: no retry button
+    expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual([
+      'fo_src_' + orderId, 'fo_stock_' + orderId, 'fo_text_' + orderId, 'fo_self_' + orderId, 'fo_cancel_' + orderId, 'fo_msg_' + orderId, 'fo_hist_' + orderId,
+    ]); // queued: waiting by itself, so no «تلاش دوباره»
 
     await at(t, iso('10:06')); // the sources still rest (30 minutes): no POST
     expect(posts(fake)).toHaveLength(2);
@@ -89,7 +91,9 @@ describe('§7.3 table: one test per result', () => {
     expect(orderRow(t, orderId).needs_action_reason).toBe('config');
     const card = adminTexts(t, 'تنظیمات «ArioBox Main» مشکل دارد (invalid api key)');
     expect(card).toHaveLength(1);
-    expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual(['fo_retry_' + orderId, 'fo_msg_' + orderId]);
+    expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual([
+      'fo_retry_' + orderId, 'fo_src_' + orderId, 'fo_stock_' + orderId, 'fo_text_' + orderId, 'fo_self_' + orderId, 'fo_cancel_' + orderId, 'fo_msg_' + orderId, 'fo_hist_' + orderId,
+    ]);
 
     for (let m = 1; m <= 30; m++) await at(t, iso('10:' + String(m).padStart(2, '0')));
     expect(posts(fake)).toHaveLength(1);
@@ -135,7 +139,10 @@ describe('unknown: never a second POST on its own', () => {
       const card = adminTexts(t, 'معلوم نیست سفارش در «ArioBox Main» ثبت شده یا نه');
       expect(card).toHaveLength(1);
       expect(card[0]).toContain('store#' + orderId);
-      expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual(['fo_rid_' + orderId, 'fo_retry_' + orderId, 'fo_msg_' + orderId]);
+      expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual([
+        'fo_rid_' + orderId, 'fo_retry_' + orderId, 'fo_src_' + orderId, 'fo_stock_' + orderId, 'fo_text_' + orderId, 'fo_self_' + orderId,
+        'fo_cancel_' + orderId, 'fo_msg_' + orderId, 'fo_hist_' + orderId,
+      ]);
       expect(q(t.storeDb, 'SELECT * FROM wallet_ledger')).toHaveLength(0); // we don't know that it was bought
 
       for (let m = 1; m <= 30; m++) await at(t, iso('10:' + String(m).padStart(2, '0')));

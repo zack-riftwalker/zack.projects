@@ -423,15 +423,15 @@ export class StoreDb {
    * The same conditional UPDATE as markOrderDelivered, as a statement for a batch and with the time given by the
    * caller (`now` = 'YYYY-MM-DD HH:MM:SS' Tehran), so the clocks follow the app's clock.
    */
-  markDeliveredStatement(id: number, now: string): Stmt {
+  markDeliveredStatement(id: number, now: string, onlyFulfillment?: string): Stmt {
     return this.q(`
     UPDATE orders
     SET    status       = 'delivered',
            delivered_at = ?,
            expires_at   = CASE WHEN duration_days IS NOT NULL THEN datetime(?, '+' || duration_days || ' days') END,
            warranty_expires_at = CASE WHEN warranty_days IS NOT NULL THEN datetime(?, '+' || warranty_days || ' days') END
-    WHERE  id = ? AND status = 'confirmed'
-  `, now, now, now, id);
+    WHERE  id = ? AND status = 'confirmed'${onlyFulfillment ? ' AND fulfillment = ?' : ''}
+  `, now, now, now, id, ...(onlyFulfillment ? [onlyFulfillment] : []));
   }
 
   async getDeliveredOrdersForCustomer(telegramId: number): Promise<Order[]> {

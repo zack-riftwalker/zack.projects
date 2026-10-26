@@ -3,6 +3,13 @@ import { tehranDateTime } from '../../lib/time';
 import { eventStatement } from '../events';
 import type { DeliveryContent } from './format';
 
+/** What one account of the batch cost: the batch's total cost divided by its size; null when unknown. */
+export async function stockUnitCost(app: StoreApp, accountId: number): Promise<number | null> {
+  const row = await app.raw.prepare('SELECT b.cost_toman, b.quantity FROM stock_accounts a JOIN stock_batches b ON b.id = a.batch_id WHERE a.id = ?')
+    .bind(accountId).first<{ cost_toman: number | null; quantity: number }>();
+  return row && row.cost_toman !== null && row.quantity > 0 ? Math.round(row.cost_toman / row.quantity) : null;
+}
+
 export interface NewStockBatch {
   supplierId: number | null;
   supplierOrderId: number | null;

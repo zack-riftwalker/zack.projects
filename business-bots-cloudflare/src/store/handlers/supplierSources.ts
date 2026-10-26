@@ -263,20 +263,41 @@ async function deleteSource(app: StoreApp, productId: number, sourceId: number):
   await recomputeOption(app, productId);
 }
 
-async function showCatalogPage(ctx: StoreContext, pidRaw: string, sidRaw: string, page: number, edit: boolean): Promise<void> {
-  const pid = parseInt(pidRaw, 10);
-  const sid = parseInt(sidRaw, 10);
-  const cached = await readCatalog(ctx.app, sid);
+/**
+ * A paged list of one supplier's catalog items; every button carries the item's 12-hex ref (never a position). Used
+ * by the sources screen and by the decision card's «منبع جدید».
+ */
+export async function catalogPicker(
+  app: StoreApp, sid: number, page: number, itemCallback: (ref: string) => string, navPrefix: string, back: InlineButton,
+): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
+  const cached = await readCatalog(app, sid);
   const items = cached ? cached.catalog.items : [];
   const indexed = await Promise.all(items.map(async (it) => ({ it, ref: await itemRef(it.remoteProductId, it.remoteVariationId) })));
   const keyboard = buildPagedKeyboard(indexed, page, ({ it, ref }) => {
     const variation = it.remoteVariationId ? ' / ' + it.remoteVariationId : '';
     const price = it.priceUsd === null ? '—' : '$' + it.priceUsd.toFixed(2);
-    return cb((it.name + variation).slice(0, 40) + ' — ' + price, 'sup_srcn_' + pid + '_' + sid + '_' + ref);
-  }, SRC_LIST_PREFIX + pid + '_' + sid + '_', cb('🔙 بازگشت', 'sup_srcadd_' + pid));
+    return cb((it.name + variation).slice(0, 40) + ' — ' + price, itemCallback(ref));
+  }, navPrefix, back);
   const text = items.length ? '➕ یک گزینه‌ی کاتالوگ را انتخاب کنید:' : 'کاتالوگی از این تأمین‌کننده نداریم. ابتدا همگام‌سازی کنید.';
+  return { text, keyboard };
+}
+
+async function showCatalogPage(ctx: StoreContext, pidRaw: string, sidRaw: string, page: number, edit: boolean): Promise<void> {
+  const pid = parseInt(pidRaw, 10);
+  const sid = parseInt(sidRaw, 10);
+  const { text, keyboard } = await catalogPicker(ctx.app, sid, page, (ref) => 'sup_srcn_' + pid + '_' + sid + '_' + ref,
+    SRC_LIST_PREFIX + pid + '_' + sid + '_', cb('🔙 بازگشت', 'sup_srcadd_' + pid));
   if (edit) await ctx.editMessageText(text, keyboard).catch(() => {});
   else await ctx.reply(text, keyboard);
+}
+
+/** The catalog item with this ref in the CURRENT catalog (a sync may have re-sorted it since the list). */
+export async function findCatalogItem(app: StoreApp, sid: number, ref: string): Promise<CatalogItem | undefined> {
+  const cached = await readCatalog(app, sid);
+  for (const it of cached?.catalog.items ?? []) {
+    if ((await itemRef(it.remoteProductId, it.remoteVariationId)) === ref) return it;
+  }
+  return undefined;
 }
 
 async function addSource(ctx: StoreContext, pid: number, sid: number, ref: string): Promise<void> {

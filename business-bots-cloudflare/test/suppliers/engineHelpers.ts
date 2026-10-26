@@ -65,3 +65,28 @@ export async function addBackupSource(t: TestEnv, sid: number, pid: number): Pro
   await press(t, 'sup_srcn_' + pid + '_' + sid + '_' + (await itemRef('1400', '')));
   return one(t.storeDb, 'SELECT id FROM product_sources WHERE customer_product_id = ? AND remote_product_id = ?', pid, '1400').id;
 }
+
+export const pressAs = (t: TestEnv, user: { id: number; first_name?: string }, data: string, msg: { text?: string } = {}) =>
+  t.send('store', callbackUpdate(user, data, msg));
+export const sayAs = (t: TestEnv, user: { id: number; first_name?: string }, text: string) => t.send('store', textUpdate(user, text));
+
+/** Puts accounts into «اکانت‌های من» through the engine's own batch writer (the direct-buy UI comes in S7). */
+export async function seedStock(
+  t: TestEnv, accounts: { email: string; password: string }[], title = 'ChatGPT — 1 month', costToman: number | null = 750000,
+): Promise<number> {
+  const { createStockBatch } = await import('../../src/store/suppliers/stock');
+  return createStockBatch(t.apps().store!, {
+    supplierId: null, supplierOrderId: null, title, unitPriceUsd: null, usdToman: null, costToman,
+    accounts: accounts.map((a) => ({ fields: [{ key: 'email', value: a.email }, { key: 'password', value: a.password }] })),
+  });
+}
+
+/** Makes the order wait in the `failed` state (a 401 on the first POST), the typical «needs a decision» state. */
+export async function failedOrder(
+  t: TestEnv, fake: FakeAriobox, pid: number, user: { id: number; first_name: string; username?: string } = CUSTOMER,
+): Promise<number> {
+  fake.state.postQueue.push({ status: 401, body: { detail: 'invalid api key' } });
+  const orderId = await buy(t, pid, user);
+  await confirm(t, orderId);
+  return orderId;
+}

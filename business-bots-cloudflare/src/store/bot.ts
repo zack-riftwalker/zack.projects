@@ -18,7 +18,6 @@ import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manu
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
 import { registerSupplierPanel, supplierTextMiddleware } from './handlers/supplierPanel';
-import { registerOrderMessage } from './handlers/orderMessage';
 import { registerFulfillmentAdmin } from './handlers/fulfillmentAdmin';
 import { registerAccountView } from './handlers/accountView';
 import { STAGE_BYPASS_RE } from './supplierInput';
@@ -149,7 +148,6 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   registerReferralHandler(bot, isAdmin);
   registerSupplierPanel(bot, isAdmin);
   registerFulfillmentAdmin(bot, isAdmin);
-  registerOrderMessage(bot, isAdmin);
   registerAccountView(bot);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);

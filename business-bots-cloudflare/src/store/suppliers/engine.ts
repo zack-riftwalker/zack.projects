@@ -14,7 +14,7 @@ import { buildDecisionCard, type CardOptions, type NeedsActionReason } from './d
 import { formatAccountsHtml, parseContent, splitHtml, type DeliveryContent } from './format';
 import { pickActiveSource, recomputeOption, type SourceRow } from './recompute';
 import { costToman } from './pricing';
-import { createStockBatch } from './stock';
+import { createStockBatch, stockUnitCost } from './stock';
 import { getSupplier, readCatalog } from './store';
 import { syncSupplier } from './sync';
 import type { SupplierOrderRow, SupplierRow } from './types';
@@ -118,10 +118,19 @@ export async function sendCard(app: StoreApp, orderId: number, opts: CardOptions
  */
 export async function queueSupplierOrder(
   app: StoreApp, order: { id: number; customer_product_id: number },
-  opts: { forcedSourceId?: number | null; requestedBy?: number; eventKind?: 'queued' | 'admin_retry' | 'admin_source'; eventDetail?: string } = {},
+  opts: {
+    forcedSourceId?: number | null; requestedBy?: number; eventKind?: 'queued' | 'admin_retry' | 'admin_source'; eventDetail?: string;
+    /** the admin chose another source: a supplier order that only WAITS (queued) is cancelled first; one already placing / placed stays */
+    supersedeQueued?: boolean;
+  } = {},
 ): Promise<number | null> {
   const now = nowStr(app);
+  const supersede = opts.supersedeQueued
+    ? [q(app, `UPDATE supplier_orders SET status = 'cancelled', updated_at = ? WHERE order_id = ? AND status = 'queued'
+               AND NOT EXISTS (SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('placing', 'placed', 'completed'))`, now, order.id, order.id)]
+    : [];
   const rs = await app.raw.batch([
+    ...supersede,
     q(app, `INSERT INTO supplier_orders (purpose, order_id, customer_product_id, forced_source_id, quantity, status, next_attempt_at, requested_by, created_at, updated_at)
             SELECT 'customer', ?, ?, ?, 1, 'queued', ?, ?, ?, ?
             WHERE EXISTS (SELECT 1 FROM orders WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier')
@@ -132,7 +141,8 @@ export async function queueSupplierOrder(
       detail: opts.eventDetail, onlyIfChanged: true,
     }),
   ]);
-  return rs[0].meta.changes === 1 ? rs[0].meta.last_row_id : null;
+  const inserted = rs[supersede.length];
+  return inserted.meta.changes === 1 ? inserted.meta.last_row_id : null;
 }
 
 /** Places the order right now, swallowing every error (a failure here must never break the caller's flow). */
@@ -175,7 +185,7 @@ export { SUPPLIER_CONFIRM_TEXT };
 
 // ─── Placing ─────────────────────────────────────────────────────────────────
 
-interface SourceCand extends SourceRow {
+export interface SourceCandRow extends SourceRow {
   remote_product_id: string; remote_variation_id: string;
   sup_kind: string; sup_name: string; base_url: string; api_key: string; remote_user_id: number;
   usd_toman: number | null; fetched_at: string | null;
@@ -188,7 +198,7 @@ export const SOURCE_SELECT = `
   FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
   LEFT JOIN supplier_catalogs c ON c.supplier_id = s.supplier_id`;
 
-const supplierRowOf = (c: SourceCand): SupplierRow => ({
+const supplierRowOf = (c: SourceCandRow): SupplierRow => ({
   id: c.supplier_id, kind: c.sup_kind as 'ariobox', name: c.sup_name, base_url: c.base_url, api_key: c.api_key,
   remote_user_id: c.remote_user_id, is_enabled: c.sup_enabled, last_sync_at: null, last_sync_ok_at: null, last_sync_error: null,
   sync_alert_sent: 0, created_at: '',
@@ -229,10 +239,10 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
   // 3. choose the source, then 4. place (a 409 moves on to the next source)
   const forced = so.forced_source_id !== null;
   let sources = (await q(app, SOURCE_SELECT + (forced ? ' WHERE s.id = ?' : ' WHERE s.customer_product_id = ? ORDER BY s.priority, s.id'),
-    forced ? so.forced_source_id : so.customer_product_id).all<SourceCand>()).results;
+    forced ? so.forced_source_id : so.customer_product_id).all<SourceCandRow>()).results;
 
   for (;;) {
-    const cand = forced ? sources[0] ?? null : (pickActiveSource(sources, nowStr(app)) as SourceCand | null);
+    const cand = forced ? sources[0] ?? null : (pickActiveSource(sources, nowStr(app)) as SourceCandRow | null);
     if (!cand) return noCandidate(app, so, order, forced);
 
     const basis = await costBasis(app, cand);
@@ -344,7 +354,7 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
 }
 
 /** The price and rate to buy at: the catalog item itself, after a refetch when the cached catalog is stale. */
-async function costBasis(app: StoreApp, cand: SourceCand): Promise<{ priceUsd: number | null; usdToman: number | null }> {
+async function costBasis(app: StoreApp, cand: SourceCandRow): Promise<{ priceUsd: number | null; usdToman: number | null }> {
   let priceUsd = cand.price_usd;
   let usdToman = cand.usd_toman;
   const stale = cand.fetched_at === null || cand.fetched_at < addMinutes(app, -CATALOG_STALE_MINUTES);
@@ -531,6 +541,8 @@ export interface DeliveryMeta {
   supplierOrderId?: number | null;
   stockAccountId?: number | null;
   actor?: number;
+  /** the admin's name for the notice «✍️ متن دستی (ADMIN)» */
+  actorName?: string;
   /** what this account cost (stock / manual text); a supplier delivery reads it from the supplier order */
   costToman?: number | null;
   /** a delivery row saved earlier (the supplier completion batch); no new row is inserted */
@@ -611,6 +623,8 @@ async function finishDelivery(
     eventStatement(app, { orderId: order.id, supplierOrderId: meta.supplierOrderId ?? null, kind: 'delivered', actor: meta.actor, detail: fulfillment }),
   ];
   if (meta.supplierOrderId) stmts.push(q(app, 'UPDATE supplier_orders SET next_check_at = NULL WHERE id = ?', meta.supplierOrderId));
+  // a stock account given to the customer is «delivered» (it was reserved for this order)
+  if (meta.stockAccountId) stmts.push(q(app, "UPDATE stock_accounts SET status = 'delivered', order_id = ?, updated_at = ? WHERE id = ?", order.id, now, meta.stockAccountId));
   const rs = await app.raw.batch(stmts);
   if (!meta.alreadyDelivered && rs[0].meta.changes !== 1) {
     console.warn('⚠️ [Supplier] order #' + order.id + ' was already delivered when its accounts were sent.');
@@ -620,8 +634,10 @@ async function finishDelivery(
   return 'delivered';
 }
 
-/** The admin message after a successful delivery (SUPPLIER_PLAN.md §7.5 step 4). */
-async function sendDeliveredNotice(app: StoreApp, order: Order, meta: DeliveryMeta, so: SupplierOrderRow | null, cost: number | null): Promise<void> {
+/** The admin message after a successful delivery (SUPPLIER_PLAN.md §7.5 step 4; `manual_outside` = «خودم تحویل دادم»). */
+export async function sendDeliveredNotice(
+  app: StoreApp, order: Order, meta: Omit<DeliveryMeta, 'kind'> & { kind: DeliveryMeta['kind'] | 'manual_outside' }, so: SupplierOrderRow | null, cost: number | null,
+): Promise<void> {
   const customer = await q(app, 'SELECT display_name FROM customers WHERE telegram_id = ?', order.customer_telegram_id).first<{ display_name: string }>();
   let source: string;
   const extra: string[] = [];
@@ -634,8 +650,10 @@ async function sendDeliveredNotice(app: StoreApp, order: Order, meta: DeliveryMe
     }
   } else if (meta.kind === 'stock') {
     source = '📦 از اکانت‌های من';
+  } else if (meta.kind === 'manual_outside') {
+    source = '🙋 تحویل دستی (' + escapeHtml(meta.actorName ?? 'ادمین') + ')';
   } else {
-    source = '✍️ متن دستی (ادمین ' + (meta.actor ?? '') + ')';
+    source = '✍️ متن دستی (' + escapeHtml(meta.actorName ?? 'ادمین') + ')';
   }
   const money = cost !== null
     ? '💰 فروش: ' + formatPrice(order.price) + ' ت | خرید: ' + formatPrice(cost) + ' ت | سود: ' + formatPrice(order.price - cost) + ' ت'
@@ -649,7 +667,7 @@ async function sendDeliveredNotice(app: StoreApp, order: Order, meta: DeliveryMe
     ...extra,
   ].join('\n');
   await sendToAdmins(app, html, [
-    [Markup.button.callback('👁 نمایش اکانت', 'fo_view_' + order.id)],
+    ...(meta.kind === 'manual_outside' ? [] : [[Markup.button.callback('👁 نمایش اکانت', 'fo_view_' + order.id)]]),
     customerContactRow(order.customer_telegram_id, order.customer_username, order.id),
   ]);
 }
@@ -670,9 +688,11 @@ export async function resendDelivery(app: StoreApp, orderId: number, actor: numb
   if (!order || !d) return 'none';
   if (order.status !== 'confirmed' && order.status !== 'delivered') return 'skipped';
   const so = d.supplier_order_id ? await q(app, 'SELECT * FROM supplier_orders WHERE id = ?', d.supplier_order_id).first<SupplierOrderRow>() : null;
+  // a stock account keeps its cost across a resend (a manual text has none)
+  const costToman = d.kind === 'stock' && d.stock_account_id ? await stockUnitCost(app, d.stock_account_id) : undefined;
   return finishDelivery(app, order, d.id, d.content, {
     kind: d.kind, supplierOrderId: d.supplier_order_id, stockAccountId: d.stock_account_id, actor,
-    alreadyDelivered: order.status === 'delivered',
+    alreadyDelivered: order.status === 'delivered', ...(costToman !== undefined ? { costToman } : {}),
   }, so);
 }
 

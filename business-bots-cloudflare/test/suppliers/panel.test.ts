@@ -33,7 +33,7 @@ describe('supplier panel: menu', () => {
     await say(t, SUPPLIER_LABEL);
     const sent = lastSent(t);
     expect(sent.text).toContain('API تأمین‌کننده');
-    expect(callbackDataOf(sent)).toEqual(['sup_list', 'sup_def', 'sup_close']);
+    expect(callbackDataOf(sent)).toEqual(['sup_list', 'sup_na', 'sup_def', 'sup_close']);
   });
 });
 

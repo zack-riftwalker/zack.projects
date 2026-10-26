@@ -17,7 +17,6 @@ import {
 import { ADMIN_PANEL_LABELS } from './adminPanel';
 import { handleImportCallback, handleImportText, startImport } from './supplierImport';
 import { handleSourcesCallback, handleSourcesText } from './supplierSources';
-import { handleOrderMessageText } from './orderMessage';
 import { handleFulfillmentText } from './fulfillmentAdmin';
 import { recomputeOption, recomputeSupplierOptions } from '../suppliers/recompute';
 
@@ -34,14 +33,31 @@ const asciiDigits = (s: string) => s.replace(/[۰-۹]/g, (d) => String.fromCharC
 
 // ─── Menu ────────────────────────────────────────────────────────────────────
 
-const MENU_TEXT = '🔌 <b>API تأمین‌کننده</b>\n\nتأمین‌کننده‌ها را اضافه کنید و محصولاتشان را با قیمت خرید ببینید.';
+/** Orders waiting for the admin's decision (idx_orders_needs_action is a partial index on needs_action_at). */
+export const NEEDS_ACTION_COUNT_SQL = "SELECT COUNT(*) AS n FROM orders WHERE needs_action_reason IS NOT NULL AND status = 'confirmed'";
+export const NEEDS_ACTION_LIST_SQL =
+  "SELECT id, product_name, needs_action_reason FROM orders WHERE needs_action_reason IS NOT NULL AND status = 'confirmed' ORDER BY needs_action_at LIMIT 10";
 
-function menuKb() {
-  return kb([
-    [cb('🏪 تأمین‌کننده‌ها', 'sup_list')],
-    [cb('💹 سود پیش‌فرض', 'sup_def')],
-    [cb('❌ بستن', 'sup_close')],
-  ]);
+async function menuView(app: StoreApp): Promise<{ text: string; keyboard: ReturnType<typeof kb> }> {
+  const n = (await app.raw.prepare(NEEDS_ACTION_COUNT_SQL).bind().first<{ n: number }>())?.n ?? 0;
+  return {
+    text: '🔌 <b>API تأمین‌کننده</b>\n⏸ نیازمند تصمیم: ' + fa(n) + ' سفارش\n\nتأمین‌کننده‌ها را اضافه کنید و محصولاتشان را با قیمت خرید ببینید.',
+    keyboard: kb([
+      [cb('🏪 تأمین‌کننده‌ها', 'sup_list')],
+      [cb('⏸ نیازمند تصمیم (' + fa(n) + ')', 'sup_na')],
+      [cb('💹 سود پیش‌فرض', 'sup_def')],
+      [cb('❌ بستن', 'sup_close')],
+    ]),
+  };
+}
+
+/** «⏸ نیازمند تصمیم»: up to 10 orders, each opening its decision card. */
+async function needsActionView(app: StoreApp): Promise<{ text: string; keyboard: ReturnType<typeof kb> }> {
+  const rows = (await app.raw.prepare(NEEDS_ACTION_LIST_SQL).bind().all<{ id: number; product_name: string; needs_action_reason: string }>()).results;
+  return {
+    text: rows.length ? '⏸ <b>سفارش‌های نیازمند تصمیم</b>' : '✅ سفارشی نیازمند تصمیم نیست.',
+    keyboard: kb([...rows.map((r) => [cb('#' + r.id + ' — ' + r.product_name.slice(0, 30) + ' — ' + r.needs_action_reason, 'fo_open_' + r.id)]), [cb('🔙 بازگشت', 'sup_menu')]]),
+  };
 }
 
 // ─── Supplier list and card ──────────────────────────────────────────────────
@@ -300,7 +316,8 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
   bot.hears(SUPPLIER_LABEL, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     clearInputs(ctx);
-    await ctx.reply(MENU_TEXT, { ...html, ...menuKb() });
+    const v = await menuView(ctx.app);
+    await ctx.reply(v.text, { ...html, ...v.keyboard });
   });
 
   bot.callbackQuery(/^sup_(.+)$/, async (ctx) => {
@@ -313,7 +330,8 @@ export function registerSupplierPanel(bot: Bot<StoreContext>, isAdmin: (id: numb
       await ctx.editMessageText(v.text, { ...html, ...v.keyboard }).catch(() => {});
     };
 
-    if (data === 'sup_menu') return show({ text: MENU_TEXT, keyboard: menuKb() });
+    if (data === 'sup_menu') return show(await menuView(app));
+    if (data === 'sup_na') return show(await needsActionView(app));
     if (data === 'sup_close') {
       await ctx.answerCallbackQuery();
       await ctx.editMessageText('🔌 بسته شد.').catch(() => {});
@@ -485,7 +503,6 @@ async function handleInputText(
     return;
   }
   if (await handleSourcesText(ctx, pending.kind, pending.ref, text)) return;
-  if (await handleOrderMessageText(ctx, pending.kind, pending.ref, text)) return;
   if (await handleFulfillmentText(ctx, pending.kind, pending.ref, text)) return;
 
   const problem = await applyTypedInput(ctx, pending.kind, pending.ref, text);
