@@ -970,6 +970,8 @@ Add these to `buildSalesReport`, in the same single `batch()`; every query must 
 
 The existing revenue lines stay as they are. Cancelled orders drop out of them on their own, because the status is no longer `confirmed`.
 
+Implementation note (S8): the plan's schema had no index for the wallet spend, the batch dates and `reported_at`, so `migrations/store/0004_supplier_report_indexes.sql` adds `idx_ledger_kind_created`, `idx_batches_created` and `idx_batches_reported` (0003 is untouched). The supplier lines print only when there is something to show, so a shop without suppliers sees the old report.
+
 Tests: numbers for a seeded mix; the index test.
 
 ---

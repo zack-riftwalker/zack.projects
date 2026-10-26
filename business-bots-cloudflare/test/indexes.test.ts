@@ -8,6 +8,7 @@ import { APPLY_DEFAULTS_SQL, NEEDS_ACTION_COUNT_SQL, NEEDS_ACTION_LIST_SQL } fro
 import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
 import { BALANCE_SQL, HISTORY_SQL } from '../src/store/suppliers/wallet';
 import { BATCH_ACCOUNTS_SQL, BATCH_LIST_SQL } from '../src/store/suppliers/stockCards';
+import { PROFIT_SQL } from '../src/store/handlers/salesReport';
 import { CUSTOMER_BY_ID_SQL, CUSTOMER_BY_NAME_SQL, MATCHING_PRODUCTS_SQL } from '../src/store/handlers/stockAdmin';
 import {
   DEADLINE_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
@@ -131,6 +132,16 @@ describe('supplier hot queries use indexes', () => {
     ['products that share an account\'s supplier item', MATCHING_PRODUCTS_SQL, [1]],
     ['customer by id', CUSTOMER_BY_ID_SQL, [1]],
     ['customer by username', CUSTOMER_BY_NAME_SQL, ['x']],
+    // sales report profit lines (S8)
+    ['report: cost and profit', PROFIT_SQL.costed, ['a', 'b']],
+    ['report: orders without a cost', PROFIT_SQL.missing, ['a', 'b']],
+    ['report: cancelled in the range', PROFIT_SQL.cancelled, ['a', 'b']],
+    ['report: refunds pending', PROFIT_SQL.refundPending, []],
+    ['report: sold outside', PROFIT_SQL.outside, ['a', 'b']],
+    ['report: reported batch profit', PROFIT_SQL.reported, ['a', 'b']],
+    ['report: stock bought', PROFIT_SQL.bought, ['a', 'b']],
+    ['report: free accounts', PROFIT_SQL.available, []],
+    ['report: wallet spend', PROFIT_SQL.spend, ['a', 'b']],
     ['redeem: link the reserved account', `UPDATE stock_accounts SET order_id = (SELECT order_id FROM manual_purchase_claims WHERE token_hash = ?), updated_at = 'x'
       WHERE id = (SELECT stock_account_id FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ?) AND status = 'reserved' AND order_id IS NULL AND changes() = 1`, ['h', 'h', 1]],
   ];
