@@ -3,6 +3,8 @@ import { FakeD1 } from './helpers/fakeD1';
 import { REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
+import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
+import { APPLY_DEFAULTS_SQL } from '../src/store/handlers/supplierPanel';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
 const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links',
@@ -77,8 +79,10 @@ describe('supplier hot queries use indexes', () => {
     ['sources of a supplier (apply)', 'SELECT s.id FROM product_sources s WHERE s.supplier_id = ? ORDER BY s.id', [1]],
     ['options of a group', 'SELECT id FROM customer_products WHERE group_id = ? AND is_active = 1', [1]],
     ['catalog products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id', []],
-    ['supplier fetch due', "SELECT * FROM suppliers WHERE is_enabled = 1 AND (last_sync_at IS NULL OR last_sync_at < ?) ORDER BY COALESCE(last_sync_at, '') LIMIT 3", ['x']],
-    ['catalog to apply', 'SELECT supplier_id FROM supplier_catalogs WHERE applied_hash IS NULL OR applied_hash <> items_hash LIMIT 1', []],
+    // the real queries of the code, not copies of them
+    ['supplier fetch due', SUPPLIERS_DUE_SQL, [1, 'x']],
+    ['catalog to apply', CATALOG_PENDING_SQL, []],
+    ['apply default markup to auto options', APPLY_DEFAULTS_SQL, []],
     ['linked options of a supplier', 'SELECT COUNT(DISTINCT customer_product_id) AS n FROM product_sources WHERE supplier_id = ?', [1]],
   ];
   for (const [label, sql, args] of cases) {

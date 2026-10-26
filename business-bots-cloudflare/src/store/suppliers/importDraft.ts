@@ -54,9 +54,17 @@ export function parseDuration(value: string | undefined): { days: number | null;
 
 const fa = (n: number) => String(n).replace(/\d/g, (d) => String.fromCharCode(d.charCodeAt(0) + 0x06f0 - 0x30));
 
-/** «۱ ماهه» for whole months, «۴۵ روزه» otherwise; without a duration, the attribute values or «گزینه K». */
+const YEARS_RE = /^(\d+)[- ]?years?$/i;
+
+/**
+ * «۱ ماهه» for whole months, «۱ ساله» / «۲ ساله» when the supplier says years, «۴۵ روزه» otherwise; without a
+ * duration, the attribute values or «گزینه K».
+ */
 export function optionLabel(durationDays: number | null, index: number, attributes: Record<string, string>): string {
   if (durationDays !== null) {
+    const raw = (attributes['subscription-duration'] ?? attributes['duration'] ?? '').trim();
+    const years = raw.match(YEARS_RE);
+    if (years) return fa(Number(years[1])) + ' ساله';
     return durationDays % 30 === 0 ? fa(durationDays / 30) + ' ماهه' : fa(durationDays) + ' روزه';
   }
   const values = Object.entries(attributes)

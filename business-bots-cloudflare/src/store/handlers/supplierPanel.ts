@@ -275,13 +275,15 @@ async function handleWizardText(ctx: StoreContext, step: string, text: string): 
   await testAndMaybeSave(ctx, d);
 }
 
-/** Recomputes every automatic option that has no own markup (SUPPLIER_PLAN.md §4.5). Returns how many. */
-async function applyDefaultsToAuto(ctx: StoreContext): Promise<number> {
-  const rows = (await ctx.app.raw.prepare(`
+/** The automatic options without their own markup that have a source (served by idx_products_pricing_mode). */
+export const APPLY_DEFAULTS_SQL = `
     SELECT id FROM customer_products
     WHERE pricing_mode = 'auto' AND markup_percent IS NULL AND markup_fixed IS NULL
-      AND EXISTS (SELECT 1 FROM product_sources s WHERE s.customer_product_id = customer_products.id)`)
-    .bind().all<{ id: number }>()).results;
+      AND EXISTS (SELECT 1 FROM product_sources s WHERE s.customer_product_id = customer_products.id)`;
+
+/** Recomputes every automatic option that has no own markup (SUPPLIER_PLAN.md §4.5). Returns how many. */
+async function applyDefaultsToAuto(ctx: StoreContext): Promise<number> {
+  const rows = (await ctx.app.raw.prepare(APPLY_DEFAULTS_SQL).bind().all<{ id: number }>()).results;
   let count = 0;
   for (const r of rows) {
     if (ctx.app.apps.budget.remaining() < 10) break;

@@ -93,7 +93,7 @@
 
 ### 2.1 `migrations/store/0003_supplier.sql`
 
-Never edit `0001_*` / `0002_*`. The `orders` table is **rebuilt** because its `status` CHECK must gain `'cancelled'`, and SQLite can't alter a CHECK. Follow the SQLite "12-step" procedure. D1 doesn't allow `PRAGMA foreign_keys=OFF` in migrations; use `PRAGMA defer_foreign_keys = on` as the D1 docs advise.
+Never edit `0001_*` / `0002_*`. (`0003` keeps the `orders` AUTOINCREMENT counter across the rebuild via a scratch table `_orders_seq` and `sqlite_sequence`, so the id of a deleted pending order is never reused.) The `orders` table is **rebuilt** because its `status` CHECK must gain `'cancelled'`, and SQLite can't alter a CHECK. Follow the SQLite "12-step" procedure. D1 doesn't allow `PRAGMA foreign_keys=OFF` in migrations; use `PRAGMA defer_foreign_keys = on` as the D1 docs advise.
 
 ```sql
 -- ============================================================
@@ -557,7 +557,7 @@ Build an import draft in the session (`supplierImport`, §9.2) from the catalog 
 - **Options:** one per variation (or a single option when `remoteVariationId === ''`), in catalog order. For each option:
   - `durationDays` = `parseDuration(attributes['subscription-duration'] ?? attributes['duration'])`;
   - `warrantyDays` = `parseDuration(attributes['warranty'])`;
-  - `label`: `N ماهه` (N = months, Persian digits) when the duration is a whole number of months, else `N روزه`. Without a duration, use the attribute values joined with ` | `, else `گزینه K`.
+  - `label`: `N ساله` when the supplier's value is in years (`1-year`, `2-years`), else `N ماهه` (N = months, Persian digits) when the duration is a whole number of months, else `N روزه`. Without a duration, use the attribute values joined with ` | `, else `گزینه K`.
   - `parseDuration` accepts `^(\d+)[- ]?(day|days|month|months|year|years)$` (case-insensitive) → days (month = 30, year = 365). `none`, `no`, `0`, `no-warranty` → `null`. Anything else → `null` and the raw value is listed under «ویژگی‌های ناشناخته».
 - **Pricing:** `markupPercent`/`markupFixed` start as `null` (= use the default); `terms` starts as `null`; every option starts `selected`.
 
@@ -604,14 +604,14 @@ final_price = ceil((cost_toman × (1 + percent/100) + fixed) / 10000) × 10000
 2️⃣ تأمین‌کننده B — … — ⛔️ غیرفعال (توسط شما)
 ```
 - **Buttons per source:** `⬆️` / `⬇️` (swap priorities) and `⏯` (enable/disable). Also: `🗑 حذف منبع`, `➕ افزودن منبع` (pick supplier → product → variation from the catalog blob), `💲 حالت قیمت: خودکار/ثابت` (switches `pricing_mode`; to "ثابت" keeps the current price), `💹 سود اختصاصی` (set both, or `↩️ استفاده از پیش‌فرض`), `📦 حالت موجودی: خودکار/دستی`, `🔙`.
-- **Last source:** removing it turns the option back into a normal product (`pricing_mode='manual'`, `stock_mode='manual'`, `cost_toman=NULL`) after the confirmation `⚠️ این آخرین منبع است؛ محصول به حالت دستی برمی‌گردد. مطمئنید؟`.
+- **Last source:** the delete and the «no source left → manual» reset are one batch (the reset is conditional on no source remaining), so a concurrent add can't be undone. Removing the last one turns the option back into a normal product (`pricing_mode='manual'`, `stock_mode='manual'`, `cost_toman=NULL`) after the confirmation `⚠️ این آخرین منبع است؛ محصول به حالت دستی برمی‌گردد. مطمئنید؟`.
 - **Recompute (§6.3)** after every change on this screen, and for every option of a supplier when that supplier is turned off or on (the rest by cron if the budget is short).
 - **Adding a source:** the catalog item is identified by a 12-hex hash of its remote ids in the callback (`sup_srcn_<pid>_<sid>_<ref>`), looked up in the current catalog when tapped; never by position.
 - The existing stock toggle in the edit wizard (`⛔️ ناموجود کن` / `✅ موجود کن`) sets `stock_mode='manual'` when pressed on an auto option. The card shows `📦 موجودی خودکار` to switch back.
 
 ### 5.4 Cost floor («زیر قیمت خرید نرود»)
 A product has a floor when `cost_toman IS NOT NULL`.
-- **Code creation and edit** (add/edit wizards, and `referrals.ts` when it builds a reward code): for each affected option (one, or every option of the group), compute `applyDiscount(price, code)`. If any result `< cost_toman`, refuse with: `⛔️ با این تخفیف، قیمت «NAME» (X تومان) از قیمت خرید (Y تومان) کمتر می‌شود. مقدار کمتری وارد کنید.` For referral reward codes, skip creating the code, mark the reward `failed` the same way the code already does for a missing product, and log a warning.
+- **Code creation and edit** (add/edit wizards, and `referrals.ts` when it builds a reward code): for each affected option (one, or every option of the group), compute `applyDiscount(price, code)`. If any result `< cost_toman`, refuse with (in the wizards, right after the product and scope are chosen, and then **ask the value again** instead of leaving the wizard): `⛔️ با این تخفیف، قیمت «NAME» (X تومان) از قیمت خرید (Y تومان) کمتر می‌شود. مقدار کمتری وارد کنید.` For referral reward codes, skip creating the code, mark the reward `failed` the same way the code already does for a missing product, and log a warning.
 - **Customer code entry:** a new reason `below_cost` in `validateDiscountCode` (checked after the other rules). Customer label: `❌ این کد برای این محصول قابل استفاده نیست.`
 - **Receipt confirm:** `below_cost` is **not** checked again here. The customer paid the price they were shown, and skipping the redemption would make a single-use (referral) code reusable. `validateDiscountCodeForOrder` skips the floor; only `validateDiscountCode` (code entry) applies it. The loss guard at confirmation is the separate rule in §7.2 (S5). The admin warning text has a label for `below_cost` all the same.
 

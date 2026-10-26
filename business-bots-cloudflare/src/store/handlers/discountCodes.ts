@@ -226,6 +226,24 @@ async function receiveProductSelection(ctx: StoreContext, stateKey: string, canc
   return 'ok';
 }
 
+const valuePrompt = (discountType: string) => discountType === 'percent'
+  ? '💰 مقدار تخفیف را به *درصد* وارد کنید (بین ۱ تا ۱۰۰):'
+  : '💰 مقدار تخفیف را به *تومان* وارد کنید:';
+
+/**
+ * Right after the product (and scope) is chosen: a value that takes the price under the supplier cost is refused
+ * here, and the wizard asks for the value again instead of ending (SUPPLIER_PLAN.md §5.4). Returns true when refused.
+ */
+async function refuseBelowCost(ctx: StoreContext, stateKey: string, valueStep: number, cancelBtn: InlineButton): Promise<boolean> {
+  const { discountType, discountValue, customerProductId, productGroupId } = ctx.wizard.state[stateKey];
+  const floor = await codeFloorViolation(ctx.app, { customerProductId, productGroupId }, { discount_type: discountType, discount_value: discountValue });
+  if (!floor) return false;
+  ctx.wizard.select(valueStep);
+  await ctx.reply(floorMessage(floor));
+  await ctx.reply(valuePrompt(discountType), { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[cancelBtn]]) });
+  return true;
+}
+
 async function receiveMaxUses(ctx: StoreContext, stateKey: string): Promise<'retry' | 'ok'> {
   const data = ctx.callbackQuery?.data;
   let maxUses: number | null = null;
@@ -359,6 +377,7 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
       if (outcome === 'leave') return ctx.scene.leave();
       if (await askDiscountScope(ctx, 'newDiscountCode', ADD_CANCEL_BTN)) return;
     }
+    if (await refuseBelowCost(ctx, 'newDiscountCode', 3, ADD_CANCEL_BTN)) return;
 
     await ctx.editMessageText(
       '〔 مرحله ۵ از ۶ 〕\n\n' +
@@ -529,6 +548,7 @@ export const discountCodeEditWizard = new WizardScene<StoreContext>(
       if (outcome === 'leave') return ctx.scene.leave();
       if (await askDiscountScope(ctx, 'editDiscountCode', EDIT_CANCEL_BTN)) return;
     }
+    if (await refuseBelowCost(ctx, 'editDiscountCode', 2, EDIT_CANCEL_BTN)) return;
 
     await ctx.editMessageText(
       '〔 مرحله ۴ از ۴ 〕\n\n' +

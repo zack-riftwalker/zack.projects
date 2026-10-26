@@ -226,6 +226,12 @@ async function flushReport(app: StoreApp, supplierId: number, allLines: string[]
 
 // ─── Cron ────────────────────────────────────────────────────────────────────
 
+/** Suppliers to fetch: never fetched (or «همگام‌سازی الان»), or, on a periodic minute, not fetched for 9 minutes. */
+export const SUPPLIERS_DUE_SQL =
+  "SELECT * FROM suppliers WHERE is_enabled = 1 AND (last_sync_at IS NULL OR (? = 1 AND last_sync_at < ?)) ORDER BY COALESCE(last_sync_at, '') LIMIT 3";
+/** A catalog whose latest fetch is not applied to the sources yet. */
+export const CATALOG_PENDING_SQL = 'SELECT supplier_id FROM supplier_catalogs WHERE applied_hash IS NULL OR applied_hash <> items_hash LIMIT 1';
+
 /**
  * Called every minute: fetches due suppliers (at most 3, while the budget allows), then applies one catalog that
  * differs from its applied hash.
@@ -235,17 +241,13 @@ export async function processSupplierSync(app: StoreApp, minute: number, nowMs: 
   // the periodic fetch of all suppliers is at minute % 10 == 2
   const periodic = minute % 10 === 2 ? 1 : 0;
   const cutoff = tehranDateTime(new Date(nowMs - 9 * 60_000));
-  const due = (await app.raw.prepare(
-    "SELECT * FROM suppliers WHERE is_enabled = 1 AND (last_sync_at IS NULL OR (? = 1 AND last_sync_at < ?)) ORDER BY COALESCE(last_sync_at, '') LIMIT 3",
-  ).bind(periodic, cutoff).all<SupplierRow>()).results;
+  const due = (await app.raw.prepare(SUPPLIERS_DUE_SQL).bind(periodic, cutoff).all<SupplierRow>()).results;
   for (const s of due) {
     if (app.apps.budget.remaining() < 25) break;
     await syncSupplier(app, s);
   }
   if (app.apps.budget.remaining() >= 15) {
-    const pending = await app.raw.prepare(
-      'SELECT supplier_id FROM supplier_catalogs WHERE applied_hash IS NULL OR applied_hash <> items_hash LIMIT 1',
-    ).bind().first<{ supplier_id: number }>();
+    const pending = await app.raw.prepare(CATALOG_PENDING_SQL).bind().first<{ supplier_id: number }>();
     if (pending) await applyCatalog(app, pending.supplier_id);
   }
 }

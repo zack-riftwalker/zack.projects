@@ -3,6 +3,10 @@
 -- ============================================================
 PRAGMA defer_foreign_keys = on;
 
+-- AUTOINCREMENT remembers the highest id ever handed out; DROP TABLE forgets it. Keep it in a scratch table
+-- so an id of a deleted (rolled-back) order is never reused after the rebuild.
+CREATE TABLE _orders_seq AS SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'orders'), 0) AS seq;
+
 -- ---- orders: rebuild to add status 'cancelled' + fulfillment columns ----
 CREATE TABLE orders_new (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +63,11 @@ SELECT
 FROM orders;
 DROP TABLE orders;
 ALTER TABLE orders_new RENAME TO orders;
+UPDATE sqlite_sequence SET seq = (SELECT seq FROM _orders_seq)
+  WHERE name = 'orders' AND seq < (SELECT seq FROM _orders_seq);
+INSERT INTO sqlite_sequence (name, seq)
+  SELECT 'orders', seq FROM _orders_seq WHERE seq > 0 AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'orders');
+DROP TABLE _orders_seq;
 CREATE INDEX IF NOT EXISTS idx_orders_status_decided  ON orders(status, decided_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status_expires  ON orders(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_orders_customer_status ON orders(customer_telegram_id, status);
@@ -86,6 +95,7 @@ ALTER TABLE customer_products ADD COLUMN cost_toman INTEGER;              -- cur
 ALTER TABLE customer_products ADD COLUMN stock_mode TEXT NOT NULL DEFAULT 'manual';    -- 'manual' | 'auto'
 ALTER TABLE customer_products ADD COLUMN price_updated_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_products_group ON customer_products(group_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_products_pricing_mode ON customer_products(pricing_mode, id);   -- «اعمال سود پیش‌فرض» lists the auto options
 
 ALTER TABLE discount_codes ADD COLUMN product_group_id INTEGER;           -- set = valid for every option of the group
 

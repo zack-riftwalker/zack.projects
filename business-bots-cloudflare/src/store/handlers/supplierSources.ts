@@ -150,7 +150,7 @@ export async function handleSourcesCallback(ctx: StoreContext, data: string): Pr
       );
       return true;
     }
-    await deleteSource(app, pid, parseInt(del[2], 10), false);
+    await deleteSource(app, pid, parseInt(del[2], 10));
     await showSources(ctx, pid, true);
     return true;
   }
@@ -159,7 +159,7 @@ export async function handleSourcesCallback(ctx: StoreContext, data: string): Pr
   if (delOk) {
     const pid = parseInt(delOk[1], 10);
     await ctx.answerCallbackQuery();
-    await deleteSource(app, pid, parseInt(delOk[2], 10), true);
+    await deleteSource(app, pid, parseInt(delOk[2], 10));
     await showSources(ctx, pid, false);
     return true;
   }
@@ -210,7 +210,10 @@ export async function handleSourcesCallback(ctx: StoreContext, data: string): Pr
     const kind = pmkInput[1] === 'p' ? 'src_percent' : 'src_fixed';
     await beginSupplierInput(ctx, kind, pmkInput[2]);
     await ctx.answerCallbackQuery();
-    await ctx.reply(kind === 'src_percent' ? '٪ درصد سود این محصول را وارد کنید (۰ تا ۵۰۰):' : '＋ مبلغ ثابت سود این محصول را به تومان وارد کنید (۰ مجاز است):');
+    await ctx.reply(
+      kind === 'src_percent' ? '٪ درصد سود این محصول را وارد کنید (۰ تا ۵۰۰):' : '＋ مبلغ ثابت سود این محصول را به تومان وارد کنید (۰ مجاز است):',
+      Markup.inlineKeyboard([[cb('❌ انصراف', 'sup_cancel_input')]]),
+    );
     return true;
   }
 
@@ -246,13 +249,17 @@ export async function handleSourcesCallback(ctx: StoreContext, data: string): Pr
   return false;
 }
 
-async function deleteSource(app: StoreApp, productId: number, sourceId: number, last: boolean): Promise<void> {
-  const stmts = [app.raw.prepare('DELETE FROM product_sources WHERE id = ? AND customer_product_id = ?').bind(sourceId, productId)];
-  if (last) {
-    // no source left: back to an ordinary product, prices and stock by hand (SUPPLIER_PLAN.md §5.3)
-    stmts.push(app.raw.prepare("UPDATE customer_products SET pricing_mode = 'manual', stock_mode = 'manual', cost_toman = NULL WHERE id = ?").bind(productId));
-  }
-  await app.raw.batch(stmts);
+/**
+ * Deletes one source. When it was the option's last source, the option goes back to an ordinary product
+ * (SUPPLIER_PLAN.md §5.3); the check is part of the same batch as the delete, so a source added or removed by
+ * another admin in the meantime can't leave the option wrongly manual or wrongly automatic.
+ */
+async function deleteSource(app: StoreApp, productId: number, sourceId: number): Promise<void> {
+  await app.raw.batch([
+    app.raw.prepare('DELETE FROM product_sources WHERE id = ? AND customer_product_id = ?').bind(sourceId, productId),
+    app.raw.prepare(`UPDATE customer_products SET pricing_mode = 'manual', stock_mode = 'manual', cost_toman = NULL
+      WHERE id = ? AND NOT EXISTS (SELECT 1 FROM product_sources WHERE customer_product_id = ?)`).bind(productId, productId),
+  ]);
   await recomputeOption(app, productId);
 }
 
