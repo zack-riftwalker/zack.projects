@@ -4,6 +4,9 @@ import { audienceFilter } from './audience';
 export interface CustomerProduct {
   id: number; name: string; price: number; terms_text: string | null;
   terms_entities: any[] | null; duration_days: number | null; warranty_days: number | null; is_active?: number; is_available?: number;
+  // round 3 (SUPPLIER_PLAN.md §2.1); present on rows that select them
+  group_id?: number | null; option_label?: string | null; sort_order?: number; pricing_mode?: string; markup_percent?: number | null;
+  markup_fixed?: number | null; cost_toman?: number | null; stock_mode?: string; price_updated_at?: string | null;
 }
 export interface Order {
   id: number; customer_telegram_id: number; customer_product_id: number; product_name: string; price: number;
@@ -12,12 +15,19 @@ export interface Order {
   duration_days: number | null; warranty_days: number | null; delivered_at: string | null;
   expires_at: string | null; warranty_expires_at: string | null; reminded_7d: number; reminded_3d: number;
   reminded_expired: number; stalled_alert_sent: number; reject_reason?: string | null; receipt_unique_id?: string | null; last_warranty_claim_at: string | null; paid_failed_handled: number;
+  // round 3 (SUPPLIER_PLAN.md §2.1)
+  customer_username?: string | null; fulfillment?: string | null; needs_action_reason?: string | null; needs_action_at?: string | null;
+  supplier_deadline_at?: string | null; cost_toman?: number | null; cancel_reason?: string | null; cancelled_at?: string | null;
+  cancelled_by?: number | null; refund_status?: string | null; refunded_at?: string | null;
+  /** a timestamp while a delivery is being sent (SUPPLIER_PLAN.md §7.5); NULL = nobody is sending */
+  delivery_claimed_at?: string | null;
 }
 export interface DiscountCode {
   id: number; code: string; customer_product_id: number; discount_type: 'percent' | 'fixed';
   discount_value: number; max_uses: number | null; expires_at: string; is_active: number; created_at: string;
-  owner_telegram_id?: number | null; source?: string;
+  owner_telegram_id?: number | null; source?: string; product_group_id?: number | null;
 }
+export interface ProductGroup { id: number; name: string; sort_order: number }
 export interface BroadcastJob {
   id: number; admin_chat_id: number; text: string; entities: any[] | null; status: string;
   cursor_customer_id: number; total: number; sent: number; failed: number;
@@ -45,6 +55,7 @@ export const STALLED_QUERY = `
       WHERE  status = 'confirmed' AND stalled_alert_sent = 0
         AND  decided_at IS NOT NULL
         AND  decided_at <= datetime('now', '+03:30', ?)
+        AND  (fulfillment IS NULL OR fulfillment <> 'supplier')
     `;
 export const REMINDER_SQL = REMINDER_QUERIES;
 
@@ -65,9 +76,18 @@ export class StoreDb {
     }
   }
 
-  async upsertCustomer({ telegramId, displayName }: { telegramId: number; displayName: string }) {
-    const r = await this.q('INSERT OR IGNORE INTO customers (telegram_id, display_name) VALUES (?, ?)', telegramId, displayName).run();
-    return { changes: r.meta.changes };
+  /**
+   * `changes` is 1 only for a brand-new customer (the INSERT's result). A given `username` (null = none) is written
+   * to existing rows too, without '@'.
+   */
+  async upsertCustomer({ telegramId, displayName, username }: { telegramId: number; displayName: string; username?: string | null }) {
+    const name = username ? username.replace(/^@/, '') : null;
+    const stmts = [this.q('INSERT OR IGNORE INTO customers (telegram_id, display_name, username) VALUES (?, ?, ?)', telegramId, displayName, name)];
+    if (username !== undefined) {
+      stmts.push(this.q('UPDATE customers SET username = ? WHERE telegram_id = ? AND username IS NOT ?', name, telegramId, name));
+    }
+    const [inserted] = await this.db.batch(stmts);
+    return { changes: inserted.meta.changes };
   }
 
   async getAllCustomerTelegramIds(): Promise<number[]> {
@@ -97,7 +117,8 @@ export class StoreDb {
   async getAllActiveCustomerProducts(): Promise<CustomerProduct[]> {
     try {
       const r = await this.q(`
-      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available
+      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
+             group_id, option_label, sort_order
       FROM   customer_products
       WHERE  is_active = 1
       ORDER  BY id ASC
@@ -112,7 +133,8 @@ export class StoreDb {
   async getCustomerProductById(id: number): Promise<CustomerProduct | undefined> {
     try {
       const row = await this.q(`
-      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available
+      SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
+             group_id, option_label, sort_order, cost_toman, stock_mode, pricing_mode, markup_percent, markup_fixed
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -138,7 +160,7 @@ export class StoreDb {
   /** Edits an ACTIVE product; columns come from a fixed whitelist. changes = 0 → missing or deactivated. */
   async updateCustomerProduct(id: number, patch: Partial<{
     name: string; price: number; termsText: string | null; termsEntities: any[] | null;
-    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean;
+    durationDays: number | null; warrantyDays: number | null; isAvailable: boolean; stockMode: 'auto' | 'manual'; pricingMode: 'auto' | 'manual';
   }>) {
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -150,17 +172,123 @@ export class StoreDb {
     if (patch.durationDays !== undefined) add('duration_days', patch.durationDays || null);
     if (patch.warrantyDays !== undefined) add('warranty_days', patch.warrantyDays || null);
     if (patch.isAvailable !== undefined) add('is_available', patch.isAvailable ? 1 : 0);
+    if (patch.stockMode !== undefined) add('stock_mode', patch.stockMode);
+    if (patch.pricingMode !== undefined) add('pricing_mode', patch.pricingMode);
     if (!sets.length) return { changes: 0 };
     const r = await this.q('UPDATE customer_products SET ' + sets.join(', ') + ' WHERE id = ? AND is_active = 1', ...args, id).run();
     return { changes: r.meta.changes };
   }
 
-  /** Active fixed-amount codes that would make `price` free (value ≥ price). */
-  async getFixedCodesAtLeast(productId: number, price: number): Promise<DiscountCode[]> {
+  /** Active fixed-amount codes that would make `price` free (value ≥ price), including group codes of `groupId`. */
+  async getFixedCodesAtLeast(productId: number, price: number, groupId: number | null = null): Promise<DiscountCode[]> {
     return (await this.q(
-      "SELECT * FROM discount_codes WHERE customer_product_id = ? AND is_active = 1 AND discount_type = 'fixed' AND discount_value >= ?",
-      productId, price,
+      `SELECT * FROM discount_codes
+       WHERE (customer_product_id = ? OR (product_group_id IS NOT NULL AND product_group_id = ?))
+         AND is_active = 1 AND discount_type = 'fixed' AND discount_value >= ?`,
+      productId, groupId, price,
     ).all<DiscountCode>()).results;
+  }
+
+  // ─── Product groups (SUPPLIER_PLAN.md §3) ────────────────────────────────
+  /** Products and the groups they belong to, in one batch (the storefront catalog). */
+  async getCatalogData(): Promise<{ products: CustomerProduct[]; groups: ProductGroup[] }> {
+    const [p, g] = await this.db.batch([
+      this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
+                     group_id, option_label, sort_order
+              FROM customer_products WHERE is_active = 1 ORDER BY id ASC`),
+      this.q('SELECT id, name, sort_order FROM product_groups WHERE id IN (SELECT group_id FROM customer_products WHERE is_active = 1 AND group_id IS NOT NULL)'),
+    ]);
+    return {
+      products: p.results.map((x) => this.parseProductRow(x)!),
+      groups: g.results as ProductGroup[],
+    };
+  }
+
+  async getProductGroup(groupId: number): Promise<ProductGroup | undefined> {
+    return (await this.q('SELECT id, name, sort_order FROM product_groups WHERE id = ?', groupId).first<ProductGroup>()) ?? undefined;
+  }
+
+  async listGroups(): Promise<ProductGroup[]> {
+    return (await this.q('SELECT id, name, sort_order FROM product_groups ORDER BY sort_order, id').all<ProductGroup>()).results;
+  }
+
+  /** A group with its active options, for the group's detail message (one batch). */
+  async getGroupWithOptions(groupId: number): Promise<{ group: ProductGroup | null; options: CustomerProduct[] }> {
+    const [g, o] = await this.db.batch([
+      this.q('SELECT id, name, sort_order FROM product_groups WHERE id = ?', groupId),
+      this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
+                     group_id, option_label, sort_order, cost_toman
+              FROM customer_products WHERE group_id = ? AND is_active = 1`, groupId),
+    ]);
+    return { group: (g.results[0] as ProductGroup) ?? null, options: o.results.map((x) => this.parseProductRow(x)!) };
+  }
+
+  /** Every option of the group (active or not) — its display names are rewritten together. */
+  private syncOptionNamesStmt(groupId: number): Stmt {
+    return this.q(
+      "UPDATE customer_products SET name = (SELECT name FROM product_groups WHERE id = ?) || ' — ' || COALESCE(option_label, '') WHERE group_id = ?",
+      groupId, groupId,
+    );
+  }
+
+  async createGroup(name: string): Promise<number> {
+    const r = await this.q('INSERT INTO product_groups (name) VALUES (?)', name).run();
+    return r.meta.last_row_id;
+  }
+
+  /** Renames the group and rewrites every option's display name in the same batch. */
+  async renameGroup(groupId: number, name: string): Promise<void> {
+    await this.db.batch([this.q('UPDATE product_groups SET name = ? WHERE id = ?', name, groupId), this.syncOptionNamesStmt(groupId)]);
+  }
+
+  async setGroupSortOrder(groupId: number, sortOrder: number): Promise<void> {
+    await this.q('UPDATE product_groups SET sort_order = ? WHERE id = ?', sortOrder, groupId).run();
+  }
+
+  /** Changes an option's label and refreshes the display names of its group. */
+  async setOptionLabel(productId: number, groupId: number, label: string): Promise<{ changes: number }> {
+    const [r] = await this.db.batch([
+      this.q('UPDATE customer_products SET option_label = ? WHERE id = ? AND group_id = ? AND is_active = 1', label, productId, groupId),
+      this.syncOptionNamesStmt(groupId),
+    ]);
+    return { changes: r.meta.changes };
+  }
+
+  /** Puts an option into a group (`name` = group name + ' — ' + label, computed by the caller). */
+  async moveOptionToGroup(productId: number, groupId: number, label: string, name: string): Promise<{ changes: number }> {
+    const r = await this.q('UPDATE customer_products SET group_id = ?, option_label = ?, name = ? WHERE id = ? AND is_active = 1', groupId, label, name, productId).run();
+    return { changes: r.meta.changes };
+  }
+
+  /** Takes an option out of its group: it becomes an ordinary product named by its label. */
+  async leaveGroup(productId: number): Promise<{ changes: number }> {
+    const r = await this.q(
+      'UPDATE customer_products SET name = COALESCE(option_label, name), group_id = NULL, option_label = NULL WHERE id = ? AND is_active = 1',
+      productId,
+    ).run();
+    return { changes: r.meta.changes };
+  }
+
+  async setOptionSortOrder(productId: number, sortOrder: number): Promise<{ changes: number }> {
+    const r = await this.q('UPDATE customer_products SET sort_order = ? WHERE id = ? AND is_active = 1', sortOrder, productId).run();
+    return { changes: r.meta.changes };
+  }
+
+  /** Active codes that can apply to this option (its own codes and its group's). */
+  async getActiveCodesForProduct(productId: number, groupId: number | null): Promise<DiscountCode[]> {
+    return (await this.q(
+      `SELECT * FROM discount_codes
+       WHERE is_active = 1 AND (customer_product_id = ? OR (product_group_id IS NOT NULL AND product_group_id = ?))`,
+      productId, groupId,
+    ).all<DiscountCode>()).results;
+  }
+
+  /** Terms for the whole group (one statement). */
+  async setGroupTerms(groupId: number, termsText: string | null, termsEntities: any[] | null): Promise<void> {
+    await this.q(
+      'UPDATE customer_products SET terms_text = ?, terms_entities = ? WHERE group_id = ? AND is_active = 1',
+      termsText || null, termsEntities?.length ? JSON.stringify(termsEntities) : null, groupId,
+    ).run();
   }
 
   // ─── Waitlist ────────────────────────────────────────────────────────────
@@ -187,12 +315,14 @@ export class StoreDb {
   async createOrder(p: {
     customerTelegramId: number; customerProductId: number; productName: string; price: number;
     receiptFileId: string; receiptType: string; discountCodeId?: number | null; receiptUniqueId?: string | null;
+    customerUsername?: string | null;
   }) {
     const r = await this.q(`
     INSERT INTO orders
-      (customer_telegram_id, customer_product_id, product_name, price, receipt_file_id, receipt_type, discount_code_id, receipt_unique_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, p.customerTelegramId, p.customerProductId, p.productName, p.price, p.receiptFileId, p.receiptType, p.discountCodeId || null, p.receiptUniqueId || null).run();
+      (customer_telegram_id, customer_product_id, product_name, price, receipt_file_id, receipt_type, discount_code_id, receipt_unique_id, customer_username)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, p.customerTelegramId, p.customerProductId, p.productName, p.price, p.receiptFileId, p.receiptType, p.discountCodeId || null, p.receiptUniqueId || null,
+      p.customerUsername || null).run();
     return { lastInsertRowid: r.meta.last_row_id };
   }
 
@@ -210,24 +340,41 @@ export class StoreDb {
     }
   }
 
-  async createManualPurchaseClaim(p: { creationKey: string; tokenHash: string; customerProductId: number; approvedBy: number }): Promise<any> {
-    const [, sel] = await this.db.batch([
+  async createManualPurchaseClaim(p: {
+    creationKey: string; tokenHash: string; customerProductId: number; approvedBy: number;
+    /** 'stock' reserves `stockAccountId` together with the claim; 'supplier' buys when the customer opens the link */
+    fulfillment?: 'outside' | 'stock' | 'supplier'; stockAccountId?: number;
+  }): Promise<any> {
+    const stock = p.fulfillment === 'stock' && p.stockAccountId !== undefined;
+    const stmts = [
+      // the reservation comes first: the claim below is inserted only while it changed a row
+      ...(stock ? [this.q("UPDATE stock_accounts SET status = 'reserved', updated_at = datetime('now', '+03:30') WHERE id = ? AND status = 'available'", p.stockAccountId)] : []),
       this.q(`
       INSERT INTO manual_purchase_claims
-        (creation_key, token_hash, customer_product_id, product_name, price, duration_days, warranty_days, approved_by)
-      SELECT ?, ?, id, name, price, duration_days, warranty_days, ?
-      FROM customer_products WHERE id = ? AND is_active = 1
+        (creation_key, token_hash, customer_product_id, product_name, price, duration_days, warranty_days, approved_by, fulfillment, stock_account_id)
+      SELECT ?, ?, id, name, price, duration_days, warranty_days, ?, ?, ?
+      FROM customer_products WHERE id = ? AND is_active = 1${stock ? ' AND changes() = 1' : ''}
       ON CONFLICT(creation_key) DO NOTHING
-    `, p.creationKey, p.tokenHash, p.approvedBy, p.customerProductId),
+    `, p.creationKey, p.tokenHash, p.approvedBy, p.fulfillment && p.fulfillment !== 'outside' ? p.fulfillment : null, stock ? p.stockAccountId : null, p.customerProductId),
       this.q('SELECT * FROM manual_purchase_claims WHERE creation_key = ?', p.creationKey),
-    ]);
-    const row = sel.results[0];
-    if (!row) throw new Error('Selected customer product is unavailable.');
+    ];
+    const rs = await this.db.batch(stmts);
+    const row = rs[rs.length - 1].results[0];
+    if (!row) {
+      // the product vanished after the reservation: give the account back
+      if (stock) await this.q("UPDATE stock_accounts SET status = 'available' WHERE id = ? AND status = 'reserved' AND order_id IS NULL", p.stockAccountId).run();
+      throw new Error('Selected customer product is unavailable.');
+    }
     return row;
   }
 
-  async redeemManualPurchaseClaim(p: { tokenHash: string; customerTelegramId: number; displayName: string }): Promise<{ outcome: ClaimOutcome; order: Order | null }> {
+  async redeemManualPurchaseClaim(p: {
+    tokenHash: string; customerTelegramId: number; displayName: string;
+    /** the deadline of a supplier-fulfilled purchase (Tehran 'YYYY-MM-DD HH:MM:SS'), now + 20 h */
+    supplierDeadlineAt?: string;
+  }): Promise<{ outcome: ClaimOutcome; order: Order | null; claim: { fulfillment: string | null; stock_account_id: number | null; approved_by: number } | null }> {
     const { tokenHash: h, customerTelegramId: me, displayName } = p;
+    const supplier = "c.fulfillment = 'supplier'";
     const rs = await this.db.batch([
       this.q(`UPDATE manual_purchase_claims
         SET status = 'claimed', claimed_by = ?, claimed_at = datetime('now', '+03:30')
@@ -235,26 +382,38 @@ export class StoreDb {
       this.q(`INSERT INTO customers (telegram_id, display_name)
         SELECT ?, ? WHERE EXISTS (SELECT 1 FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ? AND order_id IS NULL)
         ON CONFLICT(telegram_id) DO UPDATE SET display_name = excluded.display_name`, me, displayName, h, me),
+      // 'supplier': confirmed and not delivered (the clocks start at delivery); 'stock': delivered as always, the account is sent after this batch
       this.q(`INSERT INTO orders (
           customer_telegram_id, customer_product_id, product_name, price,
           receipt_file_id, receipt_type, purchase_source, status, created_at,
           decided_at, decided_by, duration_days, warranty_days, delivered_at,
-          expires_at, warranty_expires_at
+          expires_at, warranty_expires_at, customer_username, fulfillment, supplier_deadline_at
         )
-        SELECT ?, c.customer_product_id, c.product_name, c.price, NULL, NULL, 'manual', 'delivered', c.approved_at,
-          c.approved_at, c.approved_by, c.duration_days, c.warranty_days, c.approved_at,
-          CASE WHEN c.duration_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.duration_days || ' days') END,
-          CASE WHEN c.warranty_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.warranty_days || ' days') END
-        FROM manual_purchase_claims c WHERE c.token_hash = ? AND c.claimed_by = ? AND c.order_id IS NULL`, me, h, me),
+        SELECT ?, c.customer_product_id, c.product_name, c.price, NULL, NULL, 'manual',
+          CASE WHEN ${supplier} THEN 'confirmed' ELSE 'delivered' END, c.approved_at,
+          c.approved_at, c.approved_by, c.duration_days, c.warranty_days,
+          CASE WHEN ${supplier} THEN NULL ELSE c.approved_at END,
+          CASE WHEN ${supplier} THEN NULL WHEN c.duration_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.duration_days || ' days') END,
+          CASE WHEN ${supplier} THEN NULL WHEN c.warranty_days IS NOT NULL THEN datetime(c.approved_at, '+' || c.warranty_days || ' days') END,
+          (SELECT username FROM customers WHERE telegram_id = ?),
+          CASE WHEN c.fulfillment IN ('stock', 'supplier') THEN c.fulfillment END,
+          CASE WHEN ${supplier} THEN ? END
+        FROM manual_purchase_claims c WHERE c.token_hash = ? AND c.claimed_by = ? AND c.order_id IS NULL`, me, me, p.supplierDeadlineAt ?? null, h, me),
       this.q(`UPDATE manual_purchase_claims SET order_id = (SELECT MAX(id) FROM orders)
         WHERE token_hash = ? AND claimed_by = ? AND order_id IS NULL`, h, me),
+      // the reserved account of a stock link now knows its order (it turns «delivered» when the message is sent)
+      this.q(`UPDATE stock_accounts SET order_id = (SELECT order_id FROM manual_purchase_claims WHERE token_hash = ?),
+        updated_at = datetime('now', '+03:30')
+        WHERE id = (SELECT stock_account_id FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ?)
+          AND status = 'reserved' AND order_id IS NULL AND changes() = 1`, h, h, me),
       this.q('SELECT * FROM manual_purchase_claims WHERE token_hash = ?', h),
     ]);
-    const claim = rs[4].results[0];
-    if (!claim) return { outcome: 'invalid', order: null };
+    const claim = rs[5].results[0];
+    if (!claim) return { outcome: 'invalid', order: null, claim: null };
     const order = claim.order_id ? (await this.getOrderById(claim.order_id)) ?? null : null;
-    if (rs[0].meta.changes === 1) return { outcome: 'claimed', order };
-    return { outcome: claim.claimed_by === me ? 'already_claimed' : 'claimed_by_other', order };
+    const info = { fulfillment: claim.fulfillment ?? null, stock_account_id: claim.stock_account_id ?? null, approved_by: claim.approved_by };
+    if (rs[0].meta.changes === 1) return { outcome: 'claimed', order, claim: info };
+    return { outcome: claim.claimed_by === me ? 'already_claimed' : 'claimed_by_other', order, claim: info };
   }
 
   async deletePendingOrder(id: number) {
@@ -288,6 +447,21 @@ export class StoreDb {
     WHERE  id = ? AND status = 'confirmed'
   `, id).run();
     return { changes: r.meta.changes };
+  }
+
+  /**
+   * The same conditional UPDATE as markOrderDelivered, as a statement for a batch and with the time given by the
+   * caller (`now` = 'YYYY-MM-DD HH:MM:SS' Tehran), so the clocks follow the app's clock.
+   */
+  markDeliveredStatement(id: number, now: string, onlyFulfillment?: string): Stmt {
+    return this.q(`
+    UPDATE orders
+    SET    status       = 'delivered',
+           delivered_at = ?,
+           expires_at   = CASE WHEN duration_days IS NOT NULL THEN datetime(?, '+' || duration_days || ' days') END,
+           warranty_expires_at = CASE WHEN warranty_days IS NOT NULL THEN datetime(?, '+' || warranty_days || ' days') END
+    WHERE  id = ? AND status = 'confirmed'${onlyFulfillment ? ' AND fulfillment = ?' : ''}
+  `, now, now, now, id, ...(onlyFulfillment ? [onlyFulfillment] : []));
   }
 
   async getDeliveredOrdersForCustomer(telegramId: number): Promise<Order[]> {
@@ -373,14 +547,14 @@ export class StoreDb {
 
   async createDiscountCode(p: {
     code: string; customerProductId: number; discountType: string; discountValue: number; maxUses: number | null; expiresAt: string;
-    ownerTelegramId?: number | null; source?: 'admin' | 'referral';
+    ownerTelegramId?: number | null; source?: 'admin' | 'referral'; productGroupId?: number | null;
   }) {
     const r = await this.q(`
     INSERT INTO discount_codes
-      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source, product_group_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, p.code.toUpperCase(), p.customerProductId, p.discountType, p.discountValue, p.maxUses ?? null, p.expiresAt,
-      p.ownerTelegramId ?? null, p.source ?? 'admin').run();
+      p.ownerTelegramId ?? null, p.source ?? 'admin', p.productGroupId ?? null).run();
     return { lastInsertRowid: r.meta.last_row_id };
   }
 
@@ -412,12 +586,14 @@ export class StoreDb {
     }
   }
 
-  async updateDiscountCodeDetails(id: number, p: { discountType: string; discountValue: number; customerProductId: number; maxUses: number | null }) {
+  async updateDiscountCodeDetails(id: number, p: {
+    discountType: string; discountValue: number; customerProductId: number; maxUses: number | null; productGroupId?: number | null;
+  }) {
     const r = await this.q(`
     UPDATE discount_codes
-    SET    discount_type = ?, discount_value = ?, customer_product_id = ?, max_uses = ?
+    SET    discount_type = ?, discount_value = ?, customer_product_id = ?, max_uses = ?, product_group_id = ?
     WHERE  id = ?
-  `, p.discountType, p.discountValue, p.customerProductId, p.maxUses ?? null, id).run();
+  `, p.discountType, p.discountValue, p.customerProductId, p.maxUses ?? null, p.productGroupId ?? null, id).run();
     return { changes: r.meta.changes };
   }
 
@@ -533,9 +709,9 @@ export class StoreDb {
   /** A free-product reward: an already-confirmed 0-Toman order that follows the normal delivery flow. */
   async createRewardOrder(p: { customerTelegramId: number; product: CustomerProduct }): Promise<number> {
     const r = await this.q(`
-    INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, purchase_source, status, decided_at, decided_by, duration_days, warranty_days)
-    VALUES (?, ?, ?, 0, 'manual', 'confirmed', datetime('now', '+03:30'), 0, ?, ?)
-  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null).run();
+    INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, purchase_source, status, decided_at, decided_by, duration_days, warranty_days, customer_username)
+    VALUES (?, ?, ?, 0, 'manual', 'confirmed', datetime('now', '+03:30'), 0, ?, ?, (SELECT username FROM customers WHERE telegram_id = ?))
+  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null, p.customerTelegramId).run();
     return r.meta.last_row_id;
   }
 

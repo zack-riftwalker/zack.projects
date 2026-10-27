@@ -1,6 +1,6 @@
 import type { Bot } from 'grammy';
 import { Markup } from '../../lib/markup';
-import { MANUAL_PURCHASE_LABEL, REFERRAL_LABEL, REPORT_LABEL } from '../labels';
+import { MANUAL_PURCHASE_LABEL, REFERRAL_LABEL, REPORT_LABEL, SUPPLIER_LABEL } from '../labels';
 import type { StoreContext } from '../types';
 
 const LABEL = {
@@ -13,7 +13,11 @@ const LABEL = {
   cardSettings: '💳 شماره کارت',
   referral: REFERRAL_LABEL,
   manualPurchase: MANUAL_PURCHASE_LABEL,
+  supplier: SUPPLIER_LABEL,
 };
+
+/** The reply-keyboard buttons of the admin panel. */
+export const ADMIN_PANEL_LABELS: string[] = Object.values(LABEL);
 
 export function adminPanelKeyboard() {
   return Markup.keyboard([
@@ -22,6 +26,7 @@ export function adminPanelKeyboard() {
     [LABEL.deactProduct, LABEL.discountCode],
     [LABEL.cardSettings, LABEL.referral],
     [LABEL.manualPurchase],
+    [LABEL.supplier],
   ]).resize();
 }
 
@@ -37,6 +42,9 @@ export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: 
     if (isAdmin(ctx.from?.id) && ctx.session) {
       ctx.session.awaitingRejectReasonFor = null;
       ctx.session.awaitingReferralInput = null;
+      ctx.session.awaitingSupplierInput = null;
+      ctx.session.supplierWizard = null;
+      ctx.session.supplierImport = null;
     }
     return next();
   });

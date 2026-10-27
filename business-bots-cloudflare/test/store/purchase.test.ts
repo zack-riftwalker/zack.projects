@@ -21,7 +21,8 @@ describe('store: /start', () => {
     expect(q(t.storeDb, 'SELECT * FROM customers')).toHaveLength(0);
     const sent = t.tg.of('sendMessage', ADMIN.id)[0];
     expect(sent.payload.text).toContain('سلام مدیر!');
-    expect(sent.payload.reply_markup.keyboard).toHaveLength(5);
+    // 6 rows: the «🔌 API تأمین‌کننده» row was added in the supplier milestone (S3)
+    expect(sent.payload.reply_markup.keyboard).toHaveLength(6);
   });
 });
 

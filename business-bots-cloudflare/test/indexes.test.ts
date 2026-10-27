@@ -3,9 +3,20 @@ import { FakeD1 } from './helpers/fakeD1';
 import { REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
+import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
+import { APPLY_DEFAULTS_SQL, NEEDS_ACTION_COUNT_SQL, NEEDS_ACTION_LIST_SQL } from '../src/store/handlers/supplierPanel';
+import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
+import { BALANCE_SQL, HISTORY_SQL } from '../src/store/suppliers/wallet';
+import { BATCH_ACCOUNTS_SQL, BATCH_LIST_SQL } from '../src/store/suppliers/stockCards';
+import { PROFIT_SQL } from '../src/store/handlers/salesReport';
+import { CUSTOMER_BY_ID_SQL, CUSTOMER_BY_NAME_SQL, MATCHING_PRODUCTS_SQL, RELEASE_LINK_SQL } from '../src/store/handlers/stockAdmin';
+import {
+  DEADLINE_SQL, LIVE_SUPPLIER_ORDER_SQL, PENDING_MANUAL_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
+} from '../src/store/suppliers/engine';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
-const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links'];
+const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links',
+  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger', 'manual_purchase_claims'];
 
 function plan(f: FakeD1, sql: string, ...args: unknown[]): string[] {
   return (f.sqlite.prepare('EXPLAIN QUERY PLAN ' + sql).all(...(args as any[])) as any[]).map((r) => String(r.detail));
@@ -65,6 +76,87 @@ describe('store hot queries use indexes', () => {
       const fl = audienceFilter(audience);
       assertNoScan(plan(f, 'SELECT c.id, c.telegram_id FROM customers c WHERE c.id > ? AND (' + fl.where + ') ORDER BY c.id LIMIT ?', 0, ...fl.args, 40), 'broadcast ' + audience);
     });
+  }
+});
+
+describe('supplier hot queries use indexes', () => {
+  const f = new FakeD1().migrate('store');
+  const cases: [string, string, unknown[]][] = [
+    ['sources of an option', `SELECT s.id FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
+      WHERE s.customer_product_id = ? ORDER BY s.priority, s.id`, [1]],
+    ['sources of a supplier (apply)', 'SELECT s.id FROM product_sources s WHERE s.supplier_id = ? ORDER BY s.id', [1]],
+    ['options of a group', 'SELECT id FROM customer_products WHERE group_id = ? AND is_active = 1', [1]],
+    ['catalog products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id', []],
+    // the real queries of the code, not copies of them
+    ['supplier fetch due', SUPPLIERS_DUE_SQL, [1, 'x']],
+    ['catalog to apply', CATALOG_PENDING_SQL, []],
+    ['apply default markup to auto options', APPLY_DEFAULTS_SQL, []],
+    ['linked options of a supplier', 'SELECT COUNT(DISTINCT customer_product_id) AS n FROM product_sources WHERE supplier_id = ?', [1]],
+    // the order engine (S5)
+    ['stale placing leases', STALE_LEASE_SQL, ['x', 3]],
+    ['queued and due (LIMIT)', QUEUED_DUE_SQL, ['x', 3]],
+    ['placed and due (LIMIT)', PLACED_DUE_SQL, ['x', 5]],
+    ['completed, not delivered', UNDELIVERED_SQL, ['x', 2]],
+    ['20 h deadline', DEADLINE_SQL, ['x', 3]],
+    ['stranded supplier orders', STRANDED_SQL, ['x', 2]],
+    ['sources to place an order', SOURCE_SELECT + ' WHERE s.customer_product_id = ? ORDER BY s.priority, s.id', [1]],
+    ['forced source', SOURCE_SELECT + ' WHERE s.id = ?', [1]],
+    ['sources and enabled count', 'SELECT COUNT(*) AS total FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id WHERE s.customer_product_id = ?', [1]],
+    ['latest supplier order of an order', 'SELECT so.id FROM supplier_orders so LEFT JOIN suppliers sup ON sup.id = so.supplier_id WHERE so.order_id = ? ORDER BY so.id DESC LIMIT 1', [1]],
+    ['unknown supplier order of an order', "SELECT * FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", [1]],
+    ['live supplier order of an order', "SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('queued', 'placing', 'placed', 'completed')", [1]],
+    // review fixes
+    ['live supplier orders of an order (queue check)', `SELECT 1 FROM supplier_orders WHERE order_id = ? AND ${LIVE_SUPPLIER_ORDER_SQL} AND NOT (id = ? AND status = 'unknown')`, [1, -1]],
+    ['sent delivery of a supplier order', 'SELECT 1 FROM order_deliveries d WHERE d.supplier_order_id = ? AND d.sent_ok = 1', [1]],
+    ['divert claim: a batch of the supplier order', 'SELECT 1 FROM stock_batches WHERE supplier_order_id = ?', [1]],
+    ['mark the unsent delivery as diverted', 'UPDATE order_deliveries SET diverted = 1 WHERE supplier_order_id = ? AND sent_ok = 0 AND EXISTS (SELECT 1 FROM stock_batches WHERE supplier_order_id = ?)', [1, 1]],
+    ['undo: a delivery that was not diverted', 'SELECT 1 FROM order_deliveries WHERE order_id = ? AND diverted = 0', [1]],
+    ['card: deliveries not diverted', 'SELECT COUNT(*) FROM order_deliveries WHERE order_id = ? AND diverted = 0', [1]],
+    ['admin deliveries the budget could not send (LIMIT)', PENDING_MANUAL_SQL, ['x', 2]],
+    ['direct-buy nonce', 'SELECT id FROM supplier_orders WHERE buy_nonce = ?', ['n']],
+    ['stk_rel_: withdraw the manual link of an account', RELEASE_LINK_SQL, [1]],
+    ['latest delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? ORDER BY id DESC LIMIT 1', [1]],
+    ['latest sent delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? AND sent_ok = 1 ORDER BY id DESC LIMIT 1', [1]],
+    ['pending delivery of a supplier order', 'SELECT id FROM order_deliveries WHERE order_id = ? AND supplier_order_id = ? AND sent_ok = 0 ORDER BY id DESC LIMIT 1', [1, 1]],
+    // decision card, /order, cancel, stock (S6)
+    ['needs-action count', NEEDS_ACTION_COUNT_SQL, []],
+    ['needs-action list (LIMIT)', NEEDS_ACTION_LIST_SQL, []],
+    ['cancel: give the code back', CANCEL_SQL.redemption, [1, 1, 1]],
+    ['cancel: un-qualify the referral', CANCEL_SQL.referral, [1, 1]],
+    ['cancel: release a reserved account', CANCEL_SQL.stock, ['x', 1]],
+    ['card: customer name', 'SELECT display_name FROM customers WHERE telegram_id = (SELECT customer_telegram_id FROM orders WHERE id = ?)', [1]],
+    ['card: product cost', 'SELECT cost_toman FROM customer_products WHERE id = (SELECT customer_product_id FROM orders WHERE id = ?)', [1]],
+    ['card: sources of the option', `SELECT sup.name FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
+      WHERE s.customer_product_id = (SELECT customer_product_id FROM orders WHERE id = ?) ORDER BY s.priority, s.id`, [1]],
+    ['available stock (LIMIT)', `SELECT a.id FROM stock_accounts a JOIN stock_batches b ON b.id = a.batch_id
+      LEFT JOIN supplier_orders so ON so.id = b.supplier_order_id WHERE a.status = 'available' ORDER BY a.id LIMIT 48`, []],
+    ['stock account with its batch', 'SELECT a.id FROM stock_accounts a JOIN stock_batches b ON b.id = a.batch_id WHERE a.id = ?', [1]],
+    ['events of an order', 'SELECT * FROM fulfillment_events WHERE order_id = ? ORDER BY id DESC LIMIT 15', [1]],
+    ['my subscriptions with stored accounts', `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
+      AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`, [1]],
+    // direct buy, stock accounts, wallet, manual links (S7)
+    ['wallet balance', BALANCE_SQL, [1]],
+    ['wallet history (LIMIT)', HISTORY_SQL, [1, 10]],
+    ['stock batch list (LIMIT)', BATCH_LIST_SQL, []],
+    ['accounts of a batch', BATCH_ACCOUNTS_SQL, [1]],
+    ['products that share an account\'s supplier item', MATCHING_PRODUCTS_SQL, [1]],
+    ['customer by id', CUSTOMER_BY_ID_SQL, [1]],
+    ['customer by username', CUSTOMER_BY_NAME_SQL, ['x']],
+    // sales report profit lines (S8)
+    ['report: cost and profit', PROFIT_SQL.costed, ['a', 'b']],
+    ['report: orders without a cost', PROFIT_SQL.missing, ['a', 'b']],
+    ['report: cancelled in the range', PROFIT_SQL.cancelled, ['a', 'b']],
+    ['report: refunds pending', PROFIT_SQL.refundPending, []],
+    ['report: sold outside', PROFIT_SQL.outside, ['a', 'b']],
+    ['report: reported batch profit', PROFIT_SQL.reported, ['a', 'b']],
+    ['report: stock bought', PROFIT_SQL.bought, ['a', 'b']],
+    ['report: free accounts', PROFIT_SQL.available, []],
+    ['report: wallet spend', PROFIT_SQL.spend, ['a', 'b']],
+    ['redeem: link the reserved account', `UPDATE stock_accounts SET order_id = (SELECT order_id FROM manual_purchase_claims WHERE token_hash = ?), updated_at = 'x'
+      WHERE id = (SELECT stock_account_id FROM manual_purchase_claims WHERE token_hash = ? AND claimed_by = ?) AND status = 'reserved' AND order_id IS NULL AND changes() = 1`, ['h', 'h', 1]],
+  ];
+  for (const [label, sql, args] of cases) {
+    it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));
   }
 });
 

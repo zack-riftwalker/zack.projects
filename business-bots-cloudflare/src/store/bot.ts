@@ -17,6 +17,11 @@ import { storeSettingsWizard } from './handlers/storeSettings';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
+import { registerSupplierPanel, supplierTextMiddleware } from './handlers/supplierPanel';
+import { registerFulfillmentAdmin } from './handlers/fulfillmentAdmin';
+import { registerStockAdmin } from './handlers/stockAdmin';
+import { registerAccountView } from './handlers/accountView';
+import { STAGE_BYPASS_RE } from './supplierInput';
 import { REF_PAYLOAD_RE, handleRefStart } from './referrals';
 import type { StoreContext, StoreSession } from './types';
 
@@ -55,11 +60,19 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     await next();
   });
 
-  bot.use(session<StoreSession, StoreContext>({
-    initial: () => ({}),
-    storage: new D1SessionStorage<StoreSession>(app.raw),
-    getSessionKey: (ctx) => (ctx.from && ctx.chat ? `${ctx.from.id}:${ctx.chat.id}` : undefined),
-  }));
+  const sessionStorage = new D1SessionStorage<StoreSession>(app.raw);
+  const sessionKey = (ctx: { from?: { id: number }; chat?: { id: number } }) => (ctx.from && ctx.chat ? `${ctx.from.id}:${ctx.chat.id}` : undefined);
+  bot.use(session<StoreSession, StoreContext>({ initial: () => ({}), storage: sessionStorage, getSessionKey: sessionKey }));
+  bot.use(async (ctx, next) => {
+    ctx.flushSession = async () => {
+      const key = sessionKey(ctx);
+      if (key && ctx.session) await sessionStorage.write(key, ctx.session);
+    };
+    await next();
+  });
+
+  // supplier prompts take their typed answer before any wizard can (SUPPLIER_PLAN.md §9.1)
+  bot.use(supplierTextMiddleware(isAdmin));
 
   const stage = new Stage<StoreContext>([
     announceWizard, customerProductsWizard, customerProductsDeactivateWizard, customerProductsEditWizard,
@@ -68,7 +81,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     manualPurchaseWizard,
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
-    bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
+    bypass: (ctx) => STAGE_BYPASS_RE.test(ctx.callbackQuery?.data ?? ''),
     // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
     exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
   });
@@ -77,6 +90,11 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   // /start — admins go straight into the panel, everyone else into the storefront.
   bot.command('start', async (ctx) => {
     try {
+      if (ctx.session && isAdmin(ctx.from?.id)) {
+        ctx.session.awaitingSupplierInput = null;
+        ctx.session.supplierWizard = null;
+        ctx.session.supplierImport = null;
+      }
       const payload = typeof ctx.match === 'string' ? ctx.match.trim() : '';
       if (isAdmin(ctx.from?.id)) {
         if (await handleManualPurchaseStart(ctx, payload)) return;
@@ -92,6 +110,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
       const upserted = await ctx.app.db.upsertCustomer({
         telegramId: ctx.from!.id,
         displayName: ctx.from!.first_name || ctx.from!.username || String(ctx.from!.id),
+        username: ctx.from!.username ?? null,
       });
 
       // /start ref_<code>: remember who invited this (brand-new) customer; never blocks the welcome
@@ -118,6 +137,11 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   });
 
   bot.command('panel', async (ctx) => {
+    if (ctx.session && isAdmin(ctx.from?.id)) {
+      ctx.session.awaitingSupplierInput = null;
+      ctx.session.supplierWizard = null;
+      ctx.session.supplierImport = null;
+    }
     if (isAdmin(ctx.from?.id)) {
       await ctx.reply('🎛 پنل مدیریت:', adminPanelKeyboard());
       return;
@@ -128,6 +152,10 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   registerAdminPanelHandler(bot, isAdmin);
   registerSalesReportHandler(bot, isAdmin);
   registerReferralHandler(bot, isAdmin);
+  registerSupplierPanel(bot, isAdmin);
+  registerFulfillmentAdmin(bot, isAdmin);
+  registerStockAdmin(bot, isAdmin);
+  registerAccountView(bot);
   registerDiscountCodeHandler(bot, isAdmin);
   registerBridgeHandler(bot);
   registerStorefrontHandler(bot);
