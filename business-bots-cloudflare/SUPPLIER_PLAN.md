@@ -1060,6 +1060,12 @@ To record:
   - **An empty wallet is NOT an error.** The order is accepted, and `GET /orders/2004` keeps answering `status:"pending"` with `"message":"The product is currently being supplied."`. In our engine that means `placed` → polling → the 20 h deadline card. So assumption (a)'s low-balance branch never fires with this supplier.
   - An unknown order id gives `404`.
   - Order 2004 is still open at the supplier: ask them whether it will be charged and delivered once the wallet is topped up, or cancel it.
+- **After the owner topped up the wallet (same day):** 2004 stayed `pending`, and a new hotmail order (**2029**) also stays `pending`. So `pending` most likely means "not in stock right now", not only "empty wallet". The bot can't tell which.
+- **Real delivery (approved by the owner): Gemini Pro 18 months, 95/96, $1.20 → order 2030.** HTTP 201 in 8.1 s, delivered **inside the POST answer**:
+  `{"ok":true,"order_id":2030,"status":"completed",…,"price":1.2,"accounts":[{"attributes":[{"key":"activation_link","value":"https://…"}]}]}`.
+  - `GET /orders/2030` gives the same body. Note that `price` is a string there (`"1.2"`) and a number in the POST.
+  - The success status is `completed` and the shape is `accounts[].attributes[{key,value}]`. Assumption (c) and the parser hold, and so does the `activation_link` label.
+  - The engine ignores accounts in the POST answer. It stores `placed` and picks them up on the first poll a minute later, which is fine (one extra GET).
 
 ### Assumptions (unverified, must be checked against the live API before deploy)
 The owner decided to build S5–S9 now with these assumptions instead of waiting for the probe above. They live in **one small mapping**, `ARIOBOX_ASSUMPTIONS` / `classifyRemoteStatus` / `isLowBalanceText` in `src/store/suppliers/ariobox.ts` (plus the price-mismatch check in `src/store/suppliers/engine.ts`), so a correction after the live test is a few lines.
