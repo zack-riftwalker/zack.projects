@@ -1055,6 +1055,12 @@ To record:
 - **Fix made after this probe:** many products have several variations with the same duration but a different type (ChatGPT has 7 variations, mostly `1-month`, differing by `subscription-type` and `setup-type`). They all got the same label «۱ ماهه». `optionsFromItems` now appends the attribute values that tell such variations apart (for example «۱ ماهه — premade | plus»). Warranty `full` now means "the whole subscription" (warranty days = duration days). `login-guarantee` and `lifetime` stay unknown and are listed for the admin to set by hand.
 - Not yet known; needs **one cheap real order, approved by the owner**: the `POST` response shape, whether `price` is per unit or total, the status sequence and the account `attributes` keys. The low-balance response and the failure status names must come from the supplier.
 
+- **Test order (2026-10-27, approved by the owner, wallet empty on purpose):** `POST /orders` for hotmail 280/281, qty 1, returned **HTTP 201** in 2.7 s: `{"ok":true,"order_id":2004,"number":"2004","status":"pending",…,"price":0.06}`.
+  - `price` equals the unit price. With quantity 1 we can't tell unit from total; assumption (b) still holds.
+  - **An empty wallet is NOT an error.** The order is accepted, and `GET /orders/2004` keeps answering `status:"pending"` with `"message":"The product is currently being supplied."`. In our engine that means `placed` → polling → the 20 h deadline card. So assumption (a)'s low-balance branch never fires with this supplier.
+  - An unknown order id gives `404`.
+  - Order 2004 is still open at the supplier: ask them whether it will be charged and delivered once the wallet is topped up, or cancel it.
+
 ### Assumptions (unverified, must be checked against the live API before deploy)
 The owner decided to build S5–S9 now with these assumptions instead of waiting for the probe above. They live in **one small mapping**, `ARIOBOX_ASSUMPTIONS` / `classifyRemoteStatus` / `isLowBalanceText` in `src/store/suppliers/ariobox.ts` (plus the price-mismatch check in `src/store/suppliers/engine.ts`), so a correction after the live test is a few lines.
 
