@@ -41,7 +41,7 @@ STORE_TABLES = [
                 "warranty_days", "delivered_at", "expires_at", "warranty_expires_at", "reminded_7d", "reminded_3d",
                 "reminded_expired", "stalled_alert_sent", "last_warranty_claim_at", "paid_failed_handled", "reject_reason", "receipt_unique_id",
                 "customer_username", "fulfillment", "needs_action_reason", "needs_action_at", "supplier_deadline_at", "cost_toman",
-                "cancel_reason", "cancelled_at", "cancelled_by", "refund_status", "refunded_at"]),
+                "cancel_reason", "cancelled_at", "cancelled_by", "refund_status", "refunded_at", "delivery_claimed_at"]),
     ("discount_code_redemptions", ["id", "discount_code_id", "customer_telegram_id", "order_id", "redeemed_at"]),
     ("manual_purchase_claims", ["id", "creation_key", "token_hash", "customer_product_id", "product_name", "price", "duration_days",
                                 "warranty_days", "approved_by", "approved_at", "status", "claimed_by", "claimed_at", "order_id", "fulfillment", "stock_account_id"]),

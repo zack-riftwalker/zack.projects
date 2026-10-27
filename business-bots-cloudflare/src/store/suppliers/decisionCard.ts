@@ -137,7 +137,8 @@ export function cardRows(d: CardData): InlineButton[][] {
   }
   if (o.status === 'confirmed' && o.fulfillment === 'supplier') {
     if (reason === 'unknown') {
-      rows.push([cb('🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم', 'fo_rid_' + id)], [cb('🔁 ثبت نشده بود؛ دوباره ثبت کن', 'fo_retry_' + id), src]);
+      // no «🔀 منبع دیگر» here: buying anywhere else could buy twice while this one may exist
+      rows.push([cb('🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم', 'fo_rid_' + id)], [cb('🔁 ثبت نشده بود؛ دوباره ثبت کن', 'fo_retry_' + id)]);
       rows.push([stock, text], [self, cancel]);
     } else if (reason === 'send_failed') {
       rows.push([cb('🔁 ارسال دوباره', 'fo_resend_' + id), cb('👁 نمایش اکانت', 'fo_view_' + id)], [self, cancel]);

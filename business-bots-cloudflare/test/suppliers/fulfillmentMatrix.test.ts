@@ -92,13 +92,13 @@ describe('every manual action works from every waiting state, and never buys or 
       expect(posts(s.fake).length).toBe(before);
     });
 
-    it(name + ': 🔀 another source ' + (name === 'placed' ? '(refused: money may be spent)' : 'buys once'), async () => {
+    it(name + ': 🔀 another source ' + (name === 'placed' ? '(refused: money may be spent)' : name === 'unknown' ? '(refused: it may exist, review B2)' : 'buys once'), async () => {
       const s = await shop();
       const orderId = await reach(s);
       const backup = await addBackupSource(s.t, s.sid, s.m1); // added afterwards: an enabled backup would have changed the state
       const before = posts(s.fake).length;
       await press(s.t, 'fo_srcok_' + orderId + '_' + backup);
-      if (name === 'placed') expect(posts(s.fake).length).toBe(before);
+      if (name === 'placed' || name === 'unknown') expect(posts(s.fake).length).toBe(before);
       else expect(posts(s.fake).length).toBe(before + 1);
     });
   }

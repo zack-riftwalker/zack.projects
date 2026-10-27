@@ -19,13 +19,18 @@ export interface Guard { sql: string; args: unknown[] }
 
 /**
  * An order resolved some other way must not buy or deliver from the supplier any more: a queued supplier order is
- * cancelled; one that is placing / placed / unknown is flagged so its accounts go to «اکانت‌های من» when they arrive.
+ * cancelled; one that is placing / placed / unknown is flagged so its accounts go to «اکانت‌های من» when they arrive;
+ * a completed one whose accounts were never sent is flagged too and the cron diverts them (once).
  */
 export function neutralizeStatements(app: StoreApp, orderId: number, guard: Guard): Stmt[] {
   const now = nowStr(app);
   return [
     q(app, `UPDATE supplier_orders SET status = 'cancelled', updated_at = ? WHERE order_id = ? AND status = 'queued' AND ${guard.sql}`, now, orderId, ...guard.args),
     q(app, `UPDATE supplier_orders SET divert_to_stock = 1, updated_at = ? WHERE order_id = ? AND status IN ('placing', 'placed', 'unknown') AND ${guard.sql}`, now, orderId, ...guard.args),
+    q(app, `UPDATE supplier_orders SET divert_to_stock = 1, next_check_at = COALESCE(next_check_at, ?), updated_at = ?
+            WHERE order_id = ? AND status = 'completed' AND divert_to_stock = 0
+              AND NOT EXISTS (SELECT 1 FROM order_deliveries d WHERE d.supplier_order_id = supplier_orders.id AND d.sent_ok = 1)
+              AND ${guard.sql}`, now, now, orderId, ...guard.args),
   ];
 }
 
@@ -53,7 +58,7 @@ export async function undoSelfDelivery(app: StoreApp, orderId: number, adminId: 
     q(app, `UPDATE orders SET fulfillment = 'supplier', supplier_deadline_at = ?, stalled_alert_sent = 0
             WHERE id = ? AND status = 'confirmed' AND fulfillment = 'manual_outside'
               AND NOT EXISTS (SELECT 1 FROM order_deliveries WHERE order_id = ?)`, deadlineFrom(app), orderId, orderId),
-    q(app, `UPDATE supplier_orders SET divert_to_stock = 0, updated_at = ? WHERE order_id = ? AND status IN ('placing', 'placed', 'unknown') AND ${guard.sql}`,
+    q(app, `UPDATE supplier_orders SET divert_to_stock = 0, updated_at = ? WHERE order_id = ? AND status IN ('placing', 'placed') AND ${guard.sql}`,
       now, orderId, ...guard.args),
     eventStatement(app, { orderId, kind: 'admin_undo', actor: adminId, guard }),
   ]);

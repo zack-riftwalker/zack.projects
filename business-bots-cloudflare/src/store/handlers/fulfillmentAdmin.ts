@@ -7,8 +7,8 @@ import { COMPLETION_TEXT } from '../bridgeHandlers';
 import { logEvent } from '../events';
 import { buildDecisionCard, buildOrderCard, historyText } from '../suppliers/decisionCard';
 import {
-  deliverToCustomer, deliveryMessages, kickSupplierOrder, latestDelivery, queueSupplierOrder, recordRemoteOrderId, resendDelivery,
-  sendDeliveredNotice, SOURCE_SELECT, type SourceCandRow,
+  deliverToCustomer, deliveryMessages, kickSupplierOrder, latestDelivery, queueSupplierOrder, raiseNeedsAction, recordRemoteOrderId, resendDelivery,
+  sendDeliveredNotice, SOURCE_SELECT, unknownSupplierOrderId, type SourceCandRow,
 } from '../suppliers/engine';
 import {
   addDisabledSource, cancelOrder, claimForManualDelivery, deadlineFrom, finishSelfDelivery, markRefunded, releaseManualClaim,
@@ -54,6 +54,16 @@ async function liveOrder(ctx: StoreContext, orderId: number, fulfillments: strin
     return null;
   }
   return order;
+}
+
+const UNKNOWN_FIRST =
+  '❓ سفارش قبلی در تأمین‌کننده هنوز نامشخص است؛ ممکن است خریداری شده باشد. اول «🔢 ثبت شده بود» یا «🔁 ثبت نشده بود» را بزنید.';
+
+/** True (after telling the admin) while an `unknown` supplier order of the order exists: nothing else may buy then. */
+async function refuseWhileUnknown(ctx: StoreContext, orderId: number): Promise<boolean> {
+  if ((await unknownSupplierOrderId(ctx.app, orderId)) === null) return false;
+  await ctx.answerCallbackQuery({ text: UNKNOWN_FIRST, show_alert: true });
+  return true;
 }
 
 /** A card for the order: the decision card when it needs a decision, else the order card. */
@@ -155,7 +165,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   bot.callbackQuery(/^fo_retryok_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (order) await retryNow(ctx, order);
+    if (order) await retryNow(ctx, order, { lossConfirmed: true });
   });
 
   // ── 🔢 an `unknown` order that did exist: the admin types its number ──
@@ -195,7 +205,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   bot.callbackQuery(/^fo_src_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (!order) return;
+    if (!order || (await refuseWhileUnknown(ctx, order.id))) return;
     const sources = await orderSources(ctx.app, order);
     const rows = sources.map((s) => [cb(sourceLabel(s, order.price), 'fo_srcp_' + order.id + '_' + s.id)]);
     rows.push([cb('➕ منبع جدید از تأمین‌کننده', 'fo_srcnew_' + order.id)], [cb('🔙 بازگشت', 'fo_card_' + order.id)]);
@@ -209,7 +219,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   bot.callbackQuery(/^fo_srcp_(\d+)_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (!order) return;
+    if (!order || (await refuseWhileUnknown(ctx, order.id))) return;
     const source = (await orderSources(ctx.app, order)).find((s) => s.id === parseInt(ctx.match[2], 10));
     if (!source) return ctx.answerCallbackQuery({ text: IMPOSSIBLE, show_alert: true });
     await showSourceConfirmation(ctx, order, source);
@@ -218,7 +228,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   bot.callbackQuery(/^fo_srcok_(\d+)_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (!order) return;
+    if (!order || (await refuseWhileUnknown(ctx, order.id))) return;
     const source = (await orderSources(ctx.app, order)).find((s) => s.id === parseInt(ctx.match[2], 10));
     if (!source) return ctx.answerCallbackQuery({ text: IMPOSSIBLE, show_alert: true });
     const soId = await queueSupplierOrder(ctx.app, order, {
@@ -235,7 +245,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   bot.callbackQuery(/^fo_srcnew_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (!order) return;
+    if (!order || (await refuseWhileUnknown(ctx, order.id))) return;
     const suppliers = await listSuppliers(ctx.app);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText('➕ منبع را از کدام تأمین‌کننده می‌خواهید؟', Markup.inlineKeyboard([
@@ -260,7 +270,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
   bot.callbackQuery(/^fo_srcn_(\d+)_(\d+)_([0-9a-f]{12})$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (!order) return;
+    if (!order || (await refuseWhileUnknown(ctx, order.id))) return;
     const sid = parseInt(ctx.match[2], 10);
     const item = await findCatalogItem(ctx.app, sid, ctx.match[3]);
     if (!item) return ctx.answerCallbackQuery({ text: '❌ این گزینه دیگر در کاتالوگ نیست.', show_alert: true });
@@ -384,6 +394,13 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
     // a supplier order that was left running gets its accounts back; otherwise a new one is queued (no confirmation)
     const fresh = (await ctx.app.db.getOrderById(order.id))!;
     const soId = await queueSupplierOrder(ctx.app, fresh, { requestedBy: ctx.from.id, eventKind: 'admin_retry', eventDetail: 'undo' });
+    if (soId === null && (await unknownSupplierOrderId(ctx.app, order.id)) !== null) {
+      // an order that may exist at the supplier is never bought again by an undo: the unknown card is out again
+      await ctx.answerCallbackQuery({ text: UNKNOWN_FIRST, show_alert: true });
+      await markCard(ctx, '↩️ به تحویل خودکار برگشت (سفارش نامشخص هنوز تعیین‌تکلیف نشده)');
+      await raiseNeedsAction(ctx.app, order.id, 'unknown');
+      return;
+    }
     await resetForNewAttempt(ctx.app, order.id);
     await ctx.answerCallbackQuery('↩️ برگشت.');
     await markCard(ctx, '↩️ به تحویل خودکار برگشت');
@@ -479,10 +496,17 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
 
 // ─── pieces ──────────────────────────────────────────────────────────────────
 
-/** Adds a new queued supplier order for the order, clears the card state and places it right away. */
-async function retryNow(ctx: StoreContext, order: OrderRow) {
+/**
+ * Adds a new queued supplier order for the order, clears the card state and places it right away. Only the unknown
+ * card's «🔁 ثبت نشده بود» (reason still `unknown`) may buy over an `unknown` row, and it cancels that row.
+ */
+async function retryNow(ctx: StoreContext, order: OrderRow, opts: { lossConfirmed?: boolean } = {}) {
   const app = ctx.app;
-  const soId = await queueSupplierOrder(app, order, { requestedBy: ctx.from!.id, eventKind: 'admin_retry' });
+  const fromUnknownId = order.needs_action_reason === 'unknown' ? (await unknownSupplierOrderId(app, order.id)) ?? undefined : undefined;
+  const soId = await queueSupplierOrder(app, order, {
+    requestedBy: ctx.from!.id, eventKind: 'admin_retry', ...(fromUnknownId !== undefined ? { fromUnknownId } : {}),
+    ...(opts.lossConfirmed ? { lossConfirmed: true } : {}),
+  });
   if (soId === null) return ctx.answerCallbackQuery({ text: IMPOSSIBLE, show_alert: true });
   await resetForNewAttempt(app, order.id);
   await ctx.answerCallbackQuery('🔁 دوباره ثبت می‌شود.');

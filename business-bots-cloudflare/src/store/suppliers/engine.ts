@@ -114,9 +114,17 @@ export async function sendCard(app: StoreApp, orderId: number, opts: CardOptions
 // ─── Queueing ────────────────────────────────────────────────────────────────
 
 /**
- * Inserts a queued supplier order for a confirmed supplier order, but only when none is live (queued / placing /
- * placed / completed-but-undelivered) — one statement, so two admins, the webhook and cron can't both add one.
- * Returns the new id, or null when nothing was added.
+ * A supplier order that still stands for its store order. `unknown` counts: it MAY exist at the supplier, so nothing
+ * is bought again until the admin says so (SUPPLIER_PLAN.md §0 rule 7). A `completed` one counts only while its
+ * accounts can still reach the customer (an unsent delivery that was not diverted to stock).
+ */
+export const LIVE_SUPPLIER_ORDER_SQL = `(status IN ('queued', 'placing', 'placed', 'unknown')
+  OR (status = 'completed' AND divert_to_stock = 0
+      AND NOT EXISTS (SELECT 1 FROM order_deliveries d WHERE d.supplier_order_id = supplier_orders.id AND d.sent_ok = 1)))`;
+
+/**
+ * Inserts a queued supplier order for a confirmed supplier order, but only when none is live (see above) — one
+ * statement, so two admins, the webhook and cron can't both add one. Returns the new id, or null when nothing was added.
  */
 export async function queueSupplierOrder(
   app: StoreApp, order: { id: number; customer_product_id: number },
@@ -124,27 +132,44 @@ export async function queueSupplierOrder(
     forcedSourceId?: number | null; requestedBy?: number; eventKind?: 'queued' | 'admin_retry' | 'admin_source'; eventDetail?: string;
     /** the admin chose another source: a supplier order that only WAITS (queued) is cancelled first; one already placing / placed stays */
     supersedeQueued?: boolean;
+    /** the admin pressed «🔁 ثبت نشده بود» on the unknown card: this `unknown` row is cancelled in the same batch, and only then */
+    fromUnknownId?: number;
+    /** the admin pressed «✅ بله» on the loss card: the loss guard of the placement is skipped for this order */
+    lossConfirmed?: boolean;
   } = {},
 ): Promise<number | null> {
   const now = nowStr(app);
   const supersede = opts.supersedeQueued
     ? [q(app, `UPDATE supplier_orders SET status = 'cancelled', updated_at = ? WHERE order_id = ? AND status = 'queued'
-               AND NOT EXISTS (SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('placing', 'placed', 'completed'))`, now, order.id, order.id)]
+               AND NOT EXISTS (SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('placing', 'placed', 'completed', 'unknown'))`, now, order.id, order.id)]
     : [];
+  const requestedBy = opts.requestedBy ?? 0;
   const rs = await app.raw.batch([
     ...supersede,
-    q(app, `INSERT INTO supplier_orders (purpose, order_id, customer_product_id, forced_source_id, quantity, status, next_attempt_at, requested_by, created_at, updated_at)
-            SELECT 'customer', ?, ?, ?, 1, 'queued', ?, ?, ?, ?
+    q(app, `INSERT INTO supplier_orders (purpose, order_id, customer_product_id, forced_source_id, quantity, status, next_attempt_at, requested_by, loss_confirmed, created_at, updated_at)
+            SELECT 'customer', ?, ?, ?, 1, 'queued', ?, ?, ?, ?, ?
             WHERE EXISTS (SELECT 1 FROM orders WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier')
-              AND NOT EXISTS (SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('queued', 'placing', 'placed', 'completed'))`,
-      order.id, order.customer_product_id, opts.forcedSourceId ?? null, now, opts.requestedBy ?? 0, now, now, order.id, order.id),
+              AND NOT EXISTS (SELECT 1 FROM supplier_orders WHERE order_id = ? AND ${LIVE_SUPPLIER_ORDER_SQL} AND NOT (id = ? AND status = 'unknown'))`,
+      order.id, order.customer_product_id, opts.forcedSourceId ?? null, now, requestedBy, opts.lossConfirmed ? 1 : 0, now, now,
+      order.id, order.id, opts.fromUnknownId ?? -1),
     eventStatement(app, {
-      orderId: order.id, supplierOrderId: 'last', kind: opts.eventKind ?? 'queued', actor: opts.requestedBy ?? 0,
+      orderId: order.id, supplierOrderId: 'last', kind: opts.eventKind ?? 'queued', actor: requestedBy,
       detail: opts.eventDetail, onlyIfChanged: true,
     }),
+    ...(opts.fromUnknownId !== undefined ? [
+      // `changes()` here is the event of the new row: the old unknown row is given up only when the new one was queued
+      q(app, "UPDATE supplier_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'unknown' AND changes() = 1", now, opts.fromUnknownId),
+      eventStatement(app, { orderId: order.id, supplierOrderId: opts.fromUnknownId, kind: 'admin_retry', actor: requestedBy, detail: 'admin: not placed', onlyIfChanged: true }),
+    ] : []),
   ]);
   const inserted = rs[supersede.length];
   return inserted.meta.changes === 1 ? inserted.meta.last_row_id : null;
+}
+
+/** The newest `unknown` supplier order of a store order, if any. */
+export async function unknownSupplierOrderId(app: StoreApp, orderId: number): Promise<number | null> {
+  const r = await q(app, "SELECT id FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", orderId).first<{ id: number }>();
+  return r?.id ?? null;
 }
 
 /** Places the order right now, swallowing every error (a failure here must never break the caller's flow). */
@@ -549,11 +574,16 @@ async function completeAndDeliver(app: StoreApp, so: SupplierOrderRow, remoteSta
   const content: DeliveryContent = { accounts };
 
   if (!wanted) {
-    await app.raw.batch([
-      q(app, "UPDATE supplier_orders SET status = 'completed', remote_status = ?, raw_response = ?, completed_at = ?, next_check_at = NULL, updated_at = ? WHERE id = ? AND status = 'placed'",
-        remoteStatus, raw, now, now, so.id),
+    // The accounts are saved as an unsent delivery in the same batch as the completion, and `next_check_at` stays set,
+    // so a Worker that dies before the divert below is finished by the cron (the divert itself is idempotent).
+    const rs = await app.raw.batch([
+      q(app, "UPDATE supplier_orders SET status = 'completed', remote_status = ?, raw_response = ?, completed_at = ?, next_check_at = ?, updated_at = ? WHERE id = ? AND status = 'placed'",
+        remoteStatus, raw, now, now, now, so.id),
+      q(app, `INSERT INTO order_deliveries (order_id, kind, content_json, supplier_order_id, sent_ok, created_by, created_at)
+              SELECT ?, 'supplier', ?, ?, 0, 0, ? WHERE changes() = 1 AND ? IS NOT NULL`, so.order_id, JSON.stringify(content), so.id, now, so.order_id),
       eventStatement(app, { orderId: so.order_id, supplierOrderId: so.id, kind: 'completed', onlyIfChanged: true }),
     ]);
+    if (rs[0].meta.changes !== 1) return; // another poll completed it first
     await divertToStock(app, so, accounts, order);
     return;
   }
@@ -569,15 +599,27 @@ async function completeAndDeliver(app: StoreApp, so: SupplierOrderRow, remoteSta
   await deliverToCustomer(app, order!.id, content, { kind: 'supplier', supplierOrderId: so.id, existingDeliveryId: rs[1].meta.last_row_id });
 }
 
-/** Accounts that arrived for an order that was resolved some other way: saved as stock, the admins are told. */
+/**
+ * Accounts that arrived for an order that was resolved some other way: saved as stock, the admins are told. Idempotent:
+ * the batch is saved in the same batch as a claim on the `completed` supplier order that fails once a batch for it exists,
+ * and the unsent delivery row is marked `diverted`, so neither the cron nor a second caller diverts it again.
+ */
 async function divertToStock(app: StoreApp, so: SupplierOrderRow, accounts: Accounts, order: Order | undefined): Promise<void> {
   const name = order?.product_name ?? 'سفارش';
-  await createStockBatch(app, {
+  const batchId = await createStockBatch(app, {
     supplierId: so.supplier_id, supplierOrderId: so.id,
     title: name + ' (برگشتی از سفارش #' + so.order_id + ')',
     accounts, unitPriceUsd: so.price_usd, usdToman: so.usd_toman, costToman: so.cost_toman,
     orderId: so.order_id, eventKind: 'diverted_to_stock', eventDetail: 'divert_to_stock=' + so.divert_to_stock + ' status=' + (order?.status ?? '?'),
+    claim: q(app, `UPDATE supplier_orders SET divert_to_stock = 1, next_check_at = NULL, updated_at = ?
+                   WHERE id = ? AND status = 'completed' AND NOT EXISTS (SELECT 1 FROM stock_batches WHERE supplier_order_id = ?)`, nowStr(app), so.id, so.id),
+    extra: [
+      q(app, `UPDATE order_deliveries SET diverted = 1 WHERE supplier_order_id = ? AND sent_ok = 0
+              AND EXISTS (SELECT 1 FROM stock_batches WHERE supplier_order_id = ?)`, so.id, so.id),
+      q(app, 'UPDATE supplier_orders SET next_check_at = NULL WHERE id = ? AND next_check_at IS NOT NULL AND EXISTS (SELECT 1 FROM stock_batches WHERE supplier_order_id = ?)', so.id, so.id),
+    ],
   });
+  if (batchId === null) return; // already diverted by someone else
   await sendToAdmins(app, '📦 اکانت سفارش #' + so.order_id + ' که قبلاً تعیین‌تکلیف شده بود رسید و به «اکانت‌های من» اضافه شد.');
 }
 
@@ -853,7 +895,7 @@ async function redeliverCompleted(app: StoreApp, soId: number, orderId: number):
   // claim: push the retry time so a parallel invocation skips it
   const claim = await q(app, "UPDATE supplier_orders SET next_check_at = ? WHERE id = ? AND status = 'completed' AND next_check_at <= ?", addMinutes(app, 5), soId, now).run();
   if (claim.meta.changes !== 1) return;
-  const d = await q(app, 'SELECT id, order_id, content_json FROM order_deliveries WHERE order_id = ? AND supplier_order_id = ? AND sent_ok = 0 ORDER BY id DESC LIMIT 1', orderId, soId)
+  const d = await q(app, 'SELECT id, order_id, content_json FROM order_deliveries WHERE order_id = ? AND supplier_order_id = ? AND sent_ok = 0 AND diverted = 0 ORDER BY id DESC LIMIT 1', orderId, soId)
     .first<{ id: number; order_id: number; content_json: string }>();
   const content = d ? parseContent(d.content_json) : null;
   if (!d || !content) {

@@ -27,6 +27,8 @@ export interface NewStockBatch {
   eventDetail?: string;
   /** a statement that must change a row for the batch to be saved at all (e.g. the supplier order's `placed → completed`), run first in the same batch */
   claim?: Stmt;
+  /** statements that run after the accounts, in the same batch; they must carry their own guard (they do not follow `changes()`) */
+  extra?: Stmt[];
 }
 
 /**
@@ -50,6 +52,7 @@ export async function createStockBatch(app: StoreApp, b: NewStockBatch): Promise
       `INSERT INTO stock_accounts (batch_id, content_json, status, updated_at)
        SELECT (SELECT MAX(id) FROM stock_batches), ?, 'available', ? WHERE changes() = 1`,
     ).bind(JSON.stringify({ accounts: [a] } satisfies DeliveryContent), now)),
+    ...(b.extra ?? []),
   ];
   const skip = b.claim ? 1 : 0;
   const rs = await app.raw.batch(stmts);

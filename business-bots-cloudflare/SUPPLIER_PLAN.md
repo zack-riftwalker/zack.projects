@@ -62,7 +62,7 @@
 4. **Budget (R1):** every Telegram call, D1 statement (each statement inside `batch()` counts) and supplier `fetch` costs 1 from the 50-unit budget per invocation. Supplier fetches must call `app.apps.budget.take()` before `app.apps.fetch(...)`, the same way `src/monshi/services/gemini.ts` does. Keep normal updates ≤ 35. Cron loops check `budget.remaining()` before each unit of work.
 5. **Indexes (R4):** add every new hot query to `test/indexes.test.ts`, and add `product_sources`, `supplier_orders`, `fulfillment_events`, `order_deliveries`, `stock_accounts` to its `BIG` list.
 6. **SQL:** plain positional `?` placeholders. Never `bind(undefined)`. Never interpolate user input or supplier data into SQL.
-7. **Money safety (the most important rule).** A supplier `POST /orders` may be sent **only** by `placeSupplierOrder()` (§7.3), and **only** after it won the atomic claim `queued → placing`. Nothing else may ever call the order endpoint. Any outcome where we don't know whether the order was created becomes `unknown` and goes to the admin. It is **never** retried automatically.
+7. **Money safety (the most important rule).** A supplier `POST /orders` may be sent **only** by `placeSupplierOrder()` (§7.3), and **only** after it won the atomic claim `queued → placing`. Nothing else may ever call the order endpoint. Any outcome where we don't know whether the order was created becomes `unknown` and goes to the admin. It is **never** retried automatically, **and it keeps counting as a live supplier order**: no other path (🔀 another source, ↩️ undo, a plain 🔁, a forged callback) may buy for that store order while an `unknown` row exists. The only way past it is the admin's explicit «🔁 ثبت نشده بود؛ دوباره ثبت کن» on the unknown card (`fo_retry` while the reason is still `unknown`), which cancels the old row in the same batch (event `admin_retry`, detail `admin: not placed`), or «🔢 ثبت شده بود» (`fo_rid`).
 8. **New admin messages use `parse_mode: 'HTML'`** and pass every dynamic value (product names, customer names, supplier names, account values, error texts) through `escapeHtml` (§2.4). Customer-facing delivery messages also use HTML, so account values can be shown in `<code>`.
 9. **Secrets:** never log an API key, never put it in a URL (use the `X-Api-Key` header), and never echo it back in a message (show `••••` + last 4 characters only). Supplier error texts saved to D1 or shown to admins are cut to 300 characters.
 10. **Commits and checks:** run `npm run typecheck && npm test` before every commit; both must pass. One commit per milestone (§13). Push to the branch your session tells you to use. Don't open a PR unless the user asks.
@@ -709,7 +709,7 @@ The admin's caption edit stays as today, plus the line `🔌 تحویل خودک
 | `retry_later` | `status='queued'`, `next_attempt_at = now + 15 min`, save `last_http`/`last_error`, event `place_failed`. First time: card to admins (reason `retry_later`; if Appendix A says it's low balance, header `💳 موجودی کیف پول «SUPPLIER» کافی نیست — لطفاً شارژ کنید.`). |
 | `config` | `status='failed'`, order `needs_action_reason='config'`, card: `❌ تنظیمات «SUPPLIER» مشکل دارد (DETAIL). کلید یا user_id را در پنل درست کنید، بعد «🔁 تلاش دوباره» را بزنید.` |
 | `rejected` | `status='failed'`, `needs_action_reason='rejected'`, card with the detail. |
-| `unknown` | `status='unknown'`, `needs_action_reason='unknown'`, card: `❓ معلوم نیست سفارش در «SUPPLIER» ثبت شده یا نه (DETAIL). در پنل تأمین‌کننده دنبال یادداشت store#ORDER بگردید.` with the extra buttons `[🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم]` (`fo_rid_<orderId>`: a number → sets `remote_order_id`, `status='placed'`, polling starts, ledger spend recorded with the price from the first poll) and `[🔁 ثبت نشده بود؛ دوباره ثبت کن]` (= `fo_retry`). **Never retried automatically.** |
+| `unknown` | `status='unknown'`, `needs_action_reason='unknown'`, card: `❓ معلوم نیست سفارش در «SUPPLIER» ثبت شده یا نه (DETAIL). در پنل تأمین‌کننده دنبال یادداشت store#ORDER بگردید.` with the extra buttons `[🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم]` (`fo_rid_<orderId>`: a number → sets `remote_order_id`, `status='placed'`, polling starts, ledger spend recorded with the price from the first poll) and `[🔁 ثبت نشده بود؛ دوباره ثبت کن]` (= `fo_retry`; the only press that may buy over the `unknown` row, and it cancels that row in the same batch). There is **no** «🔀 خرید از منبع دیگر» on this card and the server refuses `fo_src*` while an `unknown` row exists. **Never retried automatically.** |
 
 5. **Stale leases:** a `placing` row whose `lease_until < now` (the Worker died after sending) → `unknown`, exactly as above. Cron checks this every minute (`idx_so_lease`).
 
@@ -809,7 +809,7 @@ Send it with `sendToAdmins`. After every action, **edit the pressed card** to sh
 Every handler must: check admin rights; load the order; check that the state allows the action, and if not, answer `ℹ️ قبلاً تصمیم گرفته شد.` / `❌ این کار در وضعیت فعلی سفارش ممکن نیست.`; make the change with a **conditional** UPDATE; log the event with the admin's id.
 
 - **`fo_retry_<id>`:**
-  - Allowed when the order is `confirmed` and there is no live supplier order (`queued`/`placing`/`placed`).
+  - Allowed when the order is `confirmed` and there is no live supplier order. Live = `queued` / `placing` / `placed` / **`unknown`** / a `completed` one whose accounts are unsent and not diverted to stock (`LIVE_SUPPLIER_ORDER_SQL`). An `unknown` row can be passed only by the unknown card's own `fo_retry` (reason still `unknown`).
   - Inserts a new `supplier_orders` row (`requested_by = admin`), clears `needs_action_reason`, sets `supplier_deadline_at = now + 20 h` and `stalled_alert_sent = 0`, then kicks it.
   - For `loss` / `approval` it shows a confirmation first: `⚠️ خرید با قیمت فعلی (≈ C ت) انجام شود؟` `[✅ بله] [🔙]`.
 - **`fo_src_<id>`:**
@@ -826,7 +826,8 @@ Every handler must: check admin rights; load the order; check that the state all
   - On send → `deliverToCustomer(kind 'manual_text')`, then asks for the cost (§8.4).
 - **`fo_self_<id>`** («خودم تحویل می‌دهم»):
   - Sets `fulfillment='manual_outside'` and clears `needs_action_reason`. If a supplier order is live, sets its `divert_to_stock = 1`; a queued one becomes `cancelled`.
-  - Edits the card to `🙋 تحویل دستی توسط ADMIN — بعد از تحویل اکانت به مشتری، دکمه‌ی زیر را بزنید.` with `[✅ تحویل شد fo_done_<id>]`, `customerContactRow`, `[↩️ برگشت به تحویل خودکار fo_undo_<id>]` (only while no delivery exists). The undo restores `fulfillment='supplier'` and runs `fo_retry` logic without the confirmation.
+  - Edits the card to `🙋 تحویل دستی توسط ADMIN — بعد از تحویل اکانت به مشتری، دکمه‌ی زیر را بزنید.` with `[✅ تحویل شد fo_done_<id>]`, `customerContactRow`, `[↩️ برگشت به تحویل خودکار fo_undo_<id>]` (only while no delivery exists). The undo restores `fulfillment='supplier'` and runs `fo_retry` logic without the confirmation. It never clears `divert_to_stock` of an `unknown` row and never queues over one; when an `unknown` row exists the unknown card is sent again and the order stays actionable.
+  - **A `completed` supplier order whose accounts were never sent** (budget deferred them, or the send failed) is neutralized too: `divert_to_stock=1` and the cron moves the accounts to «اکانت‌های من» **once** (the divert is claimed in the same batch as the stock batch, and the unsent delivery row is marked `diverted`).
   - **`fo_done_<id>`:** `markOrderDelivered` (conditional), sends the existing `COMPLETION_TEXT` to the customer (same as `order_deliver_<id>` today), event `admin_done`, then asks for the cost (§8.4). The admin messages from `fo_done`, `fo_text` and `fo_stk` carry the same lines as §7.5 step 4.
 - **`fo_cancel_<id>`:**
   - Reason buttons: `ناموجودی`, `گران شدن قیمت خرید`, `درخواست مشتری`, `دلیل دلخواه` (text, 1–200 characters), `بدون دلیل`.
@@ -1009,7 +1010,8 @@ Add the Persian section «API تأمین‌کننده» to `README.md`:
 ## 14. Pitfalls checklist (read before coding)
 - **Double spend.**
   - Only `placeSupplierOrder` may POST, and only after winning the `queued → placing` claim.
-  - `unknown` and stale `placing` are never retried automatically.
+  - `unknown` and stale `placing` are never retried automatically, and an `unknown` row blocks every other way of buying for that order (queue, 🔀, undo).
+  - A diverted delivery is diverted **once**: the stock batch and its claim are one batch, `next_check_at` is cleared and the delivery row is marked.
   - Tests must assert the POST count.
 - **Customer gets nothing twice.**
   - `deliverToCustomer` re-checks `status='confirmed'` and `divert_to_stock` **before** sending.

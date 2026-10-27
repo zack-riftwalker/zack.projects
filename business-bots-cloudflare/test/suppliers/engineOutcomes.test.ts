@@ -140,7 +140,8 @@ describe('unknown: never a second POST on its own', () => {
       expect(card).toHaveLength(1);
       expect(card[0]).toContain('store#' + orderId);
       expect(callbackDataOf(t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload)).toEqual([
-        'fo_rid_' + orderId, 'fo_retry_' + orderId, 'fo_src_' + orderId, 'fo_stock_' + orderId, 'fo_text_' + orderId, 'fo_self_' + orderId,
+        // no «🔀 منبع دیگر» on the unknown card (review B2): another source could buy a second time
+        'fo_rid_' + orderId, 'fo_retry_' + orderId, 'fo_stock_' + orderId, 'fo_text_' + orderId, 'fo_self_' + orderId,
         'fo_cancel_' + orderId, 'fo_msg_' + orderId, 'fo_hist_' + orderId,
       ]);
       expect(q(t.storeDb, 'SELECT * FROM wallet_ledger')).toHaveLength(0); // we don't know that it was bought
@@ -206,7 +207,8 @@ describe('unknown: never a second POST on its own', () => {
     await confirm(t, orderId);
     await press(t, 'fo_retry_' + orderId);
     expect(posts(fake)).toHaveLength(2);
-    expect(q(t.storeDb, 'SELECT status FROM supplier_orders ORDER BY id').map((r) => r.status)).toEqual(['unknown', 'placed']);
+    // the old row is given up by this very press (review B2), so no `unknown` row is left to be bought over
+    expect(q(t.storeDb, 'SELECT status FROM supplier_orders ORDER BY id').map((r) => r.status)).toEqual(['cancelled', 'placed']);
     // a second press (the same or another admin) finds a live order and adds nothing
     await press(t, 'fo_retry_' + orderId);
     expect(posts(fake)).toHaveLength(2);
