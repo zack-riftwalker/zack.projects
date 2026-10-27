@@ -1046,6 +1046,15 @@ To record:
 6. Status names for cancelled/failed/refunded orders (ask the supplier).
 7. Rate limits, if any.
 
+### Results so far (2026-10-27, GET only)
+- `GET /products` with the `X-Api-Key` header: HTTP 200, 14.6 KB, 0.8 s. `usd_toman` 271600. **73 items in 39 products.** The catalog blob is tiny next to D1's row limit and the CPU budget.
+- Item keys are exactly `attributes, name, price, product_id, sku, variation_id`. Every id matches the safe pattern. Prices are numbers (int or float), none null or 0. One item has `variation_id: ''`.
+- Attribute keys seen: `subscription-duration`, `warranty`, `setup-type`, `account-type`, `subscription-type`, `credits`, `region`, `recharge-type`, `recharge-amount`, `linked-email`, `quality`, `license-type`, `age`, `suitable`.
+  - Durations: `1-day`, `7-days`, `14-days`, `1-month`, `3-months`, `6-months`, `18-months`, `1-year`, `2-years`, `lifetime`.
+  - Warranties: day/month values, plus `full` and `login-guarantee`.
+- **Fix made after this probe:** many products have several variations with the same duration but a different type (ChatGPT has 7 variations, mostly `1-month`, differing by `subscription-type` and `setup-type`). They all got the same label «۱ ماهه». `optionsFromItems` now appends the attribute values that tell such variations apart (for example «۱ ماهه — premade | plus»). Warranty `full` now means "the whole subscription" (warranty days = duration days). `login-guarantee` and `lifetime` stay unknown and are listed for the admin to set by hand.
+- Not yet known; needs **one cheap real order, approved by the owner**: the `POST` response shape, whether `price` is per unit or total, the status sequence and the account `attributes` keys. The low-balance response and the failure status names must come from the supplier.
+
 ### Assumptions (unverified, must be checked against the live API before deploy)
 The owner decided to build S5–S9 now with these assumptions instead of waiting for the probe above. They live in **one small mapping**, `ARIOBOX_ASSUMPTIONS` / `classifyRemoteStatus` / `isLowBalanceText` in `src/store/suppliers/ariobox.ts` (plus the price-mismatch check in `src/store/suppliers/engine.ts`), so a correction after the live test is a few lines.
 
@@ -1062,6 +1071,9 @@ With `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`:
 3. Compare row counts per table, `PRAGMA foreign_key_check`, `PRAGMA integrity_check`, and a spot-check of 20 orders column by column.
 4. Delete the dumps when done.
 
-Record the result here.
-
-*(empty, to be filled)*
+**Result (2026-10-27): PASSED.** Both databases were exported read-only with `wrangler d1 export` (the remote D1 names are `store` and `monshi`). The dumps stayed in the session scratchpad and were never committed; the owner received a copy as a backup.
+- Store: remote had `0001` and `0002` applied. `0003_supplier.sql` and `0004_supplier_report_indexes.sql` were each applied in their own transaction with foreign keys ON, and both succeeded.
+- Tables went from 15 to 25. Row counts per table are unchanged (orders 18, customers 33, products 3, codes 3, redemptions 6, sessions 36, …).
+- `foreign_key_check` is empty and `integrity_check` is ok. The `orders` AUTOINCREMENT stayed at 18 → 18.
+- All 18 orders were compared on every old column: 0 differences.
+- Monshi: all 3 migrations are already applied remotely; nothing new to apply.

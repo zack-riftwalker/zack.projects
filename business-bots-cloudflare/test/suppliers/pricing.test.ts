@@ -125,3 +125,19 @@ describe('price formula is integer-safe (review should-fix 1)', () => {
     expect(finalPrice(80_000, { percent: 12.5, fixed: 0 })).toBe(90_000);
   });
 });
+
+describe('optionsFromItems with real ArioBox shapes', () => {
+  const item = (v: string, attributes: Record<string, string>) =>
+    ({ remoteProductId: '116', remoteVariationId: v, name: 'chatgpt', sku: '', priceUsd: 5, attributes });
+  it('variations that share a duration get distinct labels; «full» warranty = the duration', () => {
+    const opts = optionsFromItems([
+      item('1300', { 'subscription-duration': '1-month', 'setup-type': 'premade', 'subscription-type': 'k12', warranty: '7-days' }),
+      item('1199', { 'subscription-duration': '1-month', 'setup-type': 'recharge', 'subscription-type': 'pro', warranty: '14-days' }),
+      item('405', { 'subscription-duration': '1-month', 'setup-type': 'premade', 'subscription-type': 'plus', warranty: 'full' }),
+      item('900', { 'subscription-duration': '3-months', 'setup-type': 'premade', 'subscription-type': 'plus', warranty: '7-days' }),
+    ], new Map());
+    expect(opts.map((o) => o.label)).toEqual(['۱ ماهه — premade | k12', '۱ ماهه — recharge | pro', '۱ ماهه — premade | plus', '۳ ماهه']);
+    expect(new Set(opts.map((o) => o.label)).size).toBe(4);
+    expect(opts[2].warrantyDays).toBe(30);
+  });
+});

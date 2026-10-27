@@ -88,10 +88,12 @@ export function unknownAttributes(attributes: Record<string, string>): string[] 
 
 /** Builds the draft's options from one remote product's variations (catalog order). */
 export function optionsFromItems(items: CatalogItem[], existing: Map<string, string>): ImportOption[] {
-  return items.map((it, index) => {
+  const options = items.map((it, index) => {
     const durationRaw = it.attributes['subscription-duration'] ?? it.attributes['duration'];
     const durationDays = parseDuration(durationRaw).days;
-    const warrantyDays = parseDuration(it.attributes[WARRANTY_KEY]).days;
+    // ArioBox «full» = warranty for the whole subscription
+    const warrantyDays = it.attributes[WARRANTY_KEY]?.trim().toLowerCase() === 'full'
+      ? durationDays : parseDuration(it.attributes[WARRANTY_KEY]).days;
     const existingName = existing.get(it.remoteVariationId) ?? null;
     return {
       remoteVariationId: it.remoteVariationId,
@@ -105,5 +107,16 @@ export function optionsFromItems(items: CatalogItem[], existing: Map<string, str
       created: false,
       existingName,
     };
+  });
+  // Variations that share a label (e.g. ChatGPT plus/pro/go, all «۱ ماهه») get the attribute values that tell them apart.
+  const base = options.map((o) => o.label);
+  return options.map((o, i) => {
+    const twins = options.filter((_, j) => base[j] === base[i]);
+    if (twins.length < 2) return o;
+    const extra = Object.entries(o.attributes)
+      .filter(([k, v]) => k !== WARRANTY_KEY && !(DURATION_KEYS as readonly string[]).includes(k)
+        && twins.some((t) => t.attributes[k] !== v))
+      .map(([, v]) => v);
+    return extra.length ? { ...o, label: base[i] + ' — ' + extra.join(' | ') } : o;
   });
 }
