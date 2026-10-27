@@ -60,11 +60,16 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     await next();
   });
 
-  bot.use(session<StoreSession, StoreContext>({
-    initial: () => ({}),
-    storage: new D1SessionStorage<StoreSession>(app.raw),
-    getSessionKey: (ctx) => (ctx.from && ctx.chat ? `${ctx.from.id}:${ctx.chat.id}` : undefined),
-  }));
+  const sessionStorage = new D1SessionStorage<StoreSession>(app.raw);
+  const sessionKey = (ctx: { from?: { id: number }; chat?: { id: number } }) => (ctx.from && ctx.chat ? `${ctx.from.id}:${ctx.chat.id}` : undefined);
+  bot.use(session<StoreSession, StoreContext>({ initial: () => ({}), storage: sessionStorage, getSessionKey: sessionKey }));
+  bot.use(async (ctx, next) => {
+    ctx.flushSession = async () => {
+      const key = sessionKey(ctx);
+      if (key && ctx.session) await sessionStorage.write(key, ctx.session);
+    };
+    await next();
+  });
 
   // supplier prompts take their typed answer before any wizard can (SUPPLIER_PLAN.md §9.1)
   bot.use(supplierTextMiddleware(isAdmin));

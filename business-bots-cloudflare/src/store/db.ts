@@ -19,6 +19,8 @@ export interface Order {
   customer_username?: string | null; fulfillment?: string | null; needs_action_reason?: string | null; needs_action_at?: string | null;
   supplier_deadline_at?: string | null; cost_toman?: number | null; cancel_reason?: string | null; cancelled_at?: string | null;
   cancelled_by?: number | null; refund_status?: string | null; refunded_at?: string | null;
+  /** a timestamp while a delivery is being sent (SUPPLIER_PLAN.md §7.5); NULL = nobody is sending */
+  delivery_claimed_at?: string | null;
 }
 export interface DiscountCode {
   id: number; code: string; customer_product_id: number; discount_type: 'percent' | 'fixed';

@@ -9,14 +9,14 @@ import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
 import { BALANCE_SQL, HISTORY_SQL } from '../src/store/suppliers/wallet';
 import { BATCH_ACCOUNTS_SQL, BATCH_LIST_SQL } from '../src/store/suppliers/stockCards';
 import { PROFIT_SQL } from '../src/store/handlers/salesReport';
-import { CUSTOMER_BY_ID_SQL, CUSTOMER_BY_NAME_SQL, MATCHING_PRODUCTS_SQL } from '../src/store/handlers/stockAdmin';
+import { CUSTOMER_BY_ID_SQL, CUSTOMER_BY_NAME_SQL, MATCHING_PRODUCTS_SQL, RELEASE_LINK_SQL } from '../src/store/handlers/stockAdmin';
 import {
-  DEADLINE_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
+  DEADLINE_SQL, LIVE_SUPPLIER_ORDER_SQL, PENDING_MANUAL_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
 } from '../src/store/suppliers/engine';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
 const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links',
-  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger'];
+  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger', 'manual_purchase_claims'];
 
 function plan(f: FakeD1, sql: string, ...args: unknown[]): string[] {
   return (f.sqlite.prepare('EXPLAIN QUERY PLAN ' + sql).all(...(args as any[])) as any[]).map((r) => String(r.detail));
@@ -105,6 +105,16 @@ describe('supplier hot queries use indexes', () => {
     ['latest supplier order of an order', 'SELECT so.id FROM supplier_orders so LEFT JOIN suppliers sup ON sup.id = so.supplier_id WHERE so.order_id = ? ORDER BY so.id DESC LIMIT 1', [1]],
     ['unknown supplier order of an order', "SELECT * FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", [1]],
     ['live supplier order of an order', "SELECT 1 FROM supplier_orders WHERE order_id = ? AND status IN ('queued', 'placing', 'placed', 'completed')", [1]],
+    // review fixes
+    ['live supplier orders of an order (queue check)', `SELECT 1 FROM supplier_orders WHERE order_id = ? AND ${LIVE_SUPPLIER_ORDER_SQL} AND NOT (id = ? AND status = 'unknown')`, [1, -1]],
+    ['sent delivery of a supplier order', 'SELECT 1 FROM order_deliveries d WHERE d.supplier_order_id = ? AND d.sent_ok = 1', [1]],
+    ['divert claim: a batch of the supplier order', 'SELECT 1 FROM stock_batches WHERE supplier_order_id = ?', [1]],
+    ['mark the unsent delivery as diverted', 'UPDATE order_deliveries SET diverted = 1 WHERE supplier_order_id = ? AND sent_ok = 0 AND EXISTS (SELECT 1 FROM stock_batches WHERE supplier_order_id = ?)', [1, 1]],
+    ['undo: a delivery that was not diverted', 'SELECT 1 FROM order_deliveries WHERE order_id = ? AND diverted = 0', [1]],
+    ['card: deliveries not diverted', 'SELECT COUNT(*) FROM order_deliveries WHERE order_id = ? AND diverted = 0', [1]],
+    ['admin deliveries the budget could not send (LIMIT)', PENDING_MANUAL_SQL, ['x', 2]],
+    ['direct-buy nonce', 'SELECT id FROM supplier_orders WHERE buy_nonce = ?', ['n']],
+    ['stk_rel_: withdraw the manual link of an account', RELEASE_LINK_SQL, [1]],
     ['latest delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? ORDER BY id DESC LIMIT 1', [1]],
     ['latest sent delivery of an order', 'SELECT * FROM order_deliveries WHERE order_id = ? AND sent_ok = 1 ORDER BY id DESC LIMIT 1', [1]],
     ['pending delivery of a supplier order', 'SELECT id FROM order_deliveries WHERE order_id = ? AND supplier_order_id = ? AND sent_ok = 0 ORDER BY id DESC LIMIT 1', [1, 1]],

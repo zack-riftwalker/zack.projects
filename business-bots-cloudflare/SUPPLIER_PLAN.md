@@ -698,13 +698,13 @@ The admin's caption edit stays as today, plus the line `🔌 تحویل خودک
 ### 7.3 Placing: `placeSupplierOrder(app, soId)`, the only caller of `adapter.placeOrder`
 1. **Claim:** `UPDATE supplier_orders SET status='placing', lease_until=now+3min, attempts=attempts+1, updated_at=now WHERE id=? AND status='queued' AND (next_attempt_at IS NULL OR next_attempt_at <= now)`. If `changes ≠ 1`, return without doing anything.
 2. **Re-check the store order** (customer purpose). If it's no longer `confirmed`, or `divert_to_stock = 1`, or `needs_action_reason` is set by an admin action → set the supplier order to `cancelled`, log it, return.
-3. **Choose the source.** Use `forced_source_id` if set (skip the enabled and loss checks). Otherwise take the active-source order of §6.3, skipping sources already tried and out of stock in this round (`oos_until` > now).
+3. **Choose the source.** Use `forced_source_id` if set (skip the enabled and loss checks). Otherwise take the active-source order of §6.3, skipping sources already tried and out of stock in this round (`oos_until` > now). **The loss guard** (`order.price < cost` of the chosen source at the refreshed price) applies to **every** placement except a forced source and a supplier order whose `loss_confirmed = 1`. `loss_confirmed` is set only by the admin's explicit «✅ بله» on the loss/approval card (`fo_retryok`) — or by the admin's approval when a manual link for a supplier purchase is created. A plain 🔁 (after `config` / `retry_later` / `supplier_failed`), an undo and the cron never skip it: the supplier order is cancelled, `needs_action_reason='loss'` and the card is raised.
    - No candidate left: set `status='queued'` and `next_attempt_at = now + 15 min`. If `first_fail_notified = 0`, notify the admins once with the decision card (reason `all_out_of_stock`, card header `⚠️ … ربات هر ۱۵ دقیقه دوباره تلاش می‌کند تا TIME`) and set the flag. Return.
 4. **Place:** call `adapter.placeOrder(supplier, { …source ids, quantity, note: 'store#ORDER/so#ID' })` (for stock: `'stock/so#ID'`). Then by result:
 
 | Result | Action |
 |---|---|
-| `placed` | `status='placed'`, store `remote_order_id`, `remote_status`, `price_usd`, `usd_toman` (from the catalog), `cost_toman`, `source_id`, `supplier_id`, remote ids; `placed_at`, `next_check_at = now + 1 min`, `checks=0`. Ledger `spend` of −(price × quantity, or the total per Appendix A). Event `placed`. **One batch.** If `remoteStatus` is already `completed`, poll at once (§7.4). |
+| `placed` | `status='placed'`, store `remote_order_id`, `remote_status`, `price_usd`, `usd_toman` (from the catalog), `cost_toman`, `source_id`, `supplier_id`, remote ids; `placed_at`, `next_check_at = now + 1 min`, `checks=0`. Ledger `spend` of −(price × quantity, or the total per Appendix A). Event `placed`. **One batch.** The same batch copies the cost to `orders.cost_toman` (so the report doesn't call a placed order «بدون هزینه»; the delivery refreshes it). If `remoteStatus` is already `completed`, poll at once (§7.4) — from a webhook only when ≥ 25 budget units are left, otherwise the cron polls a minute later. **If the `placed` UPDATE changes no row** (the lease ran out during a slow POST and the cron already marked the row `unknown`), the answer is not dropped: an event `unknown` with the remote number is logged and the admins get a message with `[🔢 ثبت شده بود]`. |
 | `out_of_stock` | Set the source's `oos_until = now + 30 min`, recompute the option, event `out_of_stock`. Go back to step 3 with the next source if `budget.remaining() ≥ 10`, else `status='queued', next_attempt_at=now`. |
 | `retry_later` | `status='queued'`, `next_attempt_at = now + 15 min`, save `last_http`/`last_error`, event `place_failed`. First time: card to admins (reason `retry_later`; if Appendix A says it's low balance, header `💳 موجودی کیف پول «SUPPLIER» کافی نیست — لطفاً شارژ کنید.`). |
 | `config` | `status='failed'`, order `needs_action_reason='config'`, card: `❌ تنظیمات «SUPPLIER» مشکل دارد (DETAIL). کلید یا user_id را در پنل درست کنید، بعد «🔁 تلاش دوباره» را بزنید.` |
@@ -713,7 +713,7 @@ The admin's caption edit stays as today, plus the line `🔌 تحویل خودک
 
 5. **Stale leases:** a `placing` row whose `lease_until < now` (the Worker died after sending) → `unknown`, exactly as above. Cron checks this every minute (`idx_so_lease`).
 
-Before step 4, if the catalog for that supplier is older than 15 minutes, refetch it first (§6.1, one fetch).
+Before step 4, if the catalog for that supplier is older than 15 minutes (the newer of the stored blob's time and the supplier's last OK sync — an unchanged catalog is not rewritten), refetch it first (§6.1, one fetch) — **at most once per supplier per placement**, however many of its sources are tried, and only with ≥ 20 units left. A direct buy (`purpose='stock'`) whose item is no longer listed in the (refreshed) catalog is **not sent**: `failed`, `این گزینه دیگر در کاتالوگ تأمین‌کننده نیست` to the requesting admin.
 
 ### 7.4 Polling: `pollSupplierOrder(app, soId)`
 - **Due:** `status='placed' AND next_check_at <= now`. Backoff by `checks`: 1, 2, 5 minutes, then every 10 minutes.
@@ -726,11 +726,12 @@ Before step 4, if the catalog for that supplier is older than 15 minutes, refetc
 
 ### 7.5 Delivery: `deliverToCustomer(app, orderId, content, meta)`
 Shared by supplier completion, stock, and manual text.
-1. **Re-check the order.** If it's not `confirmed` (already delivered or cancelled), or `meta.supplierOrder?.divert_to_stock = 1`: for supplier content, create a stock batch with the accounts (§10.1, title `NAME (برگشتی از سفارش #ID)`), log `diverted_to_stock`, and notify the admins `📦 اکانت سفارش #ID که قبلاً تعیین‌تکلیف شده بود رسید و به «اکانت‌های من» اضافه شد.` Return.
-2. **Record:** insert `order_deliveries` (`sent_ok=0`).
+1. **Claim the order.** Every kind of delivery (supplier, stock, manual text, `fo_resend`, the cron's retries) first runs one conditional UPDATE: `UPDATE orders SET delivery_claimed_at = now WHERE id = ? AND status = 'confirmed' AND fulfillment = <the kind> AND (delivery_claimed_at IS NULL OR delivery_claimed_at < now − 3 min)` (a supplier delivery also requires its supplier order's `divert_to_stock = 0`), and checks `changes`. An order created already delivered (manual-link stock) has nothing to claim. If the claim fails: when the order is no longer the kind's (not `confirmed`, other `fulfillment`, `divert_to_stock = 1`), supplier content goes to stock (below) and nothing is sent; otherwise another delivery is in flight and nothing happens (`busy`). While a claim is fresh, 🙋, 📦, ✍️ and ❌ are refused (their own UPDATEs carry the same condition).
+   **Diverting supplier content to stock** is idempotent: one batch holds the claim `UPDATE supplier_orders SET divert_to_stock = 1, next_check_at = NULL WHERE id = ? AND status = 'completed' AND NOT EXISTS (SELECT 1 FROM stock_batches WHERE supplier_order_id = ?)`, the stock batch (§10.1, title `NAME (برگشتی از سفارش #ID)`), and the marking of the unsent `order_deliveries` row (`diverted = 1`). Only the winner logs `diverted_to_stock` and notifies the admins `📦 اکانت سفارش #ID که قبلاً تعیین‌تکلیف شده بود رسید و به «اکانت‌های من» اضافه شد.` Return.
+2. **Record:** insert `order_deliveries` (`sent_ok=0`) — before the claim for stock / manual text, so the content survives a budget stop.
 3. **Send** to the customer (HTML):
    `'🎉 سفارش «' + NAME + '» آماده است!\n\n' + formatAccountsHtml(content) + '\n\n✅ لطفاً مراحل فعال‌سازی را طی کنید.\n📣 کانال ما: @mai_academia\n\n🔑 این اطلاعات را بعداً هم از «📋 اشتراک‌های من» می‌توانید ببینید.'`
-4. **Send OK:** in one batch, `markOrderDelivered(orderId)` (the existing conditional UPDATE), `sent_ok=1`, `cost_toman` on the order (from the supplier order or stock account; manual text: NULL until the admin sets it), `fulfillment` (`supplier` / `stock` / `manual_text`), `needs_action_reason=NULL`, event `delivered`. Then `onPurchaseConfirmed` is **not** run again (it ran at confirm).
+4. **Send OK:** in one batch, `markOrderDelivered(orderId)` (the existing conditional UPDATE), then — straight after it, guarded by its `changes()` so a lost race never overwrites the winner — `cost_toman` on the order (from the supplier order or stock account; manual text: NULL until the admin sets it), `fulfillment` (`supplier` / `stock` / `manual_text`), `needs_action_reason=NULL`, `delivery_claimed_at=NULL`, and the event `delivered`; `sent_ok=1` always (the customer has the accounts). Then `onPurchaseConfirmed` is **not** run again (it ran at confirm).
    Admin message (`sendToAdmins`):
    ```
    ✅ سفارش #ID تحویل شد
@@ -740,8 +741,8 @@ Shared by supplier completion, stock, and manual text.
    💰 فروش: P ت | خرید: C ت | سود: P−C ت   (if cost unknown: «هزینه نامشخص»)
    ```
    Buttons: `[👁 نمایش اکانت] (fo_view_<id>)`, `customerContactRow`.
-5. **Send failed:** save `send_error`; order `needs_action_reason='send_failed'` (stays `confirmed`, accounts kept). Event `send_failed`. Card: `❌ سفارش #ID تحویل نشد — دلیل: مشتری ربات را بلاک کرده / ERROR`. Buttons: `[🔁 ارسال دوباره] (fo_resend_<id>)`, `[👁 نمایش اکانت]`, `[🙋 خودم تحویل می‌دهم]`, `customerContactRow`.
-6. **Budget:** delivery needs about `6 + adminIds.length` units. Check before starting; if there isn't enough, leave the supplier order `completed` with `next_check_at` set, so the cron step "completed but not delivered" retries delivery. Add that query: supplier orders `status='completed'` whose store order is `confirmed` and has no `sent_ok=1` delivery.
+5. **Send failed:** save `send_error`; order `needs_action_reason='send_failed'` (stays `confirmed`, accounts kept). Event `send_failed`; **the claim is released** in the same batch so a resend can claim again. Card: `❌ سفارش #ID تحویل نشد — دلیل: مشتری ربات را بلاک کرده / ERROR`. Buttons: `[🔁 ارسال دوباره] (fo_resend_<id>)`, `[👁 نمایش اکانت]`, `[🙋 خودم تحویل می‌دهم]`, `customerContactRow`.
+6. **Budget:** delivery needs about `7 + adminIds.length` units (the claim is one more). Check before starting; if there isn't enough, leave the supplier order `completed` with `next_check_at` set, so the cron step "completed but not delivered" retries delivery. The completion batch sets `next_check_at = now + 5 min` (the inline delivery is the first try; the cron is a safety net, never a parallel second try). For an **admin's stock / manual-text delivery** that cannot start for lack of budget (`deferred`), the `order_deliveries` row is kept (`sent_ok=0`, no `send_error`) and the cron sends it through the same claim (rows older than a minute whose order is still `confirmed` with that `fulfillment`); if the order changed after the admin's claim (`skipped`), the reserved account is freed, the order goes back to the supplier side, and the admin is told.
 
 **«📋 اشتراک‌های من»:** for a delivered order with an `order_deliveries` row (`sent_ok=1`), add a button `🔑 نمایش اطلاعات اکانت` → `acct_show_<orderId>`. Check ownership and resend the same HTML block. Budget: 2 D1 + 1 Telegram.
 
@@ -811,7 +812,7 @@ Every handler must: check admin rights; load the order; check that the state all
 - **`fo_retry_<id>`:**
   - Allowed when the order is `confirmed` and there is no live supplier order. Live = `queued` / `placing` / `placed` / **`unknown`** / a `completed` one whose accounts are unsent and not diverted to stock (`LIVE_SUPPLIER_ORDER_SQL`). An `unknown` row can be passed only by the unknown card's own `fo_retry` (reason still `unknown`).
   - Inserts a new `supplier_orders` row (`requested_by = admin`), clears `needs_action_reason`, sets `supplier_deadline_at = now + 20 h` and `stalled_alert_sent = 0`, then kicks it.
-  - For `loss` / `approval` it shows a confirmation first: `⚠️ خرید با قیمت فعلی (≈ C ت) انجام شود؟` `[✅ بله] [🔙]`.
+  - For `loss` / `approval` it shows a confirmation first: `⚠️ خرید با قیمت فعلی (≈ C ت) انجام شود؟` `[✅ بله] [🔙]`. Only «✅ بله» (`fo_retryok`) inserts the row with `loss_confirmed = 1`; any other 🔁 meets the loss guard at placement (§7.3 step 3).
 - **`fo_src_<id>`:**
   - Lists **all** sources of the option, disabled ones included: `SUPPLIER — $X ≈ C ت — سود: P−C ت — وضعیت`. A negative profit shows `🔻`.
   - Picking one → `fo_srcp_<id>_<sourceId>` → confirmation → a new supplier order with `forced_source_id`.
@@ -848,7 +849,7 @@ Every handler must: check admin rights; load the order; check that the state all
 - **`fo_resend_<id>`:** resends the latest delivery (§7.5 steps 3–4).
 - **`fo_view_<id>`:** shows the latest delivery's content (HTML) to the admin who pressed it, only in that chat.
 - **`fo_hist_<id>`:** the last 15 events: `JALALI_TIME — KIND_FA — ACTOR — DETAIL`. Map each `kind` to short Persian text in one table.
-- **`fo_rid_<id>`:** see §7.3, `unknown`.
+- **`fo_rid_<id>`:** see §7.3, `unknown`. Offered on the decision card **and on `/order`** while any supplier order of the order is `unknown`, whatever the store order's fulfillment or status (🙋, 📦, ✍️, cancelled…). Recording the number starts polling and books the spend; if the order was resolved otherwise its `divert_to_stock` stays and the accounts go to stock; if an undo put the order back on automatic delivery, the flag is cleared and the customer gets them.
 
 ### 8.4 Cost after manual delivery
 After `fo_done` / `fo_text`, ask `💵 هزینه‌ی خرید این اکانت چند تومان بود؟ (برای گزارش سود)` with `[⏭ رد شدن]`. A number from 0 to 1,000,000,000 sets `orders.cost_toman`; event `cost_set`.
@@ -916,10 +917,10 @@ supplierWizard?: { step: string; data: Record<string, any> } | null;   // add-su
    💵 هزینه: $T ≈ C ت (نرخ X)
    💳 موجودی تخمینی کیف پول: $B
    ```
-   with `[✅ خرید] [❌]`.
+   with `[✅ خرید] [❌]`. The button's callback carries a random 12-hex **nonce** (`stk_buyok_<sid>_<ref>_<qty>_<nonce>`, also kept in the session draft); `supplier_orders.buy_nonce` is UNIQUE, so one confirmation inserts at most one row even when a queued second tap reads a stale session (the session is also saved before the slow kick).
 4. Insert `supplier_orders` (`purpose='stock'`, `requested_by=admin`, `forced_source_id=NULL`, the remote ids and `supplier_id` set directly) and kick it. Results go **only to the requesting admin**:
    - `placed`: `⏳ سفارش ثبت شد (#REMOTE)؛ با آماده شدن خبرتان می‌کنم.`;
-   - `out_of_stock` / `retry_later` / `rejected` / `config`: the reason and `[🔁 دوباره]`. **No automatic retries for stock buys:** queued retries are not used; `status='failed'`;
+   - `out_of_stock` / `retry_later` / `rejected` / `config`: the reason and `[🔁 دوباره]`. **No automatic retries for stock buys:** queued retries are not used; `status='failed'`. «🔁 دوباره» (`stk_rt_<id>`) inserts a **new** row (copying supplier, item and quantity) and closes the failed one (`cancelled`) in the same batch, so remote numbers, raw answers and wallet spends stay on the order that made them;
    - `unknown`: the same buttons as §7.3.
 5. **On completion:** create `stock_batches` (title `REMOTE_NAME — ATTRS`, quantity, unit price, rate, total cost) plus one `stock_accounts` row per account, in one batch. If fewer accounts arrive than ordered, note it in the batch and tell the admin. Then send the batch card.
 
@@ -973,6 +974,8 @@ The existing revenue lines stay as they are. Cancelled orders drop out of them o
 
 Implementation note (S8): the plan's schema had no index for the wallet spend, the batch dates and `reported_at`, so `migrations/store/0004_supplier_report_indexes.sql` adds `idx_ledger_kind_created`, `idx_batches_created` and `idx_batches_reported` (0003 is untouched). The supplier lines print only when there is something to show, so a shop without suppliers sees the old report.
 
+Implementation note (review fixes): the same, still undeployed `0004` file also carries the schema the Opus review needed — `orders.delivery_claimed_at` (the delivery claim, §7.5), `supplier_orders.empty_polls` (a real «completed without accounts» counter), `supplier_orders.loss_confirmed` (§7.3 loss guard), `supplier_orders.buy_nonce` + a UNIQUE partial index (direct-buy confirmations, §10.1), `order_deliveries.diverted` (a delivery whose accounts went to stock, §7.5), and the indexes behind the new queries (`idx_deliveries_pending`, `idx_deliveries_supplier_order`, `idx_claims_stock_account`, `idx_batches_supplier_order`). 0001–0003 are untouched.
+
 Tests: numbers for a seeded mix; the index test.
 
 ---
@@ -1014,7 +1017,7 @@ Add the Persian section «API تأمین‌کننده» to `README.md`:
   - A diverted delivery is diverted **once**: the stock batch and its claim are one batch, `next_check_at` is cleared and the delivery row is marked.
   - Tests must assert the POST count.
 - **Customer gets nothing twice.**
-  - `deliverToCustomer` re-checks `status='confirmed'` and `divert_to_stock` **before** sending.
+  - `deliverToCustomer` takes the order's delivery claim (`orders.delivery_claimed_at`, a conditional UPDATE that re-checks `status='confirmed'`, the `fulfillment` and `divert_to_stock`) **before** sending. Releasing it on a failed send is part of the same batch as `send_error`.
   - A resend is only ever explicit (`fo_resend`).
 - **Every state change is a conditional UPDATE** with `changes` checked. Two admins, cron and webhook can all race.
 - **`markOrderDelivered` only works from `confirmed`.** Manual-link `stock` orders are created `delivered` directly (as today), so don't call it for them.

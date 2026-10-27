@@ -3,7 +3,7 @@ import type { Stmt } from '../../lib/budget';
 import { tehranDateTime } from '../../lib/time';
 import type { Order } from '../db';
 import { eventStatement } from '../events';
-import { DEADLINE_HOURS } from './engine';
+import { DEADLINE_HOURS, claimCutoff } from './engine';
 
 /**
  * Order-level admin actions (SUPPLIER_PLAN.md §8.3). Every state change is a conditional UPDATE inside one batch;
@@ -42,8 +42,9 @@ const orderIs = (orderId: number, condition: string, ...args: unknown[]): Guard 
 export async function startSelfDelivery(app: StoreApp, orderId: number, adminId: number): Promise<boolean> {
   const guard = orderIs(orderId, "status = 'confirmed' AND fulfillment = 'manual_outside'");
   const rs = await app.raw.batch([
+    // not while a delivery is in flight: the customer is getting the accounts right now
     q(app, `UPDATE orders SET fulfillment = 'manual_outside', needs_action_reason = NULL, needs_action_at = NULL
-            WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier'`, orderId),
+            WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier' AND (delivery_claimed_at IS NULL OR delivery_claimed_at < ?)`, orderId, claimCutoff(app)),
     ...neutralizeStatements(app, orderId, guard),
     eventStatement(app, { orderId, kind: 'admin_self', actor: adminId, guard }),
   ]);
@@ -57,7 +58,7 @@ export async function undoSelfDelivery(app: StoreApp, orderId: number, adminId: 
   const rs = await app.raw.batch([
     q(app, `UPDATE orders SET fulfillment = 'supplier', supplier_deadline_at = ?, stalled_alert_sent = 0
             WHERE id = ? AND status = 'confirmed' AND fulfillment = 'manual_outside'
-              AND NOT EXISTS (SELECT 1 FROM order_deliveries WHERE order_id = ?)`, deadlineFrom(app), orderId, orderId),
+              AND NOT EXISTS (SELECT 1 FROM order_deliveries WHERE order_id = ? AND diverted = 0)`, deadlineFrom(app), orderId, orderId),
     q(app, `UPDATE supplier_orders SET divert_to_stock = 0, updated_at = ? WHERE order_id = ? AND status IN ('placing', 'placed') AND ${guard.sql}`,
       now, orderId, ...guard.args),
     eventStatement(app, { orderId, kind: 'admin_undo', actor: adminId, guard }),
@@ -76,7 +77,8 @@ export async function finishSelfDelivery(app: StoreApp, orderId: number, adminId
 
 /**
  * Takes the order for a text / stock delivery (`fulfillment` becomes the claim) and stops the supplier side. The
- * stock account, when given, is reserved in the same batch. true when this press won.
+ * stock account, when given, is reserved in the same batch. It fails while a supplier delivery is being sent to the
+ * customer (the delivery claim of the order), so the customer can never get two accounts. true when this press won.
  */
 export async function claimForManualDelivery(
   app: StoreApp, orderId: number, kind: 'manual_text' | 'stock', adminId: number, accountId?: number,
@@ -87,13 +89,13 @@ export async function claimForManualDelivery(
   if (kind === 'stock') {
     stmts.push(
       q(app, `UPDATE orders SET fulfillment = 'stock', needs_action_reason = NULL, needs_action_at = NULL
-              WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier'
-                AND EXISTS (SELECT 1 FROM stock_accounts WHERE id = ? AND status = 'available')`, orderId, accountId),
+              WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier' AND (delivery_claimed_at IS NULL OR delivery_claimed_at < ?)
+                AND EXISTS (SELECT 1 FROM stock_accounts WHERE id = ? AND status = 'available')`, orderId, claimCutoff(app), accountId),
       q(app, "UPDATE stock_accounts SET status = 'reserved', order_id = ?, updated_at = ? WHERE id = ? AND status = 'available' AND changes() = 1", orderId, now, accountId),
     );
   } else {
     stmts.push(q(app, `UPDATE orders SET fulfillment = 'manual_text', needs_action_reason = NULL, needs_action_at = NULL
-                       WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier'`, orderId));
+                       WHERE id = ? AND status = 'confirmed' AND fulfillment = 'supplier' AND (delivery_claimed_at IS NULL OR delivery_claimed_at < ?)`, orderId, claimCutoff(app)));
   }
   stmts.push(
     ...neutralizeStatements(app, orderId, guard),
@@ -103,9 +105,16 @@ export async function claimForManualDelivery(
   return rs[0].meta.changes === 1 && (kind !== 'stock' || rs[1].meta.changes === 1);
 }
 
-/** The stock case lost the account to someone else between the two statements: gives the order back. */
-export async function releaseManualClaim(app: StoreApp, orderId: number, kind: 'manual_text' | 'stock'): Promise<void> {
-  await q(app, "UPDATE orders SET fulfillment = 'supplier' WHERE id = ? AND status = 'confirmed' AND fulfillment = ?", orderId, kind).run();
+/**
+ * A text / stock delivery that turned out impossible after the claim (the order changed under it): the order goes back to
+ * the supplier side only if it still waits there, and a reserved account is freed. Idempotent; touches nothing that was delivered.
+ */
+export async function releaseManualClaim(app: StoreApp, orderId: number, kind: 'manual_text' | 'stock', accountId?: number): Promise<void> {
+  const stmts = [q(app, "UPDATE orders SET fulfillment = 'supplier' WHERE id = ? AND status = 'confirmed' AND fulfillment = ?", orderId, kind)];
+  if (accountId) {
+    stmts.push(q(app, "UPDATE stock_accounts SET status = 'available', order_id = NULL, updated_at = ? WHERE id = ? AND order_id = ? AND status = 'reserved'", nowStr(app), accountId, orderId));
+  }
+  await app.raw.batch(stmts);
 }
 
 /** Hot statements of the cancel batch, exported so the index test can EXPLAIN the real SQL. */
@@ -131,7 +140,8 @@ export async function cancelOrder(app: StoreApp, order: Order, adminId: number, 
   const rs = await app.raw.batch([
     q(app, `UPDATE orders SET status = 'cancelled', cancel_reason = ?, cancelled_at = ?, cancelled_by = ?,
             refund_status = CASE WHEN price > 0 THEN 'pending' ELSE 'none' END, needs_action_reason = NULL, needs_action_at = NULL
-            WHERE id = ? AND status = 'confirmed' AND fulfillment IN ('supplier', 'manual_outside', 'stock', 'manual_text')`, reason, now, adminId, order.id),
+            WHERE id = ? AND status = 'confirmed' AND fulfillment IN ('supplier', 'manual_outside', 'stock', 'manual_text')
+              AND (delivery_claimed_at IS NULL OR delivery_claimed_at < ?)`, reason, now, adminId, order.id, claimCutoff(app)),
     q(app, `${CANCEL_SQL.redemption} AND ${guard.sql}`, order.id, order.customer_telegram_id, order.id, ...guard.args),
     q(app, `${CANCEL_SQL.referral} AND ${guard.sql}`, order.customer_telegram_id, order.id, ...guard.args),
     ...neutralizeStatements(app, order.id, guard),

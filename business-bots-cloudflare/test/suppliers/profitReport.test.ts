@@ -31,6 +31,8 @@ async function busyShop() {
   fake.state.postQueue.push({ status: 200, body: { ok: true, order_id: 5002, status: 'pending', price: 5.28 } });
   const b = await buy(t, m1, NO_NAME);
   await confirm(t, b);
+  // the engine now books the catalog cost at «placed» (review N4); an item without a catalog price has none, which this order models
+  q(t.storeDb, 'UPDATE orders SET cost_toman = NULL WHERE id = ?', b);
 
   // C: an order of a product without sources (the old flow, fulfillment NULL)
   const plain = seedProduct(t, { name: 'Plain', price: 100000 });
@@ -54,7 +56,9 @@ async function busyShop() {
   await press(t, 'stk_buys_' + sid);
   await press(t, 'stk_buyi_' + sid + '_' + ref);
   await press(t, `stk_buyq_${sid}_${ref}_2`);
-  await press(t, `stk_buyok_${sid}_${ref}_2`);
+  const buyOk = t.tg.calls.flatMap((c: any) => c.payload.reply_markup?.inline_keyboard ?? []).flat()
+    .map((b: any) => b.callback_data).filter((d: string) => d?.startsWith(`stk_buyok_${sid}_${ref}_2_`)).at(-1)!;
+  await press(t, buyOk);
   fake.state.orders['5003'] = {
     ok: true, order_id: 5003, status: 'completed', price: '10.56',
     accounts: [1, 2].map((i) => ({ attributes: [{ key: 'email', value: `d${i}@x.test` }, { key: 'password', value: 'pw' }] })),

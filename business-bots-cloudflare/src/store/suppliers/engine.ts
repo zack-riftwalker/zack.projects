@@ -37,7 +37,11 @@ const MIN_PLACE_BUDGET = 12;
 const MIN_POST_BUDGET = 7;
 /** The cron does no supplier work below this budget. */
 const MIN_WORK_BUDGET = 12;
-const FOLLOWUP_LIMITS = { queued: 3, placed: 5, completed: 2, stale: 3, deadline: 3, stranded: 2 };
+/** A delivery claim older than this is a Worker that died while sending; the next delivery may take over. */
+export const CLAIM_LEASE_MINUTES = 3;
+/** Inline polling right after a webhook placement needs this much budget left; below it the cron polls a minute later. */
+const WEBHOOK_POLL_BUDGET = 25;
+const FOLLOWUP_LIMITS = { queued: 3, placed: 5, completed: 2, stale: 3, deadline: 3, stranded: 2, manual: 2 };
 
 const nowStr = (app: StoreApp): string => tehranDateTime(app.apps.now());
 const addMinutes = (app: StoreApp, minutes: number): string => tehranDateTime(new Date(app.apps.now().getTime() + minutes * 60_000));
@@ -166,6 +170,11 @@ export async function queueSupplierOrder(
   return inserted.meta.changes === 1 ? inserted.meta.last_row_id : null;
 }
 
+/** True while a supplier order stands for the store order (see `LIVE_SUPPLIER_ORDER_SQL`). */
+export async function hasLiveSupplierOrder(app: StoreApp, orderId: number): Promise<boolean> {
+  return (await q(app, `SELECT 1 AS x FROM supplier_orders WHERE order_id = ? AND ${LIVE_SUPPLIER_ORDER_SQL} LIMIT 1`, orderId).first()) !== null;
+}
+
 /** The newest `unknown` supplier order of a store order, if any. */
 export async function unknownSupplierOrderId(app: StoreApp, orderId: number): Promise<number | null> {
   const r = await q(app, "SELECT id FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", orderId).first<{ id: number }>();
@@ -175,7 +184,7 @@ export async function unknownSupplierOrderId(app: StoreApp, orderId: number): Pr
 /** Places the order right now, swallowing every error (a failure here must never break the caller's flow). */
 export async function kickSupplierOrder(app: StoreApp, soId: number): Promise<void> {
   try {
-    await placeSupplierOrder(app, soId);
+    await placeSupplierOrder(app, soId, { inlinePollBudget: WEBHOOK_POLL_BUDGET });
   } catch (err: any) {
     if (err instanceof BudgetExceededError) console.warn('⚠️ [Supplier] kick of #' + soId + ' stopped: budget exhausted.');
     else console.error('❌ [Supplier] kick of #' + soId + ' failed:', err?.message ?? err);
@@ -216,19 +225,22 @@ export interface SourceCandRow extends SourceRow {
   remote_product_id: string; remote_variation_id: string;
   sup_kind: string; sup_name: string; base_url: string; api_key: string; remote_user_id: number;
   usd_toman: number | null; fetched_at: string | null;
+  /** the supplier's sync state, so a refetch before the POST needs no extra read */
+  sup_last_sync_ok_at: string | null; sup_sync_alert_sent: number;
 }
 
 export const SOURCE_SELECT = `
   SELECT s.id, s.supplier_id, s.remote_product_id, s.remote_variation_id, s.price_usd, s.priority, s.is_enabled, s.listed, s.oos_until,
          sup.is_enabled AS sup_enabled, sup.kind AS sup_kind, sup.name AS sup_name, sup.base_url, sup.api_key, sup.remote_user_id,
+         sup.last_sync_ok_at AS sup_last_sync_ok_at, sup.sync_alert_sent AS sup_sync_alert_sent,
          c.usd_toman, c.fetched_at
   FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
   LEFT JOIN supplier_catalogs c ON c.supplier_id = s.supplier_id`;
 
 const supplierRowOf = (c: SourceCandRow): SupplierRow => ({
   id: c.supplier_id, kind: c.sup_kind as 'ariobox', name: c.sup_name, base_url: c.base_url, api_key: c.api_key,
-  remote_user_id: c.remote_user_id, is_enabled: c.sup_enabled, last_sync_at: null, last_sync_ok_at: null, last_sync_error: null,
-  sync_alert_sent: 0, created_at: '',
+  remote_user_id: c.remote_user_id, is_enabled: c.sup_enabled, last_sync_at: null, last_sync_ok_at: c.sup_last_sync_ok_at, last_sync_error: null,
+  sync_alert_sent: c.sup_sync_alert_sent, created_at: '',
 });
 
 export type PlaceOutcome = 'deferred' | 'not_claimed' | 'cancelled' | 'placed' | 'queued' | 'failed' | 'unknown' | 'loss';
@@ -238,7 +250,7 @@ export type PlaceOutcome = 'deferred' | 'not_claimed' | 'cancelled' | 'placed' |
  * `queued → placing` claim. Any outcome that leaves it unclear whether the order was created is `unknown` and goes to
  * an admin; it is never retried here.
  */
-export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<PlaceOutcome> {
+export async function placeSupplierOrder(app: StoreApp, soId: number, opts: { inlinePollBudget?: number } = {}): Promise<PlaceOutcome> {
   if (app.apps.budget.remaining() < MIN_PLACE_BUDGET) return 'deferred';
 
   // 1. the claim
@@ -275,14 +287,22 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
       forced ? so.forced_source_id : so.customer_product_id).all<SourceCandRow>()).results;
   }
 
+  // a supplier's catalog is refetched at most once per placement, however many of its sources are tried
+  const refreshed = new Map<number, RefreshedCatalog | null>();
+  let firstAttempt = true;
   for (;;) {
     const cand = forced ? sources[0] ?? null : (pickActiveSource(sources, nowStr(app)) as SourceCandRow | null);
     if (!cand) return noCandidate(app, so, order, forced);
 
-    const basis = await costBasis(app, cand);
+    const basis = await costBasis(app, cand, refreshed);
+    // a direct buy names a catalog item: when the (refreshed) catalog no longer lists it there is no price to pay or record
+    if (so.purpose === 'stock' && !basis.listed) {
+      return finishFailed(app, so, order, 'rejected', null, 'این گزینه دیگر در کاتالوگ تأمین‌کننده نیست؛ سفارش ثبت نشد.');
+    }
     const unitCost = basis.priceUsd !== null && basis.usdToman !== null ? costToman(basis.priceUsd, basis.usdToman) : null;
-    // the loss guard protects the automatic path; an admin who pressed «✅ بله» on the loss card has decided
-    if (!forced && so.requested_by === 0 && order && unitCost !== null && order.price < unitCost) {
+    // The loss guard protects every placement except a forced source (the admin saw the profit before choosing it) and an
+    // order whose loss card the admin confirmed with «✅ بله» (`loss_confirmed`). A plain 🔁 is not a confirmation.
+    if (!forced && so.loss_confirmed === 0 && order && unitCost !== null && order.price < unitCost) {
       await app.raw.batch([
         q(app, "UPDATE supplier_orders SET status = 'cancelled', lease_until = NULL, updated_at = ? WHERE id = ? AND status = 'placing'", nowStr(app), soId),
         eventStatement(app, { orderId: order.id, supplierOrderId: soId, kind: 'place_failed', detail: 'loss: price ' + order.price + ' < cost ' + unitCost, onlyIfChanged: true }),
@@ -298,8 +318,10 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
               cost_toman = ?, lease_until = ?, updated_at = ? WHERE id = ? AND status = 'placing'`,
       cand.id || null, cand.supplier_id, cand.remote_product_id, cand.remote_variation_id, basis.priceUsd, basis.usdToman, totalCost,
       addMinutes(app, LEASE_MINUTES), nowStr(app), soId),
-      eventStatement(app, { orderId: so.order_id, supplierOrderId: soId, kind: 'claim', actor: so.requested_by, detail: 'source ' + cand.id, onlyIfChanged: true }),
+      // one «claim» event per placement (the following sources are told by the out_of_stock events); each event is a D1 unit
+      ...(firstAttempt ? [eventStatement(app, { orderId: so.order_id, supplierOrderId: soId, kind: 'claim', actor: so.requested_by, detail: 'source ' + cand.id, onlyIfChanged: true })] : []),
     ]);
+    firstAttempt = false;
     if (persisted[0].meta.changes !== 1) return 'not_claimed';
 
     if (app.apps.budget.remaining() < MIN_POST_BUDGET) {
@@ -335,11 +357,20 @@ export async function placeSupplierOrder(app: StoreApp, soId: number): Promise<P
           }));
         }
         if (order) {
-          // an earlier «all out of stock / retry later» card is settled now
-          stmts.push(q(app, "UPDATE orders SET needs_action_reason = NULL, needs_action_at = NULL WHERE id = ? AND needs_action_reason IN ('all_out_of_stock', 'retry_later')", order.id));
+          // one statement: an earlier «all out of stock / retry later» card is settled now, and what the order costs is known,
+          // so the report doesn't count it as «بدون هزینه» while it waits for the accounts
+          stmts.push(q(app, `UPDATE orders SET cost_toman = COALESCE(?, cost_toman),
+                             needs_action_reason = CASE WHEN needs_action_reason IN ('all_out_of_stock', 'retry_later') THEN NULL ELSE needs_action_reason END,
+                             needs_action_at = CASE WHEN needs_action_reason IN ('all_out_of_stock', 'retry_later') THEN NULL ELSE needs_action_at END
+                             WHERE id = ? AND status = 'confirmed' AND EXISTS (SELECT 1 FROM supplier_orders WHERE id = ? AND status = 'placed' AND remote_order_id = ?)`,
+          totalCost, order.id, soId, result.remoteOrderId));
         }
-        await app.raw.batch(stmts);
-        if (classifyRemoteStatus(result.remoteStatus) === 'success' && app.apps.budget.remaining() >= 12) {
+        const rs = await app.raw.batch(stmts);
+        if (rs[0].meta.changes !== 1) {
+          await lateAnswer(app, so, result.remoteOrderId);
+          return 'unknown';
+        }
+        if (classifyRemoteStatus(result.remoteStatus) === 'success' && app.apps.budget.remaining() >= (opts.inlinePollBudget ?? 12)) {
           await pollSupplierOrder(app, soId, { force: true });
         }
         return 'placed';
@@ -403,6 +434,7 @@ async function stockCandidate(app: StoreApp, so: SupplierOrderRow): Promise<Sour
     price_usd: item?.priceUsd ?? null, priority: 1, is_enabled: 1, listed: item ? 1 : 0, oos_until: null, sup_enabled: sup.is_enabled,
     sup_kind: sup.kind, sup_name: sup.name, base_url: sup.base_url, api_key: sup.api_key, remote_user_id: sup.remote_user_id,
     usd_toman: cached?.catalog.usdToman ?? null, fetched_at: cached?.fetchedAt ?? null,
+    sup_last_sync_ok_at: sup.last_sync_ok_at, sup_sync_alert_sent: sup.sync_alert_sent,
   };
 }
 
@@ -413,24 +445,48 @@ const stockReasonFa = (reason: NeedsActionReason, detail: string): string => ({
   rejected: 'تأمین‌کننده سفارش را نپذیرفت (' + detail + ').',
 } as Record<string, string>)[reason] ?? detail;
 
-/** The price and rate to buy at: the catalog item itself, after a refetch when the cached catalog is stale. */
-async function costBasis(app: StoreApp, cand: SourceCandRow): Promise<{ priceUsd: number | null; usdToman: number | null }> {
+interface RefreshedCatalog { usdToman: number; items: { remoteProductId: string; remoteVariationId: string; priceUsd: number | null }[] }
+
+/**
+ * The price and rate to buy at: the catalog item itself, after a refetch when the cached catalog is stale. `refreshed`
+ * remembers the catalogs this placement already refetched, so one supplier is synced once however many sources are tried.
+ * `listed` says whether the catalog the price came from lists the item.
+ */
+async function costBasis(
+  app: StoreApp, cand: SourceCandRow, refreshed: Map<number, RefreshedCatalog | null>,
+): Promise<{ priceUsd: number | null; usdToman: number | null; listed: boolean }> {
   let priceUsd = cand.price_usd;
   let usdToman = cand.usd_toman;
-  const stale = cand.fetched_at === null || cand.fetched_at < addMinutes(app, -CATALOG_STALE_MINUTES);
-  if (stale && app.apps.budget.remaining() >= 20) {
-    const supplier = await getSupplier(app, cand.supplier_id);
-    if (supplier) {
-      await syncSupplier(app, supplier);
-      const cached = await readCatalog(app, cand.supplier_id);
-      if (cached) {
-        usdToman = cached.catalog.usdToman;
-        const item = cached.catalog.items.find((i) => i.remoteProductId === cand.remote_product_id && i.remoteVariationId === cand.remote_variation_id);
-        if (item?.priceUsd != null) priceUsd = item.priceUsd;
-      }
-    }
+  let listed = cand.listed === 1;
+  // The last OK fetch counts, not the stored blob's time: an unchanged catalog is not rewritten, so its `fetched_at` stays old
+  // while the cron keeps syncing it every 10 minutes (and a refetch before every POST would burn the webhook's budget).
+  const lastFetch = [cand.fetched_at, cand.sup_last_sync_ok_at].filter((x): x is string => x !== null).sort().at(-1) ?? null;
+  const stale = lastFetch === null || lastFetch < addMinutes(app, -CATALOG_STALE_MINUTES);
+  if (stale && !refreshed.has(cand.supplier_id) && app.apps.budget.remaining() >= 20) {
+    refreshed.set(cand.supplier_id, await syncSupplier(app, supplierRowOf(cand)));
   }
-  return { priceUsd, usdToman };
+  const fresh = refreshed.get(cand.supplier_id);
+  if (fresh) {
+    usdToman = fresh.usdToman;
+    const item = fresh.items.find((i) => i.remoteProductId === cand.remote_product_id && i.remoteVariationId === cand.remote_variation_id);
+    listed = item !== undefined;
+    if (item?.priceUsd != null) priceUsd = item.priceUsd;
+  }
+  return { priceUsd, usdToman, listed };
+}
+
+/**
+ * The supplier answered «placed» but the row is no longer `placing` (the lease ran out and the cron marked it unknown, or
+ * an admin acted): the order EXISTS at the supplier. Nothing is lost silently — the number goes into the history and to
+ * the admins, who record it with «🔢 ثبت شده بود».
+ */
+async function lateAnswer(app: StoreApp, so: SupplierOrderRow, remoteOrderId: string): Promise<void> {
+  await eventStatement(app, {
+    orderId: so.order_id, supplierOrderId: so.id, kind: 'unknown', detail: 'late answer: the order exists at the supplier, remote #' + remoteOrderId,
+  }).run();
+  const text = '⚠️ پاسخ تأمین‌کننده دیر رسید: سفارش ' + (so.order_id !== null ? '#' + so.order_id : 'خرید مستقیم #' + so.id) +
+    ' در تأمین‌کننده ثبت شده است (شماره‌ی سفارش: ' + escapeHtml(remoteOrderId) + '). دکمه‌ی «🔢 ثبت شده بود» را بزنید و همین شماره را وارد کنید.';
+  await sendToAdmins(app, text, [[Markup.button.callback('🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم', so.order_id !== null ? 'fo_rid_' + so.order_id : 'stk_rid_' + so.id)]]);
 }
 
 /** No usable source: wait and retry every 15 minutes; tell the admins once. A forced source that is gone fails. */
@@ -487,7 +543,6 @@ export async function markUnknown(app: StoreApp, soId: number, http: number | nu
 /** Minutes until the next poll after the n-th check: the first poll is 1 minute after placing, then 2, 5, 10, 10, … */
 export const pollDelayMinutes = (checksDone: number): number => [2, 5, 10][Math.min(Math.max(checksDone, 1) - 1, 2)];
 
-const EMPTY_MARK = 'completed_no_accounts:';
 /** Polls that see `completed` without accounts before the admin is asked (the first one plus three more). */
 const EMPTY_POLLS_LIMIT = 4;
 
@@ -524,9 +579,9 @@ export async function pollSupplierOrder(app: StoreApp, soId: number, opts: { for
       await completeAndDeliver(app, so, r.remoteStatus, r.raw, r.accounts);
       return;
     }
-    const previous = so.last_error?.startsWith(EMPTY_MARK) ? Number(so.last_error.slice(EMPTY_MARK.length)) || 0 : 0;
-    const seen = previous + 1;
-    await save('last_error = ?', EMPTY_MARK + seen).run();
+    // a real counter column: a poll error or an in-progress answer in between doesn't start it over
+    const seen = so.empty_polls + 1;
+    await save('empty_polls = ?', seen).run();
     if (seen >= EMPTY_POLLS_LIMIT) {
       const rs = await app.raw.batch([
         q(app, "UPDATE supplier_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'placed'", now, soId),
@@ -589,8 +644,9 @@ async function completeAndDeliver(app: StoreApp, so: SupplierOrderRow, remoteSta
   }
 
   const rs = await app.raw.batch([
+    // the inline delivery below is the first try; the cron's redelivery is a safety net 5 minutes later, never a parallel second try
     q(app, "UPDATE supplier_orders SET status = 'completed', remote_status = ?, raw_response = ?, completed_at = ?, next_check_at = ?, last_error = NULL, updated_at = ? WHERE id = ? AND status = 'placed'",
-      remoteStatus, raw, now, now, now, so.id),
+      remoteStatus, raw, now, addMinutes(app, 5), now, so.id),
     q(app, `INSERT INTO order_deliveries (order_id, kind, content_json, supplier_order_id, sent_ok, created_by, created_at)
             SELECT ?, 'supplier', ?, ?, 0, 0, ? WHERE changes() = 1`, order!.id, JSON.stringify(content), so.id, now),
     eventStatement(app, { orderId: order!.id, supplierOrderId: so.id, kind: 'completed' }),
@@ -638,36 +694,74 @@ export interface DeliveryMeta {
   alreadyDelivered?: boolean;
 }
 
-export type DeliverResult = 'delivered' | 'diverted' | 'send_failed' | 'skipped' | 'deferred';
+/** `busy` = the state is right but another delivery of the same order holds the claim; `skipped` = the order is no longer in the state this kind delivers from. */
+export type DeliverResult = 'delivered' | 'diverted' | 'send_failed' | 'skipped' | 'deferred' | 'busy';
+
+/** The cut-off before which a delivery claim counts as abandoned (the Worker died while sending). */
+export const claimCutoff = (app: StoreApp): string => addMinutes(app, -CLAIM_LEASE_MINUTES);
+
+/**
+ * Takes the order's delivery claim (SUPPLIER_PLAN.md §7.5): the order must still be `confirmed` and carry the
+ * `fulfillment` this kind delivers from, nobody else may hold a fresh claim, and a supplier delivery's supplier order must
+ * not be flagged for stock. Every kind of delivery (supplier, stock, manual text, a resend, the cron's retry) takes it
+ * BEFORE it sends, so two of them can never both reach the customer. Returns the claim's token, or null.
+ */
+export async function claimDelivery(app: StoreApp, orderId: number, kind: DeliveryMeta['kind'], supplierOrderId?: number | null): Promise<string | null> {
+  const now = nowStr(app);
+  const r = await q(app, `UPDATE orders SET delivery_claimed_at = ?
+                          WHERE id = ? AND status = 'confirmed' AND fulfillment = ? AND (delivery_claimed_at IS NULL OR delivery_claimed_at < ?)
+                          ${supplierOrderId ? 'AND NOT EXISTS (SELECT 1 FROM supplier_orders WHERE id = ? AND divert_to_stock = 1)' : ''}`,
+  now, orderId, kind, claimCutoff(app), ...(supplierOrderId ? [supplierOrderId] : [])).run();
+  return r.meta.changes === 1 ? now : null;
+}
+
+const releaseClaim = (app: StoreApp, orderId: number, token: string | null): Stmt =>
+  q(app, 'UPDATE orders SET delivery_claimed_at = NULL WHERE id = ? AND delivery_claimed_at = ?', orderId, token);
+
+const insertDelivery = async (app: StoreApp, orderId: number, content: DeliveryContent, meta: DeliveryMeta): Promise<number> =>
+  (await q(app, `INSERT INTO order_deliveries (order_id, kind, content_json, supplier_order_id, stock_account_id, sent_ok, created_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+  orderId, meta.kind, JSON.stringify(content), meta.supplierOrderId ?? null, meta.stockAccountId ?? null, meta.actor ?? 0, nowStr(app)).run()).meta.last_row_id;
 
 /**
  * Sends accounts to the customer and finishes the order (SUPPLIER_PLAN.md §7.5). Shared by supplier completion,
- * stock and manual text. Re-checks the order first, so a customer is never given an account for an order that was
- * delivered or cancelled in the meantime.
+ * stock and manual text. The order's delivery claim is the single guard: it is taken before anything is sent, and it
+ * fails (nothing is sent) for an order that was delivered, cancelled or handed to another way in the meantime.
  */
 export async function deliverToCustomer(app: StoreApp, orderId: number, content: DeliveryContent, meta: DeliveryMeta): Promise<DeliverResult> {
-  if (app.apps.budget.remaining() < 6 + app.cfg.adminIds.length) return 'deferred';
+  let deliveryId = meta.existingDeliveryId;
+  if (app.apps.budget.remaining() < 7 + app.cfg.adminIds.length) {
+    // an admin's delivery keeps its content so the cron can still send it; a supplier delivery already has its row
+    if (deliveryId === undefined && !meta.alreadyDelivered) await insertDelivery(app, orderId, content, meta);
+    return 'deferred';
+  }
   const order = await app.db.getOrderById(orderId);
   const so = meta.supplierOrderId ? await q(app, 'SELECT * FROM supplier_orders WHERE id = ?', meta.supplierOrderId).first<SupplierOrderRow>() : null;
 
-  const stateOk = !!order && (meta.alreadyDelivered ? order.status === 'delivered' : order.status === 'confirmed');
-  const supplierOk = meta.kind !== 'supplier' || (order?.fulfillment === 'supplier' && so?.divert_to_stock !== 1);
-  if (!stateOk || !supplierOk) {
-    if (meta.kind === 'supplier' && so && 'accounts' in content) {
-      await divertToStock(app, so, content.accounts, order ?? undefined);
-      return 'diverted';
-    }
-    return 'skipped';
+  if (deliveryId === undefined) deliveryId = await insertDelivery(app, orderId, content, meta);
+  let token: string | null = null;
+  if (meta.alreadyDelivered) {
+    // created already delivered (a manual-link stock order): nothing to claim, only a message to send
+    if (!order || order.status !== 'delivered') return 'skipped';
+  } else {
+    token = await claimDelivery(app, orderId, meta.kind, meta.supplierOrderId);
+    if (token === null) return settleUnclaimed(app, orderId, content, meta, so);
   }
+  return finishDelivery(app, order!, deliveryId, content, meta, so, token);
+}
 
-  let deliveryId = meta.existingDeliveryId;
-  if (deliveryId === undefined) {
-    const r = await q(app, `INSERT INTO order_deliveries (order_id, kind, content_json, supplier_order_id, stock_account_id, sent_ok, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-    orderId, meta.kind, JSON.stringify(content), meta.supplierOrderId ?? null, meta.stockAccountId ?? null, meta.actor ?? 0, nowStr(app)).run();
-    deliveryId = r.meta.last_row_id;
+/** The claim failed: the supplier's accounts go to stock when the order is no longer theirs; otherwise nothing is sent. */
+async function settleUnclaimed(
+  app: StoreApp, orderId: number, content: DeliveryContent, meta: DeliveryMeta, so: SupplierOrderRow | null,
+): Promise<DeliverResult> {
+  const order = await app.db.getOrderById(orderId);
+  const stillOurs = !!order && order.status === 'confirmed' && order.fulfillment === meta.kind && so?.divert_to_stock !== 1;
+  if (stillOurs) return 'busy'; // another delivery of this order is in flight
+  if (meta.kind === 'supplier' && so && 'accounts' in content) {
+    await divertToStock(app, so, content.accounts, order ?? undefined);
+    return 'diverted';
   }
-  return finishDelivery(app, order!, deliveryId, content, meta, so);
+  return 'skipped';
 }
 
 const DELIVERY_TAIL =
@@ -678,20 +772,24 @@ export function deliveryMessages(productName: string, content: DeliveryContent):
   return splitHtml('🎉 سفارش «' + escapeHtml(productName) + '» آماده است!\n\n' + formatAccountsHtml(content) + DELIVERY_TAIL);
 }
 
-/** Sends the stored delivery and, on success, marks the order delivered; on failure raises the «send_failed» card. */
+/**
+ * Sends the stored delivery and, on success, marks the order delivered; on failure raises the «send_failed» card. The
+ * caller holds the order's delivery claim (`token`; null for an order that was created delivered).
+ */
 async function finishDelivery(
-  app: StoreApp, order: Order, deliveryId: number, content: DeliveryContent, meta: DeliveryMeta, so: SupplierOrderRow | null,
+  app: StoreApp, order: Order, deliveryId: number, content: DeliveryContent, meta: DeliveryMeta, so: SupplierOrderRow | null, token: string | null,
 ): Promise<DeliverResult> {
   try {
     for (const part of deliveryMessages(order.product_name, content)) {
       await app.api.sendMessage(order.customer_telegram_id, part, { parse_mode: 'HTML' });
     }
   } catch (err: any) {
-    if (err instanceof BudgetExceededError) throw err;
+    if (err instanceof BudgetExceededError) throw err; // the claim stays until its lease runs out; the delivery row is safe in D1
     const why = cut(String(err?.description ?? err?.message ?? 'send failed'), 300);
     const stmts = [
       q(app, 'UPDATE order_deliveries SET send_error = ? WHERE id = ?', why, deliveryId),
       eventStatement(app, { orderId: order.id, supplierOrderId: meta.supplierOrderId ?? null, kind: 'send_failed', actor: meta.actor, detail: why }),
+      releaseClaim(app, order.id, token),
     ];
     // no automatic retry: a resend is always an explicit admin action
     if (meta.supplierOrderId) stmts.push(q(app, 'UPDATE supplier_orders SET next_check_at = NULL WHERE id = ?', meta.supplierOrderId));
@@ -705,9 +803,12 @@ async function finishDelivery(
   const fulfillment = meta.kind;
   const stmts: Stmt[] = [
     meta.alreadyDelivered ? q(app, 'SELECT 1') : app.db.markDeliveredStatement(order.id, now),
+    // right after markDelivered, so `changes()` is ITS result: a lost race never overwrites the winner's fulfillment and cost
+    q(app, `UPDATE orders SET cost_toman = COALESCE(?, cost_toman), fulfillment = ?, needs_action_reason = NULL, needs_action_at = NULL, delivery_claimed_at = NULL
+            WHERE id = ? AND status = 'delivered'${meta.alreadyDelivered ? '' : ' AND changes() = 1'}`, cost, fulfillment, order.id),
+    eventStatement(app, { orderId: order.id, supplierOrderId: meta.supplierOrderId ?? null, kind: 'delivered', actor: meta.actor, detail: fulfillment, onlyIfChanged: true }),
+    // the customer HAS the accounts whatever the order says now
     q(app, 'UPDATE order_deliveries SET sent_ok = 1, send_error = NULL WHERE id = ?', deliveryId),
-    q(app, 'UPDATE orders SET cost_toman = COALESCE(?, cost_toman), fulfillment = ?, needs_action_reason = NULL, needs_action_at = NULL WHERE id = ?', cost, fulfillment, order.id),
-    eventStatement(app, { orderId: order.id, supplierOrderId: meta.supplierOrderId ?? null, kind: 'delivered', actor: meta.actor, detail: fulfillment }),
   ];
   if (meta.supplierOrderId) stmts.push(q(app, 'UPDATE supplier_orders SET next_check_at = NULL WHERE id = ?', meta.supplierOrderId));
   // a stock account given to the customer is «delivered» (it was reserved for this order)
@@ -768,19 +869,39 @@ export async function latestDelivery(app: StoreApp, orderId: number, onlySent = 
   return content ? { ...row, content } : null;
 }
 
+type StoredDelivery = NonNullable<Awaited<ReturnType<typeof latestDelivery>>>;
+
+/** Sends a stored delivery again (or for the first time, from the cron): claim, send, finish. */
+async function sendStoredDelivery(app: StoreApp, order: Order, d: StoredDelivery, actor: number): Promise<DeliverResult> {
+  if (order.status !== 'confirmed' && order.status !== 'delivered') return 'skipped';
+  const so = d.supplier_order_id ? await q(app, 'SELECT * FROM supplier_orders WHERE id = ?', d.supplier_order_id).first<SupplierOrderRow>() : null;
+  // a stock account keeps its cost across a resend (a manual text has none)
+  const costToman = d.kind === 'stock' && d.stock_account_id ? await stockUnitCost(app, d.stock_account_id) : undefined;
+  const alreadyDelivered = order.status === 'delivered';
+  const token = alreadyDelivered ? null : await claimDelivery(app, order.id, d.kind, d.supplier_order_id);
+  if (!alreadyDelivered && token === null) return 'busy';
+  return finishDelivery(app, order, d.id, d.content, {
+    kind: d.kind, supplierOrderId: d.supplier_order_id, stockAccountId: d.stock_account_id, actor,
+    alreadyDelivered, ...(costToman !== undefined ? { costToman } : {}),
+  }, so, token);
+}
+
 /** An explicit resend of the latest delivery (`fo_resend`): the same send-and-finish as the first time. */
 export async function resendDelivery(app: StoreApp, orderId: number, actor: number): Promise<DeliverResult | 'none'> {
   const order = await app.db.getOrderById(orderId);
   const d = await latestDelivery(app, orderId);
   if (!order || !d) return 'none';
-  if (order.status !== 'confirmed' && order.status !== 'delivered') return 'skipped';
-  const so = d.supplier_order_id ? await q(app, 'SELECT * FROM supplier_orders WHERE id = ?', d.supplier_order_id).first<SupplierOrderRow>() : null;
-  // a stock account keeps its cost across a resend (a manual text has none)
-  const costToman = d.kind === 'stock' && d.stock_account_id ? await stockUnitCost(app, d.stock_account_id) : undefined;
-  return finishDelivery(app, order, d.id, d.content, {
-    kind: d.kind, supplierOrderId: d.supplier_order_id, stockAccountId: d.stock_account_id, actor,
-    alreadyDelivered: order.status === 'delivered', ...(costToman !== undefined ? { costToman } : {}),
-  }, so);
+  return sendStoredDelivery(app, order, d, actor);
+}
+
+/** An admin's stock / manual-text delivery that did not fit the budget (N3): the cron sends it through the same claim. */
+async function sendPendingManual(app: StoreApp, deliveryId: number): Promise<void> {
+  const row = await q(app, 'SELECT * FROM order_deliveries WHERE id = ? AND sent_ok = 0 AND send_error IS NULL AND diverted = 0', deliveryId)
+    .first<{ id: number; order_id: number; kind: 'supplier' | 'stock' | 'manual_text'; content_json: string; supplier_order_id: number | null; stock_account_id: number | null; sent_ok: number; send_error: string | null; created_by: number }>();
+  const content = row ? parseContent(row.content_json) : null;
+  const order = row ? await app.db.getOrderById(row.order_id) : undefined;
+  if (!row || !content || !order || order.status !== 'confirmed' || order.fulfillment !== row.kind) return;
+  await sendStoredDelivery(app, order, { ...row, content }, row.created_by);
 }
 
 // ─── Admin recorded the remote order id (an `unknown` order that did exist) ──
@@ -800,8 +921,12 @@ async function recordRemoteId(app: StoreApp, so: SupplierOrderRow, remoteOrderId
   const now = nowStr(app);
   const note = so.purpose === 'customer' ? 'store#' + so.order_id + '/so#' + so.id : 'stock/so#' + so.id;
   const stmts: Stmt[] = [
-    q(app, "UPDATE supplier_orders SET status = 'placed', remote_order_id = ?, placed_at = ?, next_check_at = ?, checks = 0, last_error = NULL, updated_at = ? WHERE id = ? AND status = 'unknown'",
-      remoteOrderId, now, addMinutes(app, 1), now, so.id),
+    // The order may have been resolved by hand meanwhile (🙋, 📦, ✍️, cancel): its `divert_to_stock` flag then stays and the
+    // accounts go to stock. If an undo put the order back on automatic delivery, the accounts are for the customer again.
+    q(app, `UPDATE supplier_orders SET status = 'placed', remote_order_id = ?, placed_at = ?, next_check_at = ?, checks = 0, last_error = NULL, updated_at = ?,
+            divert_to_stock = CASE WHEN EXISTS (SELECT 1 FROM orders WHERE id = supplier_orders.order_id AND status = 'confirmed' AND fulfillment = 'supplier') THEN 0 ELSE divert_to_stock END
+            WHERE id = ? AND status = 'unknown'`,
+    remoteOrderId, now, addMinutes(app, 1), now, so.id),
   ];
   if (so.price_usd !== null && so.supplier_id !== null) {
     stmts.push(q(app, `INSERT INTO wallet_ledger (supplier_id, kind, amount_usd, supplier_order_id, note, created_by, created_at)
@@ -838,6 +963,10 @@ export const UNDELIVERED_SQL = "SELECT id, order_id FROM supplier_orders WHERE s
 export const STRANDED_SQL = `SELECT id, customer_product_id FROM orders
   WHERE status = 'confirmed' AND fulfillment = 'supplier' AND needs_action_reason IS NULL
     AND NOT EXISTS (SELECT 1 FROM supplier_orders so WHERE so.order_id = orders.id) AND supplier_deadline_at <= ? LIMIT ?`;
+/** Admin deliveries (stock / manual text) that never reached the customer nor failed: older than a minute, so a live handler isn't raced. */
+export const PENDING_MANUAL_SQL = `SELECT d.id FROM order_deliveries d JOIN orders o ON o.id = d.order_id
+  WHERE d.sent_ok = 0 AND d.send_error IS NULL AND d.diverted = 0 AND d.kind IN ('stock', 'manual_text')
+    AND d.created_at <= ? AND o.status = 'confirmed' AND o.fulfillment = d.kind ORDER BY d.created_at LIMIT ?`;
 export const DEADLINE_SQL =
   "SELECT id FROM orders WHERE status = 'confirmed' AND fulfillment = 'supplier' AND stalled_alert_sent = 0 AND supplier_deadline_at < ? LIMIT ?";
 
@@ -873,6 +1002,11 @@ export async function processSupplierWork(app: StoreApp): Promise<void> {
   if (!enough()) return;
   for (const row of await ids(UNDELIVERED_SQL, FOLLOWUP_LIMITS.completed)) {
     if (!enough() || (await runUnit('deliver #' + row.id, () => redeliverCompleted(app, row.id, row.order_id!))) === 'stop') return;
+  }
+  if (!enough()) return;
+  const aMinuteAgo = addMinutes(app, -1);
+  for (const row of (await q(app, PENDING_MANUAL_SQL, aMinuteAgo, FOLLOWUP_LIMITS.manual).all<{ id: number }>()).results) {
+    if (!enough() || (await runUnit('send manual delivery #' + row.id, () => sendPendingManual(app, row.id))) === 'stop') return;
   }
   if (!enough()) return;
   for (const row of await ids(DEADLINE_SQL, FOLLOWUP_LIMITS.deadline)) {

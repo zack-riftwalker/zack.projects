@@ -43,6 +43,8 @@ export const MATCHING_PRODUCTS_SQL = `SELECT DISTINCT s.customer_product_id AS i
   JOIN stock_batches b ON b.id = a.batch_id JOIN supplier_orders so ON so.id = b.supplier_order_id
   JOIN product_sources s ON s.supplier_id = so.supplier_id AND s.remote_product_id = so.remote_product_id AND s.remote_variation_id = COALESCE(so.remote_variation_id, '')
   WHERE a.id = ?`;
+/** «stk_rel_»: withdraws the manual link that holds a stock account (found by the account; indexed). */
+export const RELEASE_LINK_SQL = "DELETE FROM manual_purchase_claims WHERE stock_account_id = ? AND status = 'pending'";
 export const CUSTOMER_BY_ID_SQL = 'SELECT telegram_id, display_name, username FROM customers WHERE telegram_id = ?';
 export const CUSTOMER_BY_NAME_SQL = 'SELECT telegram_id, display_name, username FROM customers WHERE username = ? LIMIT 1';
 
@@ -77,7 +79,7 @@ async function batchListView(app: StoreApp, page: number): Promise<{ text: strin
 interface BuyChoice { sid: number; ref: string; qty: number }
 
 /** The confirmation text of a direct buy: cost in USD and Toman, and the estimated wallet. */
-async function confirmView(app: StoreApp, c: BuyChoice): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> } | null> {
+async function confirmView(app: StoreApp, c: BuyChoice, nonce: string): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> } | null> {
   const item = await findCatalogItem(app, c.sid, c.ref);
   const supplier = (await listSuppliers(app)).find((s) => s.id === c.sid);
   const cached = await readCatalog(app, c.sid);
@@ -96,30 +98,40 @@ async function confirmView(app: StoreApp, c: BuyChoice): Promise<{ text: string;
   lines.push('💳 موجودی تخمینی کیف پول: ' + usd(await walletBalance(app, c.sid)));
   return {
     text: lines.join('\n'),
-    keyboard: Markup.inlineKeyboard([[cb('✅ خرید', 'stk_buyok_' + c.sid + '_' + c.ref + '_' + c.qty), cb('❌', 'stk_x')]]),
+    keyboard: Markup.inlineKeyboard([[cb('✅ خرید', 'stk_buyok_' + c.sid + '_' + c.ref + '_' + c.qty + '_' + nonce), cb('❌', 'stk_x')]]),
   };
 }
 
+/** A fresh random token per confirmation (12 hex digits): one nonce can place one direct buy, whatever any session says. */
+const newNonce = (): string => crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+
 async function showConfirm(ctx: StoreContext, c: BuyChoice, edit: boolean): Promise<void> {
-  const v = await confirmView(ctx.app, c);
+  const nonce = newNonce();
+  const v = await confirmView(ctx.app, c, nonce);
   if (!v) {
     await ctx.reply('❌ این گزینه دیگر در کاتالوگ نیست.');
     return;
   }
-  await beginSupplierWizard(ctx, 'buy', { ...c });
+  await beginSupplierWizard(ctx, 'buy', { ...c, nonce });
   if (edit) await ctx.editMessageText(v.text, { ...html, ...v.keyboard }).catch(() => {});
   else await ctx.reply(v.text, { ...html, ...v.keyboard });
 }
 
-/** Inserts the queued `purpose='stock'` supplier order. Returns its id. */
-async function queueDirectBuy(app: StoreApp, c: { supplierId: number; remoteProductId: string; remoteVariationId: string; quantity: number }, admin: number): Promise<number> {
+/**
+ * Inserts the queued `purpose='stock'` supplier order. The nonce column is UNIQUE, so the same confirmation can insert at
+ * most one row however many times (or from however stale a session) its button is pressed. Returns the id, or null when
+ * this nonce was used already.
+ */
+async function queueDirectBuy(
+  app: StoreApp, c: { supplierId: number; remoteProductId: string; remoteVariationId: string; quantity: number }, admin: number, nonce: string,
+): Promise<number | null> {
   const now = nowStr(app);
   const rs = await app.raw.batch([
-    app.raw.prepare(`INSERT INTO supplier_orders (purpose, supplier_id, remote_product_id, remote_variation_id, quantity, status, next_attempt_at, requested_by, created_at, updated_at)
-                     VALUES ('stock', ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`).bind(c.supplierId, c.remoteProductId, c.remoteVariationId, c.quantity, now, admin, now, now),
+    app.raw.prepare(`INSERT OR IGNORE INTO supplier_orders (purpose, supplier_id, remote_product_id, remote_variation_id, quantity, status, next_attempt_at, requested_by, buy_nonce, created_at, updated_at)
+                     VALUES ('stock', ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`).bind(c.supplierId, c.remoteProductId, c.remoteVariationId, c.quantity, now, admin, nonce, now, now),
     eventStatement(app, { supplierOrderId: 'last', kind: 'queued', actor: admin, detail: 'direct buy', onlyIfChanged: true }),
   ]);
-  return rs[0].meta.last_row_id;
+  return rs[0].meta.changes === 1 ? rs[0].meta.last_row_id : null;
 }
 
 /** After the kick: tells the admin how far the order got (failures were already reported by the engine). */
@@ -191,22 +203,25 @@ export function registerStockAdmin(bot: Bot<StoreContext>, isAdmin: (id: number 
     await ctx.answerCallbackQuery();
     await ctx.reply('🔢 تعداد را بنویسید (۱ تا ۱۰):', Markup.inlineKeyboard([[CANCEL_INPUT]]));
   });
-  bot.callbackQuery(/^stk_buyok_(\d+)_([0-9a-f]+)_(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^stk_buyok_(\d+)_([0-9a-f]+)_(\d+)_([0-9a-f]{12})$/, async (ctx) => {
     if (!(await guard(ctx))) return;
     const sid = parseInt(ctx.match[1], 10);
     const ref = ctx.match[2];
     const qty = parseInt(ctx.match[3], 10);
-    // the draft is consumed here: a second press of the same button finds nothing, so it can't buy twice
+    const nonce = ctx.match[4];
+    const used = () => ctx.answerCallbackQuery({ text: '⌛️ این تأیید قبلاً استفاده شده یا منقضی شده است. دوباره شروع کنید.', show_alert: true });
+    // The session draft makes a replayed button cheap to refuse; the UNIQUE nonce in the DB is what really decides.
     const d = draft(ctx, 'buy');
-    if (!d || d.sid !== sid || d.ref !== ref || d.qty !== qty) {
-      return ctx.answerCallbackQuery({ text: '⌛️ این تأیید قبلاً استفاده شده یا منقضی شده است. دوباره شروع کنید.', show_alert: true });
-    }
+    if (!d || d.sid !== sid || d.ref !== ref || d.qty !== qty || d.nonce !== nonce) return used();
     ctx.session.supplierWizard = null;
     const item = await findCatalogItem(ctx.app, sid, ref);
     if (!item) return ctx.answerCallbackQuery({ text: '❌ این گزینه دیگر در کاتالوگ نیست.', show_alert: true });
+    const soId = await queueDirectBuy(ctx.app, { supplierId: sid, remoteProductId: item.remoteProductId, remoteVariationId: item.remoteVariationId, quantity: qty }, ctx.from.id, nonce);
+    if (soId === null) return used();
     await ctx.answerCallbackQuery('⏳ در حال ثبت سفارش…');
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
-    const soId = await queueDirectBuy(ctx.app, { supplierId: sid, remoteProductId: item.remoteProductId, remoteVariationId: item.remoteVariationId, quantity: qty }, ctx.from.id);
+    // the kick can take 25 s (a stale catalog sync + the POST): the consumed draft is saved first, not after the handler
+    await ctx.flushSession();
     await kickSupplierOrder(ctx.app, soId);
     await reportKick(ctx, soId);
   });
@@ -214,14 +229,19 @@ export function registerStockAdmin(bot: Bot<StoreContext>, isAdmin: (id: number 
   // a failed direct buy is retried only when the admin presses the button
   bot.callbackQuery(/^stk_rt_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
-    const soId = parseInt(ctx.match[1], 10);
+    const oldId = parseInt(ctx.match[1], 10);
     const now = nowStr(ctx.app);
+    // A NEW row per retry (like fo_retry): the failed row keeps its remote number, raw answer and wallet spend, so a refund
+    // stays traceable to the order that was charged. The old row is closed in the same batch, so a second press finds nothing.
     const rs = await ctx.app.raw.batch([
-      ctx.app.raw.prepare("UPDATE supplier_orders SET status = 'queued', next_attempt_at = ?, last_error = NULL, requested_by = ?, updated_at = ? WHERE id = ? AND purpose = 'stock' AND status = 'failed'")
-        .bind(now, ctx.from.id, now, soId),
-      eventStatement(ctx.app, { supplierOrderId: soId, kind: 'admin_retry', actor: ctx.from.id, onlyIfChanged: true }),
+      ctx.app.raw.prepare("UPDATE supplier_orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND purpose = 'stock' AND status = 'failed'").bind(now, oldId),
+      ctx.app.raw.prepare(`INSERT INTO supplier_orders (purpose, supplier_id, remote_product_id, remote_variation_id, quantity, status, next_attempt_at, requested_by, created_at, updated_at)
+                           SELECT 'stock', supplier_id, remote_product_id, remote_variation_id, quantity, 'queued', ?, ?, ?, ? FROM supplier_orders
+                           WHERE id = ? AND status = 'cancelled' AND changes() = 1`).bind(now, ctx.from.id, now, now, oldId),
+      eventStatement(ctx.app, { supplierOrderId: 'last', kind: 'admin_retry', actor: ctx.from.id, detail: 'retry of #' + oldId, onlyIfChanged: true }),
     ]);
-    if (rs[0].meta.changes !== 1) return ctx.answerCallbackQuery({ text: 'ℹ️ قبلاً تصمیم گرفته شد.', show_alert: true });
+    if (rs[1].meta.changes !== 1) return ctx.answerCallbackQuery({ text: 'ℹ️ قبلاً تصمیم گرفته شد.', show_alert: true });
+    const soId = rs[1].meta.last_row_id;
     await ctx.answerCallbackQuery('⏳ دوباره تلاش می‌شود…');
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
     await kickSupplierOrder(ctx.app, soId);
@@ -320,7 +340,7 @@ export function registerStockAdmin(bot: Bot<StoreContext>, isAdmin: (id: number 
     if (!(await guard(ctx))) return;
     const id = parseInt(ctx.match[1], 10);
     const rs = await ctx.app.raw.batch([
-      ctx.app.raw.prepare("DELETE FROM manual_purchase_claims WHERE stock_account_id = ? AND status = 'pending'").bind(id),
+      ctx.app.raw.prepare(RELEASE_LINK_SQL).bind(id),
       ctx.app.raw.prepare("UPDATE stock_accounts SET status = 'available', updated_at = ? WHERE id = ? AND status = 'reserved' AND order_id IS NULL").bind(nowStr(ctx.app), id),
     ]);
     if (rs[1].meta.changes !== 1) return ctx.answerCallbackQuery({ text: 'ℹ️ لینک قبلاً استفاده شده است.', show_alert: true });
@@ -422,12 +442,13 @@ async function sellFromStock(ctx: StoreContext, accountId: number, customerId: n
   const result = await deliverToCustomer(app, orderId, content, {
     kind: 'stock', stockAccountId: accountId, actor: ctx.from!.id, actorName: adminName(ctx), costToman: unitCost,
   });
-  if (result === 'delivered') {
+  if (result === 'delivered' || result === 'deferred') {
     try {
       await onPurchaseConfirmed(app, { id: orderId, customer_telegram_id: customerId, price });
     } catch (err: any) {
       console.error('❌ [Stock] referral qualification failed:', err?.message ?? err);
     }
+    if (result === 'deferred') await ctx.reply('⏳ سفارش #' + orderId + ' ساخته شد؛ ارسال اکانت در صف است و تا دقایقی دیگر انجام می‌شود.');
   } else if (result === 'send_failed') {
     await ctx.reply('❌ ارسال نشد: مشتری ربات را بلاک کرده یا هرگز استارت نزده. کارت تحویل‌نشده برایتان آمد؛ سفارش #' + orderId);
   } else {

@@ -21,8 +21,11 @@ const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
 
 // ─── §6.1 fetch ──────────────────────────────────────────────────────────────
 
-/** One fetch of a supplier's catalog: stores it when it changed, and raises the alerts of §6.1. */
-export async function syncSupplier(app: StoreApp, s: SupplierRow): Promise<void> {
+/**
+ * One fetch of a supplier's catalog: stores it when it changed, and raises the alerts of §6.1. Returns the fetched
+ * catalog (so a caller that needs it right away doesn't read it back), or null when the fetch failed.
+ */
+export async function syncSupplier(app: StoreApp, s: SupplierRow): Promise<{ usdToman: number; items: CatalogItem[] } | null> {
   const now = app.apps.now();
   const nowStr = tehranDateTime(now);
   const r = await adapterFor(s.kind, app.apps).fetchCatalog(s);
@@ -30,13 +33,13 @@ export async function syncSupplier(app: StoreApp, s: SupplierRow): Promise<void>
   if (!r.ok) {
     await app.raw.prepare('UPDATE suppliers SET last_sync_at = ?, last_sync_error = ? WHERE id = ?')
       .bind(nowStr, cut(r.detail, 300), s.id).run();
-    if (s.sync_alert_sent) return;
+    if (s.sync_alert_sent) return null;
     if (r.kind === 'auth') {
       await alert(app, s, '❌ کلید API «' + escapeHtml(s.name) + '» نامعتبر است. همگام‌سازی و سفارش خودکار متوقف است تا کلید را درست کنید.');
     } else if (!s.last_sync_ok_at || s.last_sync_ok_at < tehranDateTime(new Date(now.getTime() - 30 * 60_000))) {
       await alert(app, s, '⚠️ همگام‌سازی «' + escapeHtml(s.name) + '» ناموفق بود: ' + escapeHtml(cut(r.detail, 300)));
     }
-    return;
+    return null;
   }
 
   const items = sortItems(r.value.items);
@@ -52,6 +55,7 @@ export async function syncSupplier(app: StoreApp, s: SupplierRow): Promise<void>
     'UPDATE suppliers SET last_sync_at = ?, last_sync_ok_at = ?, last_sync_error = NULL, sync_alert_sent = 0 WHERE id = ?',
   ).bind(nowStr, nowStr, s.id).run();
   if (s.sync_alert_sent) await sendToAdmins(app, '✅ اتصال «' + escapeHtml(s.name) + '» برقرار شد.');
+  return { usdToman: r.value.usdToman, items };
 }
 
 async function alert(app: StoreApp, s: SupplierRow, html: string): Promise<void> {

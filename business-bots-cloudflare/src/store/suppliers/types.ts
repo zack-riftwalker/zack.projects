@@ -77,6 +77,10 @@ export interface SupplierOrderRow {
   last_http: number | null;
   last_error: string | null;
   divert_to_stock: number;
+  /** the admin confirmed the loss card for this very order (skips the placement's loss guard) */
+  loss_confirmed: number;
+  /** polls that saw «completed» without accounts (a real counter; errors and in-progress answers don't reset it) */
+  empty_polls: number;
   first_fail_notified: number;
   requested_by: number;
   raw_response: string | null;

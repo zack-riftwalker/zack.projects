@@ -20,9 +20,18 @@ async function toConfirm(t: any, sid: number, qty = 2, productId = '1300', varia
   await press(t, 'stk_buys_' + sid);
   await press(t, 'stk_buyi_' + sid + '_' + ref);
   await press(t, `stk_buyq_${sid}_${ref}_${qty}`);
+  buyOk(t, sid, ref, qty); // remember this confirmation's button
   return ref;
 }
-const buyOk = (sid: number, ref: string, qty: number) => 'stk_buyok_' + sid + '_' + ref + '_' + qty;
+/** The «✅ خرید» button of the latest confirmation: its callback carries the confirmation's nonce (review S1). */
+const seenBuyOk = new Map<string, string>();
+const buyOk = (t: any, sid: number, ref: string, qty: number): string => {
+  const prefix = 'stk_buyok_' + sid + '_' + ref + '_' + qty + '_';
+  const all = t.tg.calls.filter((c: any) => c.method === 'editMessageText' || c.method === 'sendMessage').flatMap((c: any) => callbackDataOf(c.payload));
+  const found = all.filter((d: string) => d.startsWith(prefix)).at(-1);
+  if (found) seenBuyOk.set(prefix, found); // a test may clear the fake's calls before it presses
+  return found ?? seenBuyOk.get(prefix)!;
+};
 const adminOnly = (t: any, marker: string) => ({
   a1: t.tg.texts(ADMIN.id).filter((x: string) => x.includes(marker)),
   a2: t.tg.texts(ADMIN2.id).filter((x: string) => x.includes(marker)),
@@ -39,11 +48,11 @@ describe('S7 direct buy (§10.1)', () => {
     expect(confirmText).toContain('× ۲');
     expect(confirmText).toContain('$10.56');
     expect(confirmText).toContain('💳 موجودی تخمینی کیف پول: $0.00');
-    expect(callbackDataOf(t.tg.of('editMessageText').at(-1)!.payload)).toEqual([buyOk(sid, ref, 2), 'stk_x']);
+    expect(callbackDataOf(t.tg.of('editMessageText').at(-1)!.payload)).toEqual([buyOk(t, sid, ref, 2), 'stk_x']);
     expect(posts(fake)).toHaveLength(0);
 
     t.tg.reset();
-    await press(t, buyOk(sid, ref, 2));
+    await press(t, buyOk(t, sid, ref, 2));
     expect(posts(fake)).toHaveLength(1);
     expect(posts(fake)[0].body).toEqual({ product_id: '1300', quantity: 2, user_id: 42, note: 'stock/so#1' });
     expect(soRow(t)).toMatchObject({
@@ -77,7 +86,7 @@ describe('S7 direct buy (§10.1)', () => {
   it('fewer accounts than ordered: the batch keeps what arrived, notes the difference and tells the admin', async () => {
     const { t, fake, sid } = await shop();
     const ref = await toConfirm(t, sid, 3);
-    await press(t, buyOk(sid, ref, 3));
+    await press(t, buyOk(t, sid, ref, 3));
     completed(fake, 2);
     t.tg.reset();
     await at(t, iso('09:52'));
@@ -90,7 +99,7 @@ describe('S7 direct buy (§10.1)', () => {
   it('the accounts of a direct buy are offered first (🎯) for the options that share the supplier item', async () => {
     const { t, fake, sid, m1, m3 } = await shop();
     const ref = await toConfirm(t, sid, 1);
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     completed(fake, 1);
     await at(t, iso('09:52'));
     const { textUpdate } = await import('../helpers/updates');
@@ -106,8 +115,8 @@ describe('S7 direct buy (§10.1)', () => {
   it('a double press of «✅ خرید» (or a replayed button) buys once', async () => {
     const { t, fake, sid } = await shop();
     const ref = await toConfirm(t, sid, 1);
-    await press(t, buyOk(sid, ref, 1));
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     expect(posts(fake)).toHaveLength(1);
     expect(q(t.storeDb, 'SELECT id FROM supplier_orders')).toHaveLength(1);
     expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toContain('قبلاً استفاده شده');
@@ -122,7 +131,7 @@ describe('S7 direct buy (§10.1)', () => {
     await say(t, '۴');
     const text = t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload;
     expect(text.text).toContain('× ۴');
-    expect(callbackDataOf(text)).toEqual([buyOk(sid, ref, 4), 'stk_x']);
+    expect(callbackDataOf(text)).toEqual([buyOk(t, sid, ref, 4), 'stk_x']);
   });
 
   it('unknown: one POST, only the requester is asked, nothing is retried by cron; recording the number continues the order', async () => {
@@ -130,7 +139,7 @@ describe('S7 direct buy (§10.1)', () => {
     const ref = await toConfirm(t, sid, 1);
     fake.state.postQueue.push('timeout');
     t.tg.reset();
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     expect(soRow(t)).toMatchObject({ status: 'unknown', purpose: 'stock' });
     const ask = t.tg.of('sendMessage', ADMIN.id).map((c) => c.payload).find((p) => p.text.includes('معلوم نیست'))!;
     expect(callbackDataOf(ask)).toEqual(['stk_rid_1', 'stk_rtu_1']);
@@ -153,7 +162,7 @@ describe('S7 direct buy (§10.1)', () => {
     const { t, fake, sid } = await shop();
     const ref = await toConfirm(t, sid, 1);
     fake.state.postQueue.push({ status: 500, body: { detail: 'boom' } });
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     expect(soRow(t).status).toBe('unknown');
     await press(t, 'stk_rtu_1');
     expect(t.tg.of('editMessageText').at(-1)!.payload.text).toContain('دوبار شارژ');
@@ -184,7 +193,7 @@ describe('S7 direct buy (§10.1)', () => {
     const ref = await toConfirm(t, sid, 1);
     fake.state.postQueue.push({ status: 503, body: { detail: 'busy' } });
     t.tg.reset();
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     expect(soRow(t)).toMatchObject({ status: 'failed', last_http: 503 });
     const msg = t.tg.of('sendMessage', ADMIN.id).map((c) => c.payload).find((p) => p.text.includes('خرید مستقیم #1'))!;
     expect(callbackDataOf(msg)).toEqual(['stk_rt_1']);
@@ -194,7 +203,9 @@ describe('S7 direct buy (§10.1)', () => {
 
     await press(t, 'stk_rt_1');
     expect(posts(fake)).toHaveLength(2);
-    expect(soRow(t)).toMatchObject({ status: 'placed', remote_order_id: '5001' });
+    // a retry is a NEW row (review S7); the failed one is closed so it can't be retried twice
+    expect(soRow(t, 1).status).toBe('cancelled');
+    expect(soRow(t, 2)).toMatchObject({ status: 'placed', remote_order_id: '5001', purpose: 'stock' });
     await press(t, 'stk_rt_1'); // not failed any more
     expect(posts(fake)).toHaveLength(2);
   });
@@ -206,7 +217,7 @@ describe('S7 direct buy (§10.1)', () => {
       fake.state.postQueue.push({ status, body: { detail } });
       t.tg.reset();
       await toConfirm(t, sid, 1);
-      await press(t, buyOk(sid, ref, 1));
+      await press(t, buyOk(t, sid, ref, 1));
       const msg = t.tg.of('sendMessage', ADMIN.id).map((c) => c.payload).find((p) => p.text.includes('❌'))!;
       expect(msg.text).toContain(text);
       expect(callbackDataOf(msg)).toHaveLength(1);
@@ -218,7 +229,7 @@ describe('S7 direct buy (§10.1)', () => {
   it('a supplier final failure after placing is told to the requester only', async () => {
     const { t, fake, sid } = await shop();
     const ref = await toConfirm(t, sid, 1);
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     fake.state.orders['5001'] = { ok: true, order_id: 5001, status: 'failed', price: '5.28', accounts: [] };
     t.tg.reset();
     await at(t, iso('09:52'));
@@ -231,7 +242,7 @@ describe('S7 direct buy (§10.1)', () => {
   it('a completed order that returns no accounts (4 polls) tells the requester and creates no batch', async () => {
     const { t, fake, sid } = await shop();
     const ref = await toConfirm(t, sid, 1);
-    await press(t, buyOk(sid, ref, 1));
+    await press(t, buyOk(t, sid, ref, 1));
     fake.state.orders['5001'] = { ok: true, order_id: 5001, status: 'completed', price: '5.28', accounts: [] };
     for (const hhmm of ['09:52', '09:55', '10:00', '10:10', '10:20']) await at(t, iso(hhmm));
     expect(soRow(t).status).toBe('failed');
@@ -245,6 +256,6 @@ describe('S7 direct buy (§10.1)', () => {
     for (const row of t.tg.calls.flatMap((c) => c.payload.reply_markup?.inline_keyboard ?? []).flat()) {
       if (row.callback_data) expect(new TextEncoder().encode(row.callback_data).length).toBeLessThanOrEqual(64);
     }
-    expect(buyOk(sid, ref, 10).length).toBeLessThanOrEqual(64);
+    expect(buyOk(t, sid, ref, 10).length).toBeLessThanOrEqual(64);
   });
 });

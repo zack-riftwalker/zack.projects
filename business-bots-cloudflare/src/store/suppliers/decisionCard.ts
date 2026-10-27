@@ -25,8 +25,10 @@ export interface CardData {
   customerName: string;
   product: { cost_toman: number | null } | null;
   sendError: string | null;
-  /** any delivery row exists (a manual delivery can't be undone after one) */
+  /** a delivery row exists that was not diverted to stock (a manual delivery can't be undone after one) */
   hasDelivery: boolean;
+  /** the newest `unknown` supplier order of the order, whatever the order's state: it may exist at the supplier, so 🔢 is offered */
+  unknownSoId: number | null;
   sources: SourceState[];
   now: string;
 }
@@ -36,16 +38,18 @@ const LIVE = ['queued', 'placing', 'placed'];
 
 export async function loadCardData(app: StoreApp, orderId: number): Promise<CardData | null> {
   const q = (sql: string, ...args: unknown[]) => app.raw.prepare(sql).bind(...args);
-  const [o, so, c, p, d, srcs] = await app.raw.batch([
+  const [o, so, c, p, d, srcs, unk] = await app.raw.batch([
     q('SELECT * FROM orders WHERE id = ?', orderId),
     q(`SELECT so.*, sup.name AS supplier_name FROM supplier_orders so LEFT JOIN suppliers sup ON sup.id = so.supplier_id
        WHERE so.order_id = ? ORDER BY so.id DESC LIMIT 1`, orderId),
     q('SELECT display_name FROM customers WHERE telegram_id = (SELECT customer_telegram_id FROM orders WHERE id = ?)', orderId),
     q('SELECT cost_toman FROM customer_products WHERE id = (SELECT customer_product_id FROM orders WHERE id = ?)', orderId),
-    q('SELECT send_error FROM order_deliveries WHERE order_id = ? ORDER BY id DESC LIMIT 1', orderId),
+    // `live` = deliveries that were not diverted to stock (a diverted row never reached the customer and doesn't block an undo)
+    q('SELECT send_error, (SELECT COUNT(*) FROM order_deliveries WHERE order_id = ? AND diverted = 0) AS live FROM order_deliveries WHERE order_id = ? ORDER BY id DESC LIMIT 1', orderId, orderId),
     q(`SELECT sup.name AS supplier_name, s.is_enabled, sup.is_enabled AS sup_enabled, s.listed, s.oos_until
        FROM product_sources s JOIN suppliers sup ON sup.id = s.supplier_id
        WHERE s.customer_product_id = (SELECT customer_product_id FROM orders WHERE id = ?) ORDER BY s.priority, s.id`, orderId),
+    q("SELECT id FROM supplier_orders WHERE order_id = ? AND status = 'unknown' ORDER BY id DESC LIMIT 1", orderId),
   ]);
   const order = o.results[0] as Order | undefined;
   if (!order) return null;
@@ -55,7 +59,8 @@ export async function loadCardData(app: StoreApp, orderId: number): Promise<Card
     customerName: (c.results[0] as any)?.display_name ?? String(order.customer_telegram_id),
     product: (p.results[0] as any) ?? null,
     sendError: (d.results[0] as any)?.send_error ?? null,
-    hasDelivery: d.results.length > 0,
+    hasDelivery: ((d.results[0] as any)?.live ?? 0) > 0,
+    unknownSoId: (unk.results[0] as any)?.id ?? null,
     sources: srcs.results as SourceState[],
     now: tehranDateTime(app.apps.now()),
   };
@@ -110,6 +115,9 @@ export function cardRows(d: CardData): InlineButton[][] {
   // money may already be spent (or a delivery waits): buying from another source would buy twice
   const inFlight = so !== null && ['placing', 'placed', 'completed'].includes(so.status);
   const rows: InlineButton[][] = [];
+  // an unknown supplier order may exist at the supplier whatever happened to the store order since (🙋, 📦, ✍️, cancel…)
+  const rid = cb('🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم', 'fo_rid_' + id);
+  const unknown = reason === 'unknown' || d.unknownSoId !== null;
   const retry = cb(reason === 'approval' ? '✅ تأیید و خرید' : '🔁 تلاش دوباره', 'fo_retry_' + id);
   const src = cb('🔀 خرید از منبع دیگر', 'fo_src_' + id);
   const stock = cb('📦 از اکانت‌های من', 'fo_stock_' + id);
@@ -125,6 +133,7 @@ export function cardRows(d: CardData): InlineButton[][] {
     return rows;
   }
   if (o.status === 'confirmed' && o.fulfillment === 'manual_outside') {
+    if (d.unknownSoId !== null) rows.push([rid]);
     rows.push([cb('✅ تحویل شد', 'fo_done_' + id)]);
     rows.push(customerContactRow(o.customer_telegram_id, o.customer_username, id));
     if (!d.hasDelivery) rows.push([cb('↩️ برگشت به تحویل خودکار', 'fo_undo_' + id)]);
@@ -133,12 +142,13 @@ export function cardRows(d: CardData): InlineButton[][] {
   }
   if (o.status === 'confirmed' && (o.fulfillment === 'stock' || o.fulfillment === 'manual_text')) {
     // the admin's own delivery could not be sent: send it again, look at it, or give up and refund
+    if (d.unknownSoId !== null) rows.push([rid]);
     rows.push([cb('🔁 ارسال دوباره', 'fo_resend_' + id), cb('👁 نمایش اکانت', 'fo_view_' + id)], [cancel]);
   }
   if (o.status === 'confirmed' && o.fulfillment === 'supplier') {
-    if (reason === 'unknown') {
+    if (unknown) {
       // no «🔀 منبع دیگر» here: buying anywhere else could buy twice while this one may exist
-      rows.push([cb('🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم', 'fo_rid_' + id)], [cb('🔁 ثبت نشده بود؛ دوباره ثبت کن', 'fo_retry_' + id)]);
+      rows.push([rid], [cb('🔁 ثبت نشده بود؛ دوباره ثبت کن', 'fo_retry_' + id)]);
       rows.push([stock, text], [self, cancel]);
     } else if (reason === 'send_failed') {
       rows.push([cb('🔁 ارسال دوباره', 'fo_resend_' + id), cb('👁 نمایش اکانت', 'fo_view_' + id)], [self, cancel]);
@@ -237,6 +247,7 @@ export async function buildOrderCard(app: StoreApp, orderId: number): Promise<{ 
 
   const decisionState = o.status === 'confirmed' && ['supplier', 'manual_outside', 'stock', 'manual_text'].includes(o.fulfillment ?? '');
   const rows: InlineButton[][] = decisionState ? cardRows(d) : [customerContactRow(o.customer_telegram_id, o.customer_username, o.id)];
+  if (!decisionState && d.unknownSoId !== null) rows.unshift([cb('🔢 ثبت شده بود؛ شماره‌اش را وارد می‌کنم', 'fo_rid_' + o.id)]);
   if (o.status === 'cancelled' && o.refund_status === 'pending') rows.unshift([cb('✅ بازپرداخت انجام شد', 'fo_refund_' + o.id)]);
   const tail: InlineButton[] = [];
   if (!decisionState) tail.push(cb('📜 تاریخچه', 'fo_hist_' + o.id));

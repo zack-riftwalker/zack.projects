@@ -171,8 +171,8 @@ async function startLinkFulfillment(
         await raiseNeedsAction(ctx.app, order.id, 'no_enabled_source');
         return;
       }
-      // the admin approved the purchase when the link was created: no loss guard (requested_by is not 0)
-      const soId = await queueSupplierOrder(ctx.app, order, { requestedBy: claim.approved_by });
+      // the admin approved the purchase when the link was created: that approval is the loss confirmation
+      const soId = await queueSupplierOrder(ctx.app, order, { requestedBy: claim.approved_by, lossConfirmed: true });
       if (soId !== null && ctx.app.apps.budget.remaining() >= 15) await kickSupplierOrder(ctx.app, soId);
     }
   } catch (err: any) {

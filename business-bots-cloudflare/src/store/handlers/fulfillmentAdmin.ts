@@ -7,7 +7,7 @@ import { COMPLETION_TEXT } from '../bridgeHandlers';
 import { logEvent } from '../events';
 import { buildDecisionCard, buildOrderCard, historyText } from '../suppliers/decisionCard';
 import {
-  deliverToCustomer, deliveryMessages, kickSupplierOrder, latestDelivery, queueSupplierOrder, raiseNeedsAction, recordRemoteOrderId, resendDelivery,
+  deliverToCustomer, deliveryMessages, hasLiveSupplierOrder, kickSupplierOrder, latestDelivery, queueSupplierOrder, raiseNeedsAction, recordRemoteOrderId, resendDelivery,
   sendDeliveredNotice, SOURCE_SELECT, unknownSupplierOrderId, type SourceCandRow,
 } from '../suppliers/engine';
 import {
@@ -168,12 +168,13 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
     if (order) await retryNow(ctx, order, { lossConfirmed: true });
   });
 
-  // ── 🔢 an `unknown` order that did exist: the admin types its number ──
+  // ── 🔢 an `unknown` order that did exist: the admin types its number. Whatever happened to the store order meanwhile
+  // (🙋, 📦, ✍️, cancelled…), the number is recorded: polling starts, the spend is booked and the accounts go to stock when divert=1.
   bot.callbackQuery(/^fo_rid_(\d+)$/, async (ctx) => {
     if (!(await guard(ctx))) return;
-    const order = await liveOrder(ctx, parseInt(ctx.match[1], 10));
-    if (!order) return;
-    if (order.needs_action_reason !== 'unknown') return ctx.answerCallbackQuery({ text: IMPOSSIBLE, show_alert: true });
+    const order = await ctx.app.db.getOrderById(parseInt(ctx.match[1], 10));
+    if (!order) return ctx.answerCallbackQuery({ text: '❌ سفارش یافت نشد.', show_alert: true });
+    if ((await unknownSupplierOrderId(ctx.app, order.id)) === null) return ctx.answerCallbackQuery({ text: ALREADY, show_alert: true });
     await beginSupplierInput(ctx, 'fo_rid', String(order.id));
     await ctx.answerCallbackQuery();
     await ctx.reply('🔢 شماره‌ی سفارش #' + order.id + ' را در پنل تأمین‌کننده وارد کنید (فقط عدد):', Markup.inlineKeyboard([[CANCEL_INPUT]]));
@@ -321,13 +322,12 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
     const accountId = parseInt(ctx.match[2], 10);
     const account = await loadStockAccount(ctx.app, accountId);
     if (!account?.content || account.status !== 'available') return ctx.answerCallbackQuery({ text: '❌ این اکانت دیگر آزاد نیست.', show_alert: true });
-    if (!(await claimForManualDelivery(ctx.app, order.id, 'stock', ctx.from.id, accountId))) {
-      await releaseManualClaim(ctx.app, order.id, 'stock').catch(() => {});
-      return ctx.answerCallbackQuery({ text: ALREADY, show_alert: true });
-    }
+    // refused while a supplier delivery is being sent (the order's delivery claim); nothing was changed then
+    if (!(await claimForManualDelivery(ctx.app, order.id, 'stock', ctx.from.id, accountId))) return ctx.answerCallbackQuery({ text: ALREADY, show_alert: true });
     const result = await deliverToCustomer(ctx.app, order.id, account.content, {
       kind: 'stock', stockAccountId: accountId, actor: ctx.from.id, actorName: adminName(ctx), costToman: account.unitCost,
     });
+    if (result === 'skipped') await releaseManualClaim(ctx.app, order.id, 'stock', accountId);
     await finishManualDelivery(ctx, result, '📦 از اکانت‌های من ارسال شد');
   });
 
@@ -354,6 +354,7 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
     const result = await deliverToCustomer(ctx.app, order.id, { text: String(data.text) }, {
       kind: 'manual_text', actor: ctx.from.id, actorName: adminName(ctx), costToman: null,
     });
+    if (result === 'skipped') await releaseManualClaim(ctx.app, order.id, 'manual_text');
     if (await finishManualDelivery(ctx, result, '✍️ متن اکانت ارسال شد')) await askCost(ctx, order.id);
   });
 
@@ -399,6 +400,12 @@ export function registerFulfillmentAdmin(bot: Bot<StoreContext>, isAdmin: (id: n
       await ctx.answerCallbackQuery({ text: UNKNOWN_FIRST, show_alert: true });
       await markCard(ctx, '↩️ به تحویل خودکار برگشت (سفارش نامشخص هنوز تعیین‌تکلیف نشده)');
       await raiseNeedsAction(ctx.app, order.id, 'unknown');
+      return;
+    }
+    if (soId === null && !(await hasLiveSupplierOrder(ctx.app, order.id))) {
+      // nothing was queued and nothing stands for the order: say so instead of pretending, and leave the card state alone
+      await ctx.answerCallbackQuery({ text: '⚠️ به تحویل خودکار برگشت، اما سفارش خریدی ثبت نشد. وضعیت سفارش را از /order ' + order.id + ' ببینید.', show_alert: true });
+      await raiseNeedsAction(ctx.app, order.id, 'retry_later', { header: '⚠️ سفارش #' + order.id + ' — برگشت به تحویل خودکار انجام شد ولی سفارش خریدی ثبت نشد؛ «🔁 تلاش دوباره» را بزنید.' });
       return;
     }
     await resetForNewAttempt(ctx.app, order.id);
@@ -568,8 +575,14 @@ async function finishManualDelivery(ctx: StoreContext, result: Awaited<ReturnTyp
   }
   if (result === 'send_failed') {
     await ctx.answerCallbackQuery({ text: '❌ ارسال نشد: مشتری ربات را بلاک کرده یا هرگز استارت نزده. کارت تحویل‌نشده برایتان آمد.', show_alert: true });
+  } else if (result === 'deferred') {
+    // saved: the cron sends it within minutes through the same claim
+    await ctx.answerCallbackQuery({ text: '⏳ ارسال در صف است و تا دقایقی دیگر برای مشتری فرستاده می‌شود.', show_alert: true });
+    await markCard(ctx, '⏳ ارسال در صف است');
+  } else if (result === 'busy') {
+    await ctx.answerCallbackQuery({ text: ALREADY, show_alert: true });
   } else {
-    await ctx.answerCallbackQuery({ text: IMPOSSIBLE, show_alert: true });
+    await ctx.answerCallbackQuery({ text: IMPOSSIBLE + ' اکانت آزاد شد و سفارش دست‌نخورده ماند.', show_alert: true });
   }
   return false;
 }

@@ -35,4 +35,5 @@ export interface StoreSession extends SceneSession {
   supplierWizard?: { step: string; data: Record<string, any>; at?: number } | null;
 }
 
-export type StoreContext = Context & SessionFlavor<StoreSession> & WizardFlavor & { app: StoreApp };
+/** `flushSession` saves the session NOW (a handler that does slow work after changing it must not leave a stale copy for a queued second tap). */
+export type StoreContext = Context & SessionFlavor<StoreSession> & WizardFlavor & { app: StoreApp; flushSession(): Promise<void> };
