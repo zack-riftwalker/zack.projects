@@ -184,12 +184,12 @@ describe('gemini: decoded vector cache', () => {
     q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([1, 0, 0]), a);
     q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([0, 1, 0]), b);
     await t.send('monshi', businessMessageUpdate(CUST, 'سوال اول تستی'));
-    expect(g.generateCalls()[0].body.contents[0].parts[0].text).toMatch(/#1: a\n#2: b/);
+    expect(g.generateCalls()[0].body.contents[0].parts[0].text).toMatch(/#1: a\n   پاسخ: A\n#2: b/);
     // vectors swap (e.g. re-embedded by a new model); query vector is [1,0,0] → FAQ b must now rank first
     q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([0, 1, 0]), a);
     q(t.monshiDb, 'UPDATE faqs SET embedding = ? WHERE id = ?', encodeEmbedding([1, 0, 0]), b);
     await t.send('monshi', businessMessageUpdate(CUST, 'سوال دوم تستی'));
-    expect(g.generateCalls()[1].body.contents[0].parts[0].text).toMatch(/#2: b\n#1: a/);
+    expect(g.generateCalls()[1].body.contents[0].parts[0].text).toMatch(/#2: b\n   پاسخ: B\n#1: a/);
   });
 });
 

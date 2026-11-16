@@ -98,25 +98,36 @@ async function notifyAdmin(
   }
 }
 
+/**
+ * Sends an auto-reply unless the same one (replyKey) went to this chat within the repeat cooldown — claimed
+ * atomically, so a burst of identical messages gets one answer. 'repeat' = suppressed, still counts as answered;
+ * 'failed' = the send failed and the claim was released.
+ */
+async function sendAutoReplyOnce(
+  app: MonshiApp, chatId: number, messageId: number, bcid: string,
+  replyKey: string, text: string, answeredBy: string, faqId?: number,
+): Promise<'sent' | 'repeat' | 'failed'> {
+  const claim = await rules.claimAutoReply(app, chatId, replyKey);
+  if (claim) {
+    try {
+      await sendReply(app, chatId, text, bcid);
+    } catch (err: any) {
+      // the decision was right; only the send failed — don't record it as answered
+      console.error(`Failed to send ${replyKey} to chat ${chatId}`, err?.message ?? err);
+      await claim.release();
+      return 'failed';
+    }
+  }
+  await app.db.markMessageAnswered(chatId, messageId, answeredBy, faqId);
+  await markRead(app, bcid, chatId, messageId);
+  return claim ? 'sent' : 'repeat';
+}
+
 /** Generic «use the sales bot» answer for price questions without an FAQ. true = handled. */
 async function sendPriceFallback(app: MonshiApp, chatId: number, messageId: number, bcid: string): Promise<boolean> {
   const fallbackText = await replaceSalesBot(app, await app.ctx.getSetting('price_fallback_message'));
   if (!fallbackText.trim()) return false;
-  if (await rules.autoReplyRecentlySent(app, chatId, 'price_fallback')) {
-    await app.db.markMessageAnswered(chatId, messageId, 'price_fallback');
-    await markRead(app, bcid, chatId, messageId);
-    return true;
-  }
-  try {
-    await sendReply(app, chatId, fallbackText, bcid);
-  } catch (err: any) {
-    // detection was right; only the send failed — stop like a failed FAQ send
-    console.error(`Failed to send price fallback to chat ${chatId}`, err?.message ?? err);
-    return true;
-  }
-  await app.db.markMessageAnswered(chatId, messageId, 'price_fallback');
-  await app.db.logAutoReply(chatId, 'price_fallback');
-  await markRead(app, bcid, chatId, messageId);
+  await sendAutoReplyOnce(app, chatId, messageId, bcid, 'price_fallback', fallbackText, 'price_fallback');
   return true;
 }
 
@@ -124,14 +135,8 @@ async function sendPriceFallback(app: MonshiApp, chatId: number, messageId: numb
 async function tryOrderStatusReply(app: MonshiApp, chatId: number, messageId: number, bcid: string): Promise<boolean> {
   const order = await app.db.getLatestOpenOrderForChat(chatId);
   if (!order) return false;
-  try {
-    await sendReply(app, chatId, orders.statusText(order), bcid);
-  } catch (err: any) {
-    console.error(`Failed to send order status to chat ${chatId}`, err?.message ?? err);
-    return true;
-  }
-  await app.db.markMessageAnswered(chatId, messageId, 'order_status');
-  await markRead(app, bcid, chatId, messageId);
+  // keyed by status: asking again repeats nothing until the order actually moves
+  await sendAutoReplyOnce(app, chatId, messageId, bcid, `order:${order.id}:${order.status}`, orders.statusText(order), 'order_status');
   return true;
 }
 
@@ -243,9 +248,10 @@ async function autoRespond(
     if (route === 'answer') {
       matchedFaq = geminiResult.faq;
     } else if (route === 'handoff') {
-      // mid-band confidence doesn't always mean «no FAQ»: a firm keyword match beats a handoff
+      // mid-band confidence doesn't always mean «no FAQ»: a firm keyword match on the FAQ Gemini picked confirms it.
+      // An explicit HUMAN_HANDOFF (complaint, refund…) is never overridden — keywords can't read intent.
       const keywordMatch = faq.findBestMatch(text, await app.ctx.getEnabledFaqs());
-      if (keywordMatch) {
+      if (keywordMatch && keywordMatch.faq.id === geminiResult.faq?.id) {
         matchedFaq = keywordMatch.faq;
       } else {
         // price question without an FAQ → point to the sales bot instead of notifying the owner
@@ -277,23 +283,9 @@ async function autoRespond(
 
   if (matchedFaq) {
     const replyKey = `faq:${matchedFaq.id}`;
-    if (await rules.autoReplyRecentlySent(app, chatId, replyKey)) {
-      // the same answer just went to this chat — a repeated question must not be answered twice
-      await app.db.markMessageAnswered(chatId, msg.message_id, 'faq', matchedFaq.id);
-      await markRead(app, bcid, chatId, msg.message_id);
-      return false;
+    if ((await sendAutoReplyOnce(app, chatId, msg.message_id, bcid, replyKey, matchedFaq.answer, 'faq', matchedFaq.id)) === 'sent') {
+      await app.db.incrementFaqHit(matchedFaq.id);
     }
-    try {
-      await sendReply(app, chatId, matchedFaq.answer, bcid);
-    } catch (err: any) {
-      // the match was right and only the send failed — don't record as unanswered or send an ack
-      console.error(`Failed to send FAQ answer to chat ${chatId}`, err?.message ?? err);
-      return false;
-    }
-    await app.db.markMessageAnswered(chatId, msg.message_id, 'faq', matchedFaq.id);
-    await app.db.incrementFaqHit(matchedFaq.id);
-    await app.db.logAutoReply(chatId, replyKey);
-    await markRead(app, bcid, chatId, msg.message_id);
     return false;
   }
 

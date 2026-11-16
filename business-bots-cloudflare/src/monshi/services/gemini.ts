@@ -35,6 +35,9 @@ action را ORDER_STATUS بگذار و faq_id را خالی بگذار.
 اگر پاسخ دقیق در FAQها وجود ندارد و سوال سفارش هم نیست، HUMAN_HANDOFF را انتخاب کن.
 اگر پیام درباره پرداخت ناموفق، شکایت، رمز عبور، کد ورود یا مشکل امنیتی است،
 همیشه HUMAN_HANDOFF را انتخاب کن.
+هر FAQ با خلاصه پاسخش آمده؛ فقط وقتی FAQ_ANSWER بده که همان پاسخ واقعاً جواب سوال مشتری باشد،
+نه اینکه فقط کلمه‌های مشترک داشته باشند. اگر شک داری، confidence را پایین بده.
+اگر پیام فقط سلام، تشکر، احوال‌پرسی، تایید کوتاه (مثل «باشه»، «اوکی») یا ایموجی است و سوالی ندارد، IGNORE را انتخاب کن.
 از گفت‌وگوی اخیر (در صورت ارائه) فقط برای فهم منظور واقعی مشتری استفاده کن؛
 همچنان فقط باید یکی از FAQهای ارائه‌شده را انتخاب کنی، نه چیز دیگری.
 
@@ -226,7 +229,8 @@ async function generate(app: MonshiApp, model: string, prompt: string): Promise<
 }
 
 async function classify(app: MonshiApp, text: string, candidates: FaqRow[], historyText = ''): Promise<FaqDecision> {
-  const listing = candidates.map((r) => `#${r.id}: ${r.question}`).join('\n');
+  // the answer snippet lets the model check the FAQ really answers the question, not just shares words with it
+  const listing = candidates.map((r) => `#${r.id}: ${r.question}\n   پاسخ: ${r.answer.slice(0, 160).replace(/\s+/g, ' ')}`).join('\n');
   const historyBlock = historyText ? `گفت‌وگوی اخیر (قدیم به جدید):\n${historyText}\n\n` : '';
   const prompt = `${historyBlock}سوال جدید مشتری: ${text}\n\nFAQهای نزدیک:\n${listing}`;
   const model = await activeGenerationModel(app);

@@ -64,6 +64,18 @@ export async function autoReplyRecentlySent(app: MonshiApp, chatId: number, repl
   return app.apps.now().getTime() - Date.parse(sentAt) < cooldown * 3600 * 1000;
 }
 
+/**
+ * Claims the right to send this auto-reply (same cooldown as autoReplyRecentlySent, but race-free).
+ * null = it went out recently, stay quiet; otherwise send it and call `release` if the send fails.
+ */
+export async function claimAutoReply(app: MonshiApp, chatId: number, replyKey: string): Promise<{ release: () => Promise<void> } | null> {
+  const previous = await app.db.getAutoReplySentAt(chatId, replyKey);
+  const cooldown = parseFloat((await app.ctx.getSetting('faq_repeat_cooldown_hours')) || '1');
+  const cutoff = utcIsoNow(new Date(app.apps.now().getTime() - cooldown * 3600 * 1000));
+  if (!(await app.db.claimAutoReply(chatId, replyKey, cutoff))) return null;
+  return { release: () => app.db.restoreAutoReply(chatId, replyKey, previous) };
+}
+
 /** ISO cutoff before which a previous "received" ack no longer counts (now − ack cooldown). */
 export async function ackCutoffIso(app: MonshiApp): Promise<string> {
   const cooldown = parseFloat((await app.ctx.getSetting('ack_cooldown_hours')) || '8');

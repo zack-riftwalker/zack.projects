@@ -180,6 +180,25 @@ export class MonshiDb {
     return row ? row.sent_at : null;
   }
 
+  /**
+   * Atomically marks this reply as sent unless it already went out after cutoffIso. true = this caller may send it;
+   * concurrent webhooks for a burst of identical messages can't both win.
+   */
+  async claimAutoReply(chatId: number, replyKey: string, cutoffIso: string): Promise<boolean> {
+    const r = await this.q(
+      'INSERT INTO reply_log (chat_id, reply_key, sent_at) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(chat_id, reply_key) DO UPDATE SET sent_at = excluded.sent_at WHERE reply_log.sent_at < ?',
+      chatId, replyKey, utcIsoNow(), cutoffIso,
+    ).run();
+    return r.meta.changes === 1;
+  }
+
+  /** Undoes a claim whose send failed (previous = the sent_at before the claim, null = there was none). */
+  async restoreAutoReply(chatId: number, replyKey: string, previous: string | null): Promise<void> {
+    if (previous === null) await this.q('DELETE FROM reply_log WHERE chat_id = ? AND reply_key = ?', chatId, replyKey).run();
+    else await this.q('UPDATE reply_log SET sent_at = ? WHERE chat_id = ? AND reply_key = ?', previous, chatId, replyKey).run();
+  }
+
   // ── messages ────────────────────────────────────────────────────────────
   /** The new row's id; 0 = duplicate (already stored). */
   async saveMessage(chatId: number, telegramMessageId: number, direction: string, messageType: string, text: string | null | undefined, bcid: string | null): Promise<number> {
