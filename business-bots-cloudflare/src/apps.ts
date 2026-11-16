@@ -54,6 +54,13 @@ export function createApps(env: Env, deps: Deps = {}): Apps {
   const makeApi = (token: string): Api => {
     const api = deps.makeApi ? deps.makeApi(token) : new Api(token);
     installBudget(api, budget);
+    // a stale («query is too old») or repeated callback answer must never abort the button's actual work
+    api.config.use(async (prev, method, payload, signal) => {
+      const res = await prev(method, payload, signal);
+      if (res.ok || method !== 'answerCallbackQuery') return res;
+      console.warn('⚠️ answerCallbackQuery failed (ignored): ' + res.description);
+      return { ok: true, result: true as any };
+    });
     return api;
   };
   const apps: Apps = {

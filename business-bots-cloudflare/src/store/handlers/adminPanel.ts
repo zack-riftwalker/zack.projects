@@ -15,6 +15,9 @@ const LABEL = {
   manualPurchase: MANUAL_PURCHASE_LABEL,
 };
 
+/** Pressing any of these leaves a half-finished wizard instead of becoming its input. */
+export const ADMIN_PANEL_LABELS: string[] = Object.values(LABEL);
+
 export function adminPanelKeyboard() {
   return Markup.keyboard([
     [LABEL.announce, LABEL.report],

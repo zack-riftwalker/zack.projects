@@ -4,7 +4,7 @@ import type { StoreApp } from '../apps';
 import { D1SessionStorage } from '../lib/session';
 import { Stage } from '../lib/wizard';
 import { isAdminId } from './config';
-import { registerAdminPanelHandler, adminPanelKeyboard } from './handlers/adminPanel';
+import { registerAdminPanelHandler, adminPanelKeyboard, ADMIN_PANEL_LABELS } from './handlers/adminPanel';
 import { announceWizard } from './handlers/announceWizard';
 import { customerProductsWizard, customerProductsDeactivateWizard } from './handlers/customerProducts';
 import { customerProductsEditWizard } from './handlers/customerProductsEdit';
@@ -69,8 +69,8 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
     bypass: (ctx) => /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+)$/.test(ctx.callbackQuery?.data ?? ''),
-    // /start and /panel leave the wizard instead of becoming its input (e.g. a product named "/start")
-    exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? ''),
+    // /start, /panel and the panel buttons leave the wizard instead of becoming its input (e.g. a product named "/start")
+    exit: (ctx) => /^\/(start|panel)(@\w+)?(\s|$)/.test(ctx.message?.text ?? '') || ADMIN_PANEL_LABELS.includes(ctx.message?.text ?? ''),
   });
   bot.use(stage.middleware());
 
