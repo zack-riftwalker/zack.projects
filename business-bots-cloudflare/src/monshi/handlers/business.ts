@@ -12,6 +12,7 @@ import { storeCustomerSummary } from '../../bridge';
 import { customerCardLines } from '../views';
 import type { MonshiCtx } from '../types';
 import { notifyAll } from './common';
+import { isEitaaChat } from '../eitaa/client';
 
 const replaceSalesBot = async (app: MonshiApp, text: string | null) =>
   (text || '').replaceAll('{sales_bot}', (await app.ctx.getSetting('sales_bot')) || '');
@@ -69,18 +70,21 @@ async function markRead(app: MonshiApp, bcid: string, chatId: number, messageId:
   }
 }
 
-async function notifyAdmin(
+export async function notifyAdmin(
   app: MonshiApp, sender: { id: number; first_name?: string; username?: string } | undefined,
   chatId: number, messageType: string, text: string | null | undefined, reason: string,
   customer?: { first_seen_at: string | null } | null,
   suggestedFaqs: { id: number; question: string }[] = [],
 ): Promise<void> {
-  const name = sender?.first_name || 'ناشناس';
-  const link = sender?.username ? `https://t.me/${sender.username}` : sender ? `tg://user?id=${sender.id}` : '—';
+  const eitaa = isEitaaChat(chatId);
+  const name = (eitaa ? '📗 ایتا · ' : '') + (sender?.first_name || 'ناشناس');
+  const link = eitaa
+    ? (sender?.username ? `https://eitaa.com/${sender.username}` : '—')
+    : sender?.username ? `https://t.me/${sender.username}` : sender ? `tg://user?id=${sender.id}` : '—';
   const preview = text ? text.slice(0, 200) : `[${messageType}]`;
   // what the store knows about this customer (their chat id is their Telegram id) — never blocks the notification
-  const card = customerCardLines(await storeCustomerSummary(app.apps, chatId), customer, app.apps.now());
-  const canReply = !!(await app.ctx.getConnection());
+  const card = customerCardLines(eitaa ? null : await storeCustomerSummary(app.apps, chatId), customer, app.apps.now());
+  const canReply = eitaa || !!(await app.ctx.getConnection());
   const notif = `🔔 پیام نیازمند بررسی شما (${reason})\n\n👤 ${name}\n💬 ${preview}\n` + card.map((l) => l + '\n').join('') + `🔗 ${link}` +
     (canReply ? '\n↩️ برای جواب دادن، روی همین پیام Reply بزنید.' : '');
   // up to 3 FAQs that may answer it (one tap sends the answer), then the pause button: with one tap the bot

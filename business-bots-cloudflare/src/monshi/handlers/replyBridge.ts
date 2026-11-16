@@ -7,6 +7,8 @@ import { Markup } from '../../lib/markup';
 import * as rules from '../services/rules';
 import type { MonshiCtx } from '../types';
 import { adminGuard } from './common';
+import { EITAA_BCID, isEitaaChat } from '../eitaa/client';
+import { sendEitaaText } from '../eitaa/poll';
 
 const CANT_SEND_NOTE =
   'ℹ️ ربات فقط به چت‌هایی می‌تواند جواب بدهد که در ۲۴ ساعت گذشته پیام داده‌اند، و مجوز «پاسخ‌گویی» در اتصال بیزینس باید روشن باشد.';
@@ -46,6 +48,7 @@ export async function onStaffReply(ctx: MonshiCtx, next: () => Promise<void>): P
   if (!reply || ctx.message?.entities?.some((e) => e.type === 'bot_command' && e.offset === 0)) return next();
   const customerChatId = await app.db.getNotifyLink(ctx.chat!.id, reply.message_id);
   if (customerChatId === null) return next();
+  if (isEitaaChat(customerChatId)) return replyToEitaa(ctx, customerChatId);
 
   const conn = await app.ctx.getConnection();
   if (!conn) {
@@ -72,6 +75,25 @@ export async function onStaffReply(ctx: MonshiCtx, next: () => Promise<void>): P
   }
 }
 
+/** Reply bridge for an Eitaa customer: text only for now. */
+async function replyToEitaa(ctx: MonshiCtx, customerChatId: number): Promise<void> {
+  const text = ctx.message?.text;
+  if (!text) {
+    await ctx.reply('⚠️ برای مشتری‌های ایتا فعلاً فقط پیام متنی ارسال می‌شود.');
+    return;
+  }
+  let sentId: number;
+  try {
+    sentId = await sendEitaaText(ctx.app, customerChatId, text);
+  } catch (err: any) {
+    await ctx.reply('❌ پیام به مشتری ایتا نرسید.\nدلیل: ' + (err?.message ?? 'نامشخص'));
+    return;
+  }
+  await afterHumanReply(ctx.app, customerChatId, sentId, EITAA_BCID, 'text', text);
+  await ctx.app.api.setMessageReaction(ctx.chat!.id, ctx.message!.message_id, [{ type: 'emoji', emoji: '👍' }])
+    .catch(() => ctx.reply('✅ ارسال شد.').catch(() => {}));
+}
+
 /** «📚 {question}» under a handoff notification → send that FAQ's answer to the customer. */
 export const onHandoffFaqCallback = adminGuard(async (ctx) => {
   const app = ctx.app;
@@ -81,20 +103,24 @@ export const onHandoffFaqCallback = adminGuard(async (ctx) => {
   const alert = (text: string) => ctx.answerCallbackQuery({ text, show_alert: true });
 
   if (!faq || !faq.enabled) return void (await alert('❌ این FAQ دیگر فعال نیست.'));
-  const conn = await app.ctx.getConnection();
-  if (!conn) return void (await alert('❌ اتصال بیزینس فعال نیست.'));
+  const eitaa = isEitaaChat(customerChatId);
+  const conn = eitaa ? null : await app.ctx.getConnection();
+  if (!eitaa && !conn) return void (await alert('❌ اتصال بیزینس فعال نیست.'));
+  const bcid = conn?.business_connection_id ?? EITAA_BCID;
   // claimed before sending: two staff tapping at once can't both send it
   const claim = await rules.claimAutoReply(app, customerChatId, 'faq:' + faq.id);
   if (!claim) return void (await alert('ℹ️ این جواب همین الان برای مشتری ارسال شده.'));
 
   let sentId: number;
   try {
-    sentId = (await app.api.sendMessage(customerChatId, faq.answer, { business_connection_id: conn.business_connection_id })).message_id;
+    sentId = eitaa
+      ? await sendEitaaText(app, customerChatId, faq.answer)
+      : (await app.api.sendMessage(customerChatId, faq.answer, { business_connection_id: bcid })).message_id;
   } catch (err: any) {
     await claim.release();
-    return void (await alert('❌ پیام به مشتری نرسید. فقط به چت‌هایی که در ۲۴ ساعت گذشته پیام داده‌اند می‌توان جواب داد.'));
+    return void (await alert(eitaa ? '❌ پیام به مشتری ایتا نرسید.' : '❌ پیام به مشتری نرسید. فقط به چت‌هایی که در ۲۴ ساعت گذشته پیام داده‌اند می‌توان جواب داد.'));
   }
-  await afterHumanReply(app, customerChatId, sentId, conn.business_connection_id, 'text', faq.answer);
+  await afterHumanReply(app, customerChatId, sentId, bcid, 'text', faq.answer);
   await app.db.incrementFaqHit(faq.id);
 
   await ctx.answerCallbackQuery('✅ ارسال شد');

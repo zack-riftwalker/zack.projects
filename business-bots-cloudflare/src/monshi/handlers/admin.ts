@@ -107,6 +107,7 @@ export const HELP_TEXT =
   '/faq_list /faq_add /faq_edit <شماره> /faq_disable <شماره> /faq_enable <شماره>\n' +
   '/order_add /orders\n' +
   '/gemini_status /gemini_toggle /set_threshold faq|handoff <عدد>\n' +
+  '/eitaa — اتصال منشی به ایتا\n' +
   '/cancel — لغو ویزارد در حال انجام';
 
 export async function cmdStart(ctx: MonshiCtx): Promise<void> {

@@ -5,6 +5,7 @@ import { tehranParts, utcIsoNow } from './lib/time';
 import { processBroadcastBatch } from './store/broadcast';
 import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
+import { pollEitaa } from './monshi/eitaa/poll';
 import { checkStalledOrders, sendReminders } from './store/scheduler';
 import { sweepReferralRewards } from './store/referrals';
 
@@ -22,6 +23,12 @@ async function guarded(name: string, fn: () => Promise<void>): Promise<void> {
 export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {}): Promise<void> {
   const apps = createApps(env, deps);
   const t = tehranParts(now);
+
+  // Monshi on Eitaa: pull new private messages first (it shares this tick's budget)
+  if (apps.monshi) {
+    const monshi = apps.monshi;
+    await guarded('eitaa-poll', () => pollEitaa(monshi));
+  }
 
   // Monshi: forget old «reply to a notification» links once a day (04:xx Tehran)
   if (apps.monshi && t.hour === 4) {

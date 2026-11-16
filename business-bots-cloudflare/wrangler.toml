@@ -1,6 +1,7 @@
 name = "business-bots"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]  # node:zlib for Eitaa gzip responses
 
 [triggers]
 crons = ["* * * * *"]

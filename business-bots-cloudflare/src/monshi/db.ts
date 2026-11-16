@@ -172,6 +172,18 @@ export class MonshiDb {
     await this.q('DELETE FROM notify_links WHERE created_at < ?', cutoffIso).run();
   }
 
+  // ── eitaa_peers ─────────────────────────────────────────────────────────
+  async saveEitaaPeer(userId: string, accessHash: string): Promise<void> {
+    await this.q(
+      'INSERT INTO eitaa_peers (user_id, access_hash, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET access_hash = excluded.access_hash, updated_at = excluded.updated_at',
+      userId, accessHash, utcIsoNow(),
+    ).run();
+  }
+
+  async getEitaaAccessHash(userId: string): Promise<string | null> {
+    return (await this.q('SELECT access_hash FROM eitaa_peers WHERE user_id = ?', userId).first<{ access_hash: string }>())?.access_hash ?? null;
+  }
+
   // ── reply_log ───────────────────────────────────────────────────────────
   async logAutoReply(chatId: number, replyKey: string): Promise<void> {
     await this.q(

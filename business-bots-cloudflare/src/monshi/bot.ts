@@ -10,6 +10,7 @@ import { onNotifyStart, onWizardCancel } from './handlers/common';
 import * as replyBridge from './handlers/replyBridge';
 import * as faqAdmin from './handlers/faqAdmin';
 import * as orderAdmin from './handlers/orderAdmin';
+import * as eitaaAdmin from './handlers/eitaaAdmin';
 import type { MonshiCtx, MonshiSession } from './types';
 
 /**
@@ -99,6 +100,10 @@ export function createMonshiBot(app: MonshiApp, botInfo: UserFromGetMe): Bot<Mon
     ['gemini_status', admin.cmdGeminiStatus],
     ['gemini_toggle', admin.cmdGeminiToggle],
     ['set_threshold', admin.cmdSetThreshold],
+    ['eitaa', eitaaAdmin.cmdEitaa],
+    ['eitaa_login', eitaaAdmin.cmdEitaaLogin],
+    ['eitaa_code', eitaaAdmin.cmdEitaaCode],
+    ['eitaa_logout', eitaaAdmin.cmdEitaaLogout],
   ];
   for (const [name, handler] of commands) owner.command(name, async (ctx) => { await handler(ctx); });
 
