@@ -249,13 +249,15 @@ async function classify(app: MonshiApp, text: string, candidates: FaqRow[], hist
  * Gemini's decision plus the matching FAQ row (if any); null when disabled or on any
  * error (the caller must silently fall back to keyword matching).
  */
-export async function getDecision(app: MonshiApp, text: string, chatId: number): Promise<{ decision: FaqDecision; faq: FaqRow | null; candidates: FaqRow[] } | null> {
+export async function getDecision(
+  app: MonshiApp, text: string, chatId: number, messageRowId: number,
+): Promise<{ decision: FaqDecision; faq: FaqRow | null; candidates: FaqRow[] } | null> {
   if (!(await isEnabled(app)) || !text) return null;
   let candidates: FaqRow[];
   let decision: FaqDecision;
   try {
-    // The current message is already stored; the last row is it → drop it from history
-    const history = (await app.db.getRecentMessages(chatId, HISTORY_LOOKBACK + 1)).slice(0, -1);
+    // only what came before the current message (a greeting stored after it must not shift the window)
+    const history = await app.db.getMessagesBefore(chatId, messageRowId, HISTORY_LOOKBACK);
     const historyText = formatHistory(history);
 
     // Very short messages («چقدر شد؟») are weak for semantic search → prepend the previous customer message

@@ -83,18 +83,18 @@ export const onHandoffFaqCallback = adminGuard(async (ctx) => {
   if (!faq || !faq.enabled) return void (await alert('❌ این FAQ دیگر فعال نیست.'));
   const conn = await app.ctx.getConnection();
   if (!conn) return void (await alert('❌ اتصال بیزینس فعال نیست.'));
-  if (await rules.autoReplyRecentlySent(app, customerChatId, 'faq:' + faq.id)) {
-    return void (await alert('ℹ️ این جواب همین الان برای مشتری ارسال شده.'));
-  }
+  // claimed before sending: two staff tapping at once can't both send it
+  const claim = await rules.claimAutoReply(app, customerChatId, 'faq:' + faq.id);
+  if (!claim) return void (await alert('ℹ️ این جواب همین الان برای مشتری ارسال شده.'));
 
   let sentId: number;
   try {
     sentId = (await app.api.sendMessage(customerChatId, faq.answer, { business_connection_id: conn.business_connection_id })).message_id;
   } catch (err: any) {
+    await claim.release();
     return void (await alert('❌ پیام به مشتری نرسید. فقط به چت‌هایی که در ۲۴ ساعت گذشته پیام داده‌اند می‌توان جواب داد.'));
   }
   await afterHumanReply(app, customerChatId, sentId, conn.business_connection_id, 'text', faq.answer);
-  await app.db.logAutoReply(customerChatId, 'faq:' + faq.id);
   await app.db.incrementFaqHit(faq.id);
 
   await ctx.answerCallbackQuery('✅ ارسال شد');

@@ -95,6 +95,11 @@ export class MonshiDb {
     ).first();
   }
 
+  /** A stored connection by id, enabled or not (lets a disabled connection be recognised without asking Telegram). */
+  async getConnectionById(connectionId: string): Promise<{ owner_user_id: number; is_enabled: number } | null> {
+    return this.q('SELECT owner_user_id, is_enabled FROM connection WHERE business_connection_id = ?', connectionId).first();
+  }
+
   // ── customers ───────────────────────────────────────────────────────────
   async upsertCustomer(chatId: number, userId: number | null, username: string | null, firstName: string | null): Promise<{ isNew: boolean; customer: CustomerRow }> {
     const now = utcIsoNow();
@@ -216,6 +221,12 @@ export class MonshiDb {
 
   async getRecentMessages(chatId: number, limit = 6): Promise<MessageRow[]> {
     const rows = (await this.q('SELECT direction, text, message_type FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?', chatId, limit).all<MessageRow>()).results;
+    return rows.reverse();
+  }
+
+  /** The `limit` messages of this chat stored before row `beforeRowId`, oldest first. */
+  async getMessagesBefore(chatId: number, beforeRowId: number, limit: number): Promise<MessageRow[]> {
+    const rows = (await this.q('SELECT direction, text, message_type FROM messages WHERE chat_id = ? AND id < ? ORDER BY id DESC LIMIT ?', chatId, beforeRowId, limit).all<MessageRow>()).results;
     return rows.reverse();
   }
 

@@ -151,10 +151,16 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   const sender = msg.from;
   const ownerId = app.cfg.adminId;
   const conn = await app.ctx.getConnection();
+  // A disabled connection of the owner: store and forward the message, but never auto-reply through it.
+  let connectionDisabled = false;
   // Self-heal: the connection event may have been missed (e.g. the account was connected from the profile
   // settings before this webhook existed). Every business message carries the connection id → fetch it,
   // and keep it only if it belongs to the owner. Messages from anyone else's account are ignored entirely.
-  if (!conn || conn.business_connection_id !== bcid) {
+  const known = !conn || conn.business_connection_id !== bcid ? await app.db.getConnectionById(bcid) : null;
+  if (known && known.owner_user_id === ownerId && !known.is_enabled) {
+    // already known as disabled → no Telegram lookup per message; a business_connection update re-enables it
+    connectionDisabled = true;
+  } else if (!conn || conn.business_connection_id !== bcid) {
     let bc;
     try {
       bc = await app.api.getBusinessConnection(bcid);
@@ -168,7 +174,8 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
     }
     await app.db.saveConnection(bc.id, bc.user.id, !!bc.is_enabled);
     app.ctx.invalidateConnection();
-    console.log(`Business connection ${bc.id} registered from a business message (user ${bc.user.id})`);
+    connectionDisabled = !bc.is_enabled;
+    console.log(`Business connection ${bc.id} registered from a business message (user ${bc.user.id}, enabled=${!connectionDisabled})`);
   }
   const messageType = rules.detectMessageType(msg);
   const text = (msg as any).text || (msg as any).caption || null;
@@ -194,7 +201,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   // otherwise a plain one after it ran (even if it threw)
   let notified = false;
   try {
-    notified = await autoRespond(app, msg, chatId, bcid, sender, messageType, text, messageRowId, isNewCustomer, customer);
+    if (!connectionDisabled) notified = await autoRespond(app, msg, chatId, bcid, sender, messageType, text, messageRowId, isNewCustomer, customer);
   } finally {
     if (!notified) await notifyAdmin(app, sender, chatId, messageType, text, 'پیام جدید', customer);
   }
@@ -240,7 +247,7 @@ async function autoRespond(
   // 4.5) FAQ matching — works inside and outside business hours.
   // Gemini first (if enabled); on any error or uncertainty silently fall back to keywords.
   let matchedFaq: Awaited<ReturnType<MonshiApp['db']['getFaq']>> = null;
-  const geminiResult = text ? await gemini.getDecision(app, text, chatId) : null;
+  const geminiResult = text ? await gemini.getDecision(app, text, chatId, messageRowId) : null;
   if (geminiResult) {
     const faqThreshold = parseFloat((await app.ctx.getSetting('faq_threshold')) || '0.82');
     const handoffThreshold = parseFloat((await app.ctx.getSetting('human_handoff_threshold')) || '0.68');
@@ -249,13 +256,15 @@ async function autoRespond(
       matchedFaq = geminiResult.faq;
     } else if (route === 'handoff') {
       // mid-band confidence doesn't always mean «no FAQ»: a firm keyword match on the FAQ Gemini picked confirms it.
-      // An explicit HUMAN_HANDOFF (complaint, refund…) is never overridden — keywords can't read intent.
-      const keywordMatch = faq.findBestMatch(text, await app.ctx.getEnabledFaqs());
+      // An explicit HUMAN_HANDOFF (complaint, refund…) is never answered automatically, whatever faq_id says —
+      // keywords can't read intent.
+      const midBand = geminiResult.decision.action === 'FAQ_ANSWER';
+      const keywordMatch = midBand ? faq.findBestMatch(text, await app.ctx.getEnabledFaqs()) : null;
       if (keywordMatch && keywordMatch.faq.id === geminiResult.faq?.id) {
         matchedFaq = keywordMatch.faq;
       } else {
-        // price question without an FAQ → point to the sales bot instead of notifying the owner
-        if (text && faq.isPriceQuery(normalizeText(text))) {
+        // mid-band price question without an FAQ → point to the sales bot instead of notifying the owner
+        if (midBand && text && faq.isPriceQuery(normalizeText(text))) {
           if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return false;
         }
         await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
