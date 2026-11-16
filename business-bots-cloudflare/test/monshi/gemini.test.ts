@@ -70,13 +70,13 @@ describe('gemini: pipeline', () => {
     expect(t.tg.texts(OWNER.id).at(-1)).toContain('نیازمند بررسی انسانی (تشخیص Gemini)');
   });
 
-  it('HUMAN_HANDOFF on a price question without FAQ → sales-bot referral instead of a notification', async () => {
+  it('HUMAN_HANDOFF on a price question without FAQ → sales-bot referral instead of a handoff', async () => {
     const g = fakeGemini({ decisions: [{ action: 'HUMAN_HANDOFF', faq_id: null, confidence: 0.9 }] });
     const t = await setup(g);
     addFaq(t, { question: 'x', answer: 'y', keywords: 'ایکس' });
     await t.send('monshi', businessMessageUpdate(CUST, 'قیمت اکانت پرو چنده؟'));
     expect(answeredBy(t, CUST.id)).toEqual(['price_fallback']);
-    expect(t.tg.texts(OWNER.id)).toHaveLength(0);
+    expect(t.tg.texts(OWNER.id)).toEqual([expect.stringContaining('(پیام جدید)')]); // plain copy, not a handoff
   });
 
   it('ORDER_STATUS with an open order → status text; without one → normal flow continues', async () => {

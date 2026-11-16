@@ -185,14 +185,30 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   const messageRowId = await app.db.saveMessage(chatId, msg.message_id, 'in', messageType, text, bcid);
   if (!messageRowId) return; // duplicate
 
+  // every customer message reaches the owner's bot chat once: a handoff notification if the pipeline sends one,
+  // otherwise a plain one after it ran (even if it threw)
+  let notified = false;
+  try {
+    notified = await autoRespond(app, msg, chatId, bcid, sender, messageType, text, messageRowId, isNewCustomer, customer);
+  } finally {
+    if (!notified) await notifyAdmin(app, sender, chatId, messageType, text, 'پیام جدید', customer);
+  }
+}
+
+/** Steps 3–6: automatic handling of a stored customer message. true = a handoff notification was already sent. */
+async function autoRespond(
+  app: MonshiApp, msg: NonNullable<MonshiCtx['businessMessage']>, chatId: number, bcid: string,
+  sender: NonNullable<MonshiCtx['businessMessage']>['from'], messageType: string, text: string | null,
+  messageRowId: number, isNewCustomer: boolean, customer: Awaited<ReturnType<MonshiApp['db']['upsertCustomer']>>['customer'],
+): Promise<boolean> {
   // 3) automation off or chat paused → store only
-  if (!(await rules.isAutomationEnabled(app)) || rules.isChatPaused(customer, app.apps.now())) return;
+  if (!(await rules.isAutomationEnabled(app)) || rules.isChatPaused(customer, app.apps.now())) return false;
 
   // 4) silence rule: media / sensitive content → notify the owner, no reply
   if (rules.isSensitive(text, messageType)) {
     await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
     await notifyAdmin(app, sender, chatId, messageType, text, 'حساس/مدیا', customer);
-    return;
+    return true;
   }
 
   // 4.2) welcome a new customer — once per chat, regardless of business hours.
@@ -234,17 +250,17 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
       } else {
         // price question without an FAQ → point to the sales bot instead of notifying the owner
         if (text && faq.isPriceQuery(normalizeText(text))) {
-          if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;
+          if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return false;
         }
         await app.db.markMessageAnswered(chatId, msg.message_id, 'handoff');
         const suggestions = geminiResult.candidates.length
           ? geminiResult.candidates
           : faq.topMatches(text, await app.ctx.getEnabledFaqs(), 3);
         await notifyAdmin(app, sender, chatId, messageType, text, 'نیازمند بررسی انسانی (تشخیص Gemini)', customer, suggestions);
-        return;
+        return true;
       }
     } else if (route === 'order_status') {
-      if (await tryOrderStatusReply(app, chatId, msg.message_id, bcid)) return;
+      if (await tryOrderStatusReply(app, chatId, msg.message_id, bcid)) return false;
       // no open order → quietly continue the normal flow
     }
   }
@@ -256,7 +272,7 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
 
   // keyword fallback when Gemini was off/failed or did not detect order_status
   if (matchedFaq === null && text && orders.looksLikeOrderQuery(normalizeText(text))) {
-    if (await tryOrderStatusReply(app, chatId, msg.message_id, bcid)) return;
+    if (await tryOrderStatusReply(app, chatId, msg.message_id, bcid)) return false;
   }
 
   if (matchedFaq) {
@@ -265,20 +281,20 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
       // the same answer just went to this chat — a repeated question must not be answered twice
       await app.db.markMessageAnswered(chatId, msg.message_id, 'faq', matchedFaq.id);
       await markRead(app, bcid, chatId, msg.message_id);
-      return;
+      return false;
     }
     try {
       await sendReply(app, chatId, matchedFaq.answer, bcid);
     } catch (err: any) {
       // the match was right and only the send failed — don't record as unanswered or send an ack
       console.error(`Failed to send FAQ answer to chat ${chatId}`, err?.message ?? err);
-      return;
+      return false;
     }
     await app.db.markMessageAnswered(chatId, msg.message_id, 'faq', matchedFaq.id);
     await app.db.incrementFaqHit(matchedFaq.id);
     await app.db.logAutoReply(chatId, replyKey);
     await markRead(app, bcid, chatId, msg.message_id);
-    return;
+    return false;
   }
 
   // no match → record for repeated-unanswered detection
@@ -286,17 +302,17 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
     await app.db.recordUnanswered(chatId, text, normalizeText(text), messageRowId);
     // price question without an FAQ → point to the sales bot
     if (faq.isPriceQuery(normalizeText(text))) {
-      if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return;
+      if (await sendPriceFallback(app, chatId, msg.message_id, bcid)) return false;
     }
   }
 
   // 5) inside business hours → the owner is awake; store only
-  if (hours.isBusinessHours(await app.ctx.getBusinessHours(), app.apps.now())) return;
+  if (hours.isBusinessHours(await app.ctx.getBusinessHours(), app.apps.now())) return false;
 
   // 6) after hours → «received» ack with cooldown. Claimed atomically so two
   //    concurrent webhooks can't both send it.
   const previousAck = customer.last_ack_sent_at;
-  if (!(await app.db.claimAck(chatId, await rules.ackCutoffIso(app)))) return;
+  if (!(await app.db.claimAck(chatId, await rules.ackCutoffIso(app)))) return false;
 
   const ackText = await replaceSalesBot(app, await app.ctx.getSetting('after_hours_message'));
   try {
@@ -304,9 +320,10 @@ export async function onBusinessMessage(ctx: MonshiCtx): Promise<void> {
   } catch (err: any) {
     console.error(`Failed to send after-hours ack to chat ${chatId}`, err?.message ?? err);
     await app.db.restoreAck(chatId, previousAck);
-    return;
+    return false;
   }
 
   await app.db.markMessageAnswered(chatId, msg.message_id, 'ack');
   await markRead(app, bcid, chatId, msg.message_id);
+  return false;
 }

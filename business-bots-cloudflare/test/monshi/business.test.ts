@@ -161,6 +161,23 @@ describe('monshi: pipeline', () => {
     expect(alerts[0].payload.reply_markup.inline_keyboard[0][0].callback_data).toBe('pause_chat:' + CUST.id);
   });
 
+  it('every customer message reaches the owner exactly once, whatever the bot did with it', async () => {
+    const t = makeTestEnv({ store: false });
+    await connect(t);
+    setHours(t, 'open');
+    setSetting(t, 'greeting_enabled', '0');
+    addFaq(t, { question: 'ساعت کاری', answer: 'نه تا پنج', keywords: 'ساعت کاری' });
+
+    await t.send('monshi', businessMessageUpdate(CUST, 'ساعت کاری چنده؟')); // FAQ answered
+    await t.send('monshi', businessMessageUpdate(CUST, 'یه سوال عجیب دارم')); // unanswered, business hours
+    await t.send('monshi', businessMessageUpdate(CUST, 'رسید پرداخت رو فرستادم')); // sensitive → handoff only
+    const owner = t.tg.texts(OWNER.id);
+    expect(owner).toHaveLength(3);
+    expect(owner[0]).toContain('(پیام جدید)');
+    expect(owner[1]).toContain('یه سوال عجیب دارم');
+    expect(owner[2]).toContain('(حساس/مدیا)');
+  });
+
   it('automation switched off → store only', async () => {
     const t = makeTestEnv({ store: false });
     await connect(t);
