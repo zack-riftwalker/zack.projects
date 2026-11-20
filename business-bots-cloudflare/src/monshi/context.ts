@@ -46,6 +46,12 @@ export class MonshiContext {
     this.state.delete(key);
   }
 
+  /** Keeps the per-request cache in step with a row written directly through db (null = row is gone). */
+  cacheState(key: string, value: string | null): void {
+    if (value === null) this.state.delete(key);
+    else this.state.set(key, value);
+  }
+
   async getEnabledFaqs(): Promise<FaqRow[]> {
     if (!this.faqs) this.faqs = await this.db.getEnabledFaqs();
     return this.faqs;

@@ -6,6 +6,7 @@ import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, clearWizardStates, safeEdit } from './common';
 import { deliverOrder } from './bridge';
 import { monshiOrderCancelled } from '../../bridge';
+import { isEitaaChat } from '../eitaa/client';
 
 const customerLabel = (c: CustomerRow) => c.first_name || c.username || String(c.chat_id);
 
@@ -136,6 +137,11 @@ export async function onOrderFreeText(ctx: MonshiCtx): Promise<boolean> {
       : /^-?\d+$/.test(text) ? await ctx.app.db.getCustomer(parseInt(text, 10)) : null;
     if (!customer) {
       await ctx.reply('❌ مشتری‌ای با این مشخصات پیدا نشد. دوباره امتحان کن یا از دکمه‌ها استفاده کن:', await pickCustomerKeyboard(ctx));
+      return true;
+    }
+    if (isEitaaChat(customer.chat_id)) {
+      // orders (checklist, status and delivery messages) go out through Telegram only
+      await ctx.reply('❌ ثبت سفارش برای مشتری‌های ایتا هنوز پشتیبانی نمی‌شود. یک مشتری تلگرام انتخاب کن:', await pickCustomerKeyboard(ctx));
       return true;
     }
     data.chat_id = customer.chat_id;

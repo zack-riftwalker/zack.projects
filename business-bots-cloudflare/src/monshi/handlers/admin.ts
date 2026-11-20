@@ -168,7 +168,8 @@ export async function cmdCustomer(ctx: MonshiCtx): Promise<void> {
     await ctx.reply('❌ مشتری‌ای با این مشخصات پیدا نشد.');
     return;
   }
-  const card = customerCardLines(await storeCustomerSummary(app.apps, customer.chat_id), customer, app.apps.now());
+  // the store only knows Telegram customers (Eitaa ids are < 0)
+  const card = customerCardLines(customer.chat_id > 0 ? await storeCustomerSummary(app.apps, customer.chat_id) : null, customer, app.apps.now());
   const recent = await app.db.getRecentMessages(customer.chat_id, 5);
   const icon: Record<string, string> = { in: '👤', owner: '🧑', out: '🤖' };
   const lines = [

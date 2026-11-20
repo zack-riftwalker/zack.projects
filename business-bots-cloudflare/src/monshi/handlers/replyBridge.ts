@@ -118,7 +118,7 @@ export const onHandoffFaqCallback = adminGuard(async (ctx) => {
       : (await app.api.sendMessage(customerChatId, faq.answer, { business_connection_id: bcid })).message_id;
   } catch (err: any) {
     await claim.release();
-    return void (await alert(eitaa ? '❌ پیام به مشتری ایتا نرسید.' : '❌ پیام به مشتری نرسید. فقط به چت‌هایی که در ۲۴ ساعت گذشته پیام داده‌اند می‌توان جواب داد.'));
+    return void (await alert(eitaa ? ('❌ پیام به مشتری ایتا نرسید: ' + (err?.message ?? 'نامشخص')).slice(0, 190) : '❌ پیام به مشتری نرسید. فقط به چت‌هایی که در ۲۴ ساعت گذشته پیام داده‌اند می‌توان جواب داد.'));
   }
   await afterHumanReply(app, customerChatId, sentId, bcid, 'text', faq.answer);
   await app.db.incrementFaqHit(faq.id);

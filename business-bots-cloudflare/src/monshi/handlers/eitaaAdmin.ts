@@ -1,6 +1,7 @@
 /** Owner commands to connect Monshi to an Eitaa account: /eitaa, /eitaa_login <phone>, /eitaa_code <code>, /eitaa_logout. */
-import { API_HASH, API_ID, call, newImei } from '../eitaa/client';
-import { clearSession, loadSession, LOGIN_KEY, saveSession } from '../eitaa/session';
+import { API_HASH, API_ID, call, newImei, randomLong } from '../eitaa/client';
+import { resetCursor } from '../eitaa/poll';
+import { clearSession, loadSession, LOGIN_KEY, saveSession, type EitaaSession } from '../eitaa/session';
 import type { MonshiCtx } from '../types';
 import { commandArgs } from './common';
 
@@ -56,8 +57,14 @@ export async function cmdEitaaCode(ctx: MonshiCtx): Promise<void> {
   }
   if (auth?._ !== 'auth.authorization' || !auth.token) return void (await ctx.reply('❌ ورود ناموفق بود: ' + (auth?._ ?? 'پاسخ نامعتبر')));
   const name = [auth.user?.first_name, auth.user?.last_name].filter(Boolean).join(' ') || '—';
-  await saveSession(ctx.app, { token: auth.token, imei, me: { id: String(auth.user?.id), name } });
+  const old = await loadSession(ctx.app);
+  // don't leave the previous login active on Eitaa's side
+  if (old) await call(ctx.app, old, 'auth.logOut').catch((err) => console.warn('Eitaa logOut of the old session failed', err?.message));
+  const s: EitaaSession = { token: auth.token, imei, me: { id: String(auth.user?.id), name }, sid: randomLong() };
+  await saveSession(ctx.app, s);
   await ctx.app.ctx.deleteState(LOGIN_KEY);
+  // start from this moment (if it fails, the first poll does it)
+  await resetCursor(ctx.app, s).catch((err) => console.warn('Eitaa getState after login failed', err?.message));
   await ctx.reply(`✅ ایتا وصل شد: ${name}\nاز همین الان پیام‌های جدید ایتا اینجا می‌آید.`);
 }
 

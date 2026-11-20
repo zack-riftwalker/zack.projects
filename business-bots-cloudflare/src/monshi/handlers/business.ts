@@ -75,7 +75,7 @@ export async function notifyAdmin(
   chatId: number, messageType: string, text: string | null | undefined, reason: string,
   customer?: { first_seen_at: string | null } | null,
   suggestedFaqs: { id: number; question: string }[] = [],
-): Promise<void> {
+): Promise<number> {
   const eitaa = isEitaaChat(chatId);
   const name = (eitaa ? '📗 ایتا · ' : '') + (sender?.first_name || 'ناشناس');
   const link = eitaa
@@ -91,7 +91,8 @@ export async function notifyAdmin(
   // steps away from this chat while the owner continues by hand
   const markup = Markup.inlineKeyboard([
     ...suggestedFaqs.slice(0, 3).map((f) => [Markup.button.callback('📚 ' + f.question.slice(0, 28), `hfaq:${chatId}:${f.id}`)]),
-    [Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`)],
+    // Eitaa has no auto-replies to pause
+    ...(eitaa ? [] : [[Markup.button.callback('💤 توقف ۴ساعته ربات برای این چت', `pause_chat:${chatId}`)]]),
   ]);
   const sent = await notifyAll(app, notif, markup, 'handoff');
   // remember which customer each notification is about, so a Reply to it can be forwarded
@@ -100,6 +101,7 @@ export async function notifyAdmin(
   } catch (err: any) {
     console.warn('Could not store notification links', err?.message ?? err);
   }
+  return sent.length;
 }
 
 /**

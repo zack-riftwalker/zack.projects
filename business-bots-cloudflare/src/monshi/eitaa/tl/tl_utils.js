@@ -1,4 +1,6 @@
-// Vendored unchanged (except the node:zlib import) from github.com/ghaemifard/EitaaBun src/mtproto — Eitaa TL schema & (de)serializer.
+// Vendored from github.com/ghaemifard/EitaaBun src/mtproto — Eitaa TL schema & (de)serializer. Changed: the node:zlib
+// import, constructor lookup by Map instead of a linear scan per object (cold 100-message decode 14ms → 4ms CPU; free
+// plan allows 10ms), and no console.trace on every buffer growth (a long reply logged a stack trace).
 /*!
  * Webogram v0.7.0 - messaging web application for MTProto
  * https://github.com/zhukov/webogram
@@ -9,6 +11,19 @@ import { Specs } from './specs.js';
 
 var Config = {
   Schema: Specs
+}
+
+// id → constructor/method of a schema (a method wins over a constructor with the same id, as the old scans did)
+var idIndex = new WeakMap()
+function findById(schema, id) {
+  var map = idIndex.get(schema)
+  if (!map) {
+    map = new Map()
+    schema.constructors.forEach(function (c) { map.set(c.id, c) })
+    schema.methods.forEach(function (m) { map.set(m.id, m) })
+    idIndex.set(schema, map)
+  }
+  return map.get(id)
 }
 import { bigint, gzipUncompress, bytesToArrayBuffer, intToUint, uintToInt,bigStringInt } from "./bin_utils.js";
 
@@ -69,7 +84,6 @@ TLSerialization.prototype.checkLength = function (needBytes) {
     return
   }
 
-  console.trace('Increase buffer', this.offset, needBytes, this.maxLength)
   this.maxLength = Math.ceil(Math.max(this.maxLength * 2, this.offset + needBytes + 16) / 4) * 4
   var previousBuffer = this.buffer
   var previousArray = new Int32Array(previousBuffer)
@@ -628,37 +642,14 @@ TLDeserialization.prototype.fetchObject = function (type, field) {
       return newDeserializer.fetchObject(type, field)
     }
 
-    for (i = 0; i < schema.constructors.length; i++) {
-      if (schema.constructors[i].id == constructorCmp) {
-        constructorData = schema.constructors[i]
-      }
-    }
-    for (i = 0; i < schema.methods.length; i++) {
-      if (schema.methods[i].id == constructorCmp) {
-        constructorData = schema.methods[i]
-      }
-    }
+    constructorData = findById(schema, constructorCmp)
 
     var fallback = false
     if (!constructorData && this.mtproto) {
-      var schemaFallback = Config.Schema.API
-      for (i = 0; i < schemaFallback.constructors.length; i++) {
-        if (schemaFallback.constructors[i].id == constructorCmp) {
-          constructorData = schemaFallback.constructors[i]
-
-          delete this.mtproto
-          fallback = true
-          break
-        }
-      }
-      for (i = 0; i < schemaFallback.methods.length; i++) {
-        if (schemaFallback.methods[i].id == constructorCmp) {
-          constructorData = schemaFallback.methods[i]
-
-          delete this.mtproto
-          fallback = true
-          break
-        }
+      constructorData = findById(Config.Schema.API, constructorCmp)
+      if (constructorData) {
+        delete this.mtproto
+        fallback = true
       }
     }
     if (!constructorData) {

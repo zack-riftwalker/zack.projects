@@ -15,9 +15,8 @@ async function loggedIn(): Promise<{ t: TestEnv; e: ReturnType<typeof eitaaFake>
   e.respond('auth.sendCode', { _: 'auth.sentCode', flags: 0, type: { _: 'auth.sentCodeTypeApp', length: 5 }, phone_code_hash: 'h1' });
   e.respond('auth.signIn', { _: 'auth.authorization', flags: 0, token: 'SECRET-TOKEN', user: eUser(ME, 'پشتیبانی') });
   await t.send('monshi', textUpdate(OWNER, '/eitaa_login 09137780948'));
-  await t.send('monshi', textUpdate(OWNER, '/eitaa_code 12345'));
   e.respond('updates.getState', state(100));
-  await t.cron(); // baseline
+  await t.send('monshi', textUpdate(OWNER, '/eitaa_code 12345')); // takes the baseline right away
   t.tg.reset();
   return { t, e };
 }
@@ -182,6 +181,132 @@ describe('owner reply → Eitaa customer', () => {
     upd.message.reply_to_message = { message_id: notif, date: 0, chat: { id: OWNER.id, type: 'private' } };
     await t.send('monshi', upd);
     expect(t.tg.texts(OWNER.id).at(-1)).toContain('فقط پیام متنی');
+    expect(e.methods()).not.toContain('messages.sendMessage');
+  });
+});
+
+describe('Eitaa review fixes', () => {
+  const session = (t: TestEnv) => q(t.monshiDb, "SELECT value FROM app_state WHERE key = 'eitaa_session'")[0]?.value as string | undefined;
+
+  it('messages from Eitaa service/verified accounts and login-code texts never reach staff or the DB', async () => {
+    const { t, e } = await loggedIn();
+    const verified = { ...eUser(4242, 'ایتا'), flags: 1 | 2 | (1 << 17) };
+    e.respond('updates.getDifference', difference(101, [
+      eMsg(1, peerUser(777000), 'کد ورود شما: 12345'),
+      eMsg(2, peerUser(4242), 'اطلاعیه'),
+      eMsg(3, peerUser(CUSTOMER), 'کد ورود شما به ایتا: 54321'),
+      eMsg(4, peerUser(CUSTOMER), 'کد ۱: 4895072006'), // a customer's own codes still arrive
+    ], [eUser(777000, 'Eitaa'), verified, eUser(CUSTOMER, 'علی')]));
+    await t.cron();
+    const texts = t.tg.texts(OWNER.id);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('4895072006');
+    expect(q(t.monshiDb, 'SELECT text FROM messages').map((r) => r.text)).toEqual(['کد ۱: 4895072006']);
+  });
+
+  it('a message that reached nobody is not dropped: it is retried next minute', async () => {
+    const { t, e } = await loggedIn();
+    const d = difference(101, [eMsg(1, peerUser(CUSTOMER), 'سلام')], [eUser(CUSTOMER, 'علی')]);
+    e.respond('updates.getDifference', d, d);
+    t.tg.fail('sendMessage', () => true, 500, 'Internal Server Error', 2); // owner + notify account
+    await t.cron();
+    expect(q(t.monshiDb, 'SELECT id FROM messages')).toHaveLength(0);
+    expect(JSON.parse(session(t)!).pts).toBe(100);
+    await t.cron();
+    expect(q(t.monshiDb, 'SELECT customer_chat_id FROM notify_links')).toHaveLength(2);
+    expect(q(t.monshiDb, 'SELECT id FROM messages')).toHaveLength(1);
+    expect(JSON.parse(session(t)!).pts).toBe(101);
+  });
+
+  it('with many staff accounts a message still gets its notification links (budget is sized per recipient)', async () => {
+    const e = eitaaFake();
+    const t = makeTestEnv({ store: false, notify: '6001,6002,6003,6004,6005', fetch: e.fetch });
+    e.respond('auth.sendCode', { _: 'auth.sentCode', flags: 0, type: { _: 'auth.sentCodeTypeApp', length: 5 }, phone_code_hash: 'h1' });
+    e.respond('auth.signIn', { _: 'auth.authorization', flags: 0, token: 'T', user: eUser(ME, 'پشتیبانی') });
+    e.respond('updates.getState', state(100));
+    await t.send('monshi', textUpdate(OWNER, '/eitaa_login 09137780948'));
+    await t.send('monshi', textUpdate(OWNER, '/eitaa_code 12345'));
+    const msgs = Array.from({ length: 6 }, (_, i) => eMsg(i + 1, peerUser(CUSTOMER), 'پیام ' + (i + 1)));
+    const d = difference(110, msgs, [eUser(CUSTOMER, 'علی')]);
+    e.respond('updates.getDifference', d, d, d, d, d, d);
+    for (let i = 0; i < 6; i++) await t.cron();
+    expect(q(t.monshiDb, 'SELECT customer_chat_id FROM notify_links')).toHaveLength(6 * 6);
+  });
+
+  it('a network failure or an undecryptable token alerts the owner', async () => {
+    const { t } = await loggedIn(); // nothing queued for getDifference = the request fails
+    await t.cron(new Date('2026-11-16T10:00:00Z'));
+    expect(t.tg.texts(OWNER.id).at(-1)).toContain('اتصال منشی به ایتا خطا دارد');
+
+    const t2 = (await loggedIn()).t;
+    t2.monshiDb.prepare("UPDATE app_state SET value = json_set(value, '$.token_enc', 'AAAA.AAAA') WHERE key = 'eitaa_session'").run();
+    await t2.cron();
+    expect(t2.tg.texts(OWNER.id).at(-1)).toContain('رمزگشایی');
+  });
+
+  it('a poll in flight during /eitaa_logout cannot bring the session back', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', () => {
+      t.monshiDb.prepare("DELETE FROM app_state WHERE key = 'eitaa_session'").run(); // logout lands mid-call
+      return difference(101, [], []);
+    });
+    await t.cron();
+    expect(session(t)).toBeUndefined();
+  });
+
+  it('a poll of an older login cannot overwrite a new login', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', () => {
+      t.monshiDb.prepare("UPDATE app_state SET value = json_set(value, '$.sid', 'NEW', '$.pts', 7) WHERE key = 'eitaa_session'").run();
+      return difference(101, [], []);
+    });
+    await t.cron();
+    expect(JSON.parse(session(t)!)).toMatchObject({ sid: 'NEW', pts: 7 });
+  });
+
+  it('a differenceSlice moves through intermediate states until the full difference', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference',
+      { _: 'updates.differenceSlice', new_messages: [eMsg(1, peerUser(CUSTOMER), 'یک')], new_encrypted_messages: [], other_updates: [], chats: [], users: [eUser(CUSTOMER, 'علی')], intermediate_state: state(101) },
+      difference(102, [eMsg(2, peerUser(CUSTOMER), 'دو')], [eUser(CUSTOMER, 'علی')]));
+    await t.cron();
+    expect(JSON.parse(session(t)!).pts).toBe(101);
+    await t.cron();
+    expect(JSON.parse(session(t)!).pts).toBe(102);
+    expect(t.tg.texts(OWNER.id)).toHaveLength(2);
+  });
+
+  it('differenceTooLong starts over from now and tells the owner messages may be missing', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', { _: 'updates.differenceTooLong', pts: 900 });
+    e.respond('updates.getState', state(950));
+    await t.cron();
+    expect(JSON.parse(session(t)!).pts).toBe(950);
+    expect(t.tg.texts(OWNER.id).at(-1)).toContain('داخل اپ ایتا چک کنید');
+  });
+
+  it('Eitaa customers are not offered in the order wizard; the notification has no pause button', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', difference(101, [eMsg(1, peerUser(CUSTOMER), 'سلام')], [eUser(CUSTOMER, 'علی', 'ali_e')]));
+    await t.cron();
+    expect(JSON.stringify(t.tg.of('sendMessage', OWNER.id)[0].payload.reply_markup ?? {})).not.toContain('pause_chat');
+    t.tg.reset();
+    await t.send('monshi', textUpdate(OWNER, '/order_add'));
+    expect(JSON.stringify(t.tg.of('sendMessage', OWNER.id).at(-1)!.payload.reply_markup)).not.toContain(String(-CUSTOMER));
+    await t.send('monshi', textUpdate(OWNER, '@ali_e'));
+    expect(t.tg.texts(OWNER.id).at(-1)).toContain('مشتری‌های ایتا');
+    expect(q(t.monshiDb, 'SELECT id FROM orders')).toHaveLength(0);
+  });
+
+  it('a reply to a customer without a stored access hash says so clearly', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', difference(101, [eMsg(1, peerUser(CUSTOMER), 'سلام')], [{ ...eUser(CUSTOMER, 'علی'), access_hash: undefined, flags: 2 }]));
+    await t.cron();
+    const notif = one(t.monshiDb, 'SELECT message_id FROM notify_links WHERE recipient_chat_id = ?', OWNER.id).message_id;
+    const upd = textUpdate(OWNER, 'سلام');
+    upd.message.reply_to_message = { message_id: notif, date: 0, chat: { id: OWNER.id, type: 'private' } };
+    await t.send('monshi', upd);
+    expect(t.tg.texts(OWNER.id).at(-1)).toContain('از خود اپ ایتا جواب دهید');
     expect(e.methods()).not.toContain('messages.sendMessage');
   });
 });

@@ -12,7 +12,7 @@ function encode(obj: any): Uint8Array {
   return outer.getBytes(true);
 }
 
-/** Fake Eitaa endpoint: decodes which method was called and answers from per-method queues (in order). */
+/** Fake Eitaa endpoint: decodes which method was called and answers from per-method queues (in order); no answer = network error. */
 export function fakeEitaa() {
   const calls: EitaaCall[] = [];
   const queues: Record<string, any[]> = {};
@@ -23,7 +23,8 @@ export function fakeEitaa() {
     const id = new DataView(raw.buffer).getInt32(0, true);
     const method = Specs.API.methods.find((m) => m.id === id)?.method ?? 'unknown:' + id;
     calls.push({ method, token: outer.token, raw });
-    const r = queues[method]?.shift();
+    let r = queues[method]?.shift();
+    if (typeof r === 'function') r = r(); // a responder can act (e.g. change the DB) mid-call
     if (!r) throw new Error('fakeEitaa: no response queued for ' + method);
     return new Response(encode(r));
   }) as typeof fetch;

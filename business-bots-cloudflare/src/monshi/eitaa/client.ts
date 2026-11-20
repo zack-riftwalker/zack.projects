@@ -4,7 +4,7 @@
  * Unofficial (the Eitaa web client's protocol): it can break if Eitaa changes it.
  */
 import type { MonshiApp } from '../../apps';
-import { saveSession, type EitaaSession } from './session';
+import { updateSession, type EitaaSession } from './session';
 import { TLDeserialization, TLSerialization } from './tl/tl_utils.js';
 
 export const EITAA_BCID = 'eitaa';
@@ -52,9 +52,16 @@ export function decodeResponse(buf: Uint8Array): any {
 
 async function rawCall(app: MonshiApp, cred: Credentials, method: string, params: Record<string, unknown>): Promise<any> {
   app.apps.budget.take();
-  const res = await app.apps.fetch(ENDPOINT, { method: 'POST', body: encodeCall(cred, method, params), signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new EitaaError('HTTP ' + res.status);
-  const out = decodeResponse(new Uint8Array(await res.arrayBuffer()));
+  let out;
+  try {
+    const res = await app.apps.fetch(ENDPOINT, { method: 'POST', body: encodeCall(cred, method, params), signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new EitaaError('HTTP ' + res.status);
+    out = decodeResponse(new Uint8Array(await res.arrayBuffer()));
+  } catch (err) {
+    // network, timeout, a blocked IP or an undecodable reply: all must reach the owner's alert, not just the log
+    if (err instanceof EitaaError) throw err;
+    throw new EitaaError((err instanceof Error ? err.name + ': ' + err.message : String(err)).slice(0, 150));
+  }
   if (out?._ === 'rpc_error' || out?._ === 'error') throw new EitaaError(String(out.error_message ?? out.text ?? 'rpc_error'));
   return out;
 }
@@ -72,8 +79,8 @@ export async function call(app: MonshiApp, cred: Credentials, method: string, pa
     app_info: { _: 'eitaaAppInfo', build_version: 0, device_model: 'Web', system_version: 'Chrome', app_version: '4.6.2 K', lang_code: 'fa', sign: '' },
   });
   if (!/^eitaa_?[uU]pdates_?[tT]oken$/.test(r?._ ?? '') || !r.token) throw new EitaaError('token refresh failed: ' + r?._);
-  cred.token = r.token; // the caller's session object now carries the new token
-  await saveSession(app, cred as EitaaSession);
+  // only the token field is written, and only while this login is still the stored one
+  await updateSession(app, cred as EitaaSession, { token: r.token });
   console.log('🔑 [Eitaa] token renewed');
   return rawCall(app, cred, method, params);
 }

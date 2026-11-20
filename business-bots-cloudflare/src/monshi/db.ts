@@ -69,6 +69,15 @@ export class MonshiDb {
     ).run();
   }
 
+  /** Merges `patchJson` into a JSON value only while `guardPath` still equals `guard`; true = it did. */
+  async patchAppStateJson(key: string, guardPath: string, guard: string | null, patchJson: string): Promise<boolean> {
+    const r = await this.q(
+      'UPDATE app_state SET value = json_patch(value, ?), updated_at = ? WHERE key = ? AND json_extract(value, ?) IS ?',
+      patchJson, new Date().toISOString(), key, guardPath, guard,
+    ).run();
+    return r.meta.changes === 1;
+  }
+
   async deleteAppState(key: string): Promise<void> {
     await this.q('DELETE FROM app_state WHERE key = ?', key).run();
   }
@@ -118,11 +127,13 @@ export class MonshiDb {
   }
 
   async getRecentCustomers(limit = 5): Promise<CustomerRow[]> {
-    return (await this.q('SELECT * FROM customers ORDER BY last_message_at DESC LIMIT ?', limit).all<CustomerRow>()).results;
+    // Telegram customers only: it feeds the order wizard, and orders go out through Telegram (Eitaa ids are < 0)
+    return (await this.q('SELECT * FROM customers WHERE chat_id > 0 ORDER BY last_message_at DESC LIMIT ?', limit).all<CustomerRow>()).results;
   }
 
   async getCustomerByUsername(username: string): Promise<CustomerRow | null> {
-    return this.q('SELECT * FROM customers WHERE username = ? COLLATE NOCASE', username.replace(/^@+/, '')).first();
+    // Telegram and Eitaa usernames share one column: prefer the Telegram customer (Eitaa ids are < 0)
+    return this.q('SELECT * FROM customers WHERE username = ? COLLATE NOCASE ORDER BY chat_id < 0 LIMIT 1', username.replace(/^@+/, '')).first();
   }
 
   async getPausedChats(): Promise<CustomerRow[]> {
@@ -218,6 +229,10 @@ export class MonshiDb {
 
   // ── messages ────────────────────────────────────────────────────────────
   /** The new row's id; 0 = duplicate (already stored). */
+  async deleteMessageRow(id: number): Promise<void> {
+    await this.q('DELETE FROM messages WHERE id = ?', id).run();
+  }
+
   async saveMessage(chatId: number, telegramMessageId: number, direction: string, messageType: string, text: string | null | undefined, bcid: string | null): Promise<number> {
     const r = await this.q(
       'INSERT INTO messages (chat_id, telegram_message_id, direction, message_type, text, received_at, business_connection_id) ' +
