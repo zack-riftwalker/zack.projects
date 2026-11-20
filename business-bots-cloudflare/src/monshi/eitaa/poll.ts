@@ -33,6 +33,10 @@ export async function pollEitaa(app: MonshiApp): Promise<void> {
     }
     const diff = await call(app, s, 'updates.getDifference', { flags: 0, pts: s.pts, date: s.date, qts: s.qts });
     if (diff._ === 'updates.differenceEmpty') return;
+    // anything else unknown must alert instead of silently stopping (that's how an expired token went unnoticed)
+    if (diff._ !== 'updates.difference' && diff._ !== 'updates.differenceSlice' && diff._ !== 'updates.differenceTooLong') {
+      throw new EitaaError('unexpected getDifference reply: ' + diff._);
+    }
     if (diff._ === 'updates.differenceTooLong') {
       console.warn('⚠️ [Eitaa] differenceTooLong — skipping ahead');
       await saveSession(app, { ...s, pts: diff.pts });

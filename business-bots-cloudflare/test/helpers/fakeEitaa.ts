@@ -4,7 +4,8 @@ import { Specs } from '../../src/monshi/eitaa/tl/specs.js';
 export interface EitaaCall { method: string; token: string; raw: Uint8Array }
 
 function encode(obj: any): Uint8Array {
-  const inner = new TLSerialization({ mtproto: obj._ === 'rpc_error' }) as any;
+  const inApi = Specs.API.constructors.some((c) => c.predicate === obj._);
+  const inner = new TLSerialization({ mtproto: !inApi }) as any;
   inner.storeObject(obj, 'Object', 'resp');
   const outer = new TLSerialization({ mtproto: false }) as any;
   outer.storeObject({ _: 'eitaaObject', token: '', imei: '', packed_data: inner.getBytes(true), layer: 133 }, 'Object', 'wrap');

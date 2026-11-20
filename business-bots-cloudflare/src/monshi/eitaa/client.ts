@@ -4,6 +4,7 @@
  * Unofficial (the Eitaa web client's protocol): it can break if Eitaa changes it.
  */
 import type { MonshiApp } from '../../apps';
+import { saveSession, type EitaaSession } from './session';
 import { TLDeserialization, TLSerialization } from './tl/tl_utils.js';
 
 export const EITAA_BCID = 'eitaa';
@@ -49,14 +50,32 @@ export function decodeResponse(buf: Uint8Array): any {
   return obj;
 }
 
-/** One API call (counts one subrequest). Throws EitaaError on an rpc error. */
-export async function call(app: MonshiApp, cred: Credentials, method: string, params: Record<string, unknown> = {}): Promise<any> {
+async function rawCall(app: MonshiApp, cred: Credentials, method: string, params: Record<string, unknown>): Promise<any> {
   app.apps.budget.take();
   const res = await app.apps.fetch(ENDPOINT, { method: 'POST', body: encodeCall(cred, method, params), signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new EitaaError('HTTP ' + res.status);
   const out = decodeResponse(new Uint8Array(await res.arrayBuffer()));
   if (out?._ === 'rpc_error' || out?._ === 'error') throw new EitaaError(String(out.error_message ?? out.text ?? 'rpc_error'));
   return out;
+}
+
+/**
+ * One API call (counts one subrequest). Throws EitaaError on an rpc error. A logged-in session's token expires
+ * after a while: Eitaa then answers any call with eitaa_updates_expire_token → renew it, save it, retry once.
+ */
+export async function call(app: MonshiApp, cred: Credentials, method: string, params: Record<string, unknown> = {}): Promise<any> {
+  const out = await rawCall(app, cred, method, params);
+  // the deserializer may camelCase these Eitaa-only predicates (eitaa_updates_expire_token → eitaaUpdatesExpireToken)
+  const kind = String(out?._ ?? '').replace(/_(\w)/g, (_m, c) => c.toUpperCase());
+  if (kind !== 'eitaaUpdatesExpireToken' || !('me' in cred)) return out;
+  const r = await rawCall(app, cred, 'eitaaRefreshToken', {
+    app_info: { _: 'eitaaAppInfo', build_version: 0, device_model: 'Web', system_version: 'Chrome', app_version: '4.6.2 K', lang_code: 'fa', sign: '' },
+  });
+  if (!/^eitaa_?[uU]pdates_?[tT]oken$/.test(r?._ ?? '') || !r.token) throw new EitaaError('token refresh failed: ' + r?._);
+  cred.token = r.token; // the caller's session object now carries the new token
+  await saveSession(app, cred as EitaaSession);
+  console.log('🔑 [Eitaa] token renewed');
+  return rawCall(app, cred, method, params);
 }
 
 /** «media» of an incoming message → the bot's message_type names. */

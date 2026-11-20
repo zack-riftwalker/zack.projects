@@ -111,6 +111,29 @@ describe('Eitaa messages → owner', () => {
   });
 });
 
+describe('Eitaa token expiry', () => {
+  it('an expired token is renewed, saved and the poll retried — later calls use the new token', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', { _: 'eitaa_updates_expire_token' }, difference(101, [eMsg(1, peerUser(CUSTOMER), 'سلام')], [eUser(CUSTOMER, 'علی')]));
+    e.respond('eitaaRefreshToken', { _: 'eitaa_updates_token', token: 'NEW-TOKEN', expire: 1, date: 1 });
+    await t.cron();
+    expect(e.methods().slice(-3)).toEqual(['updates.getDifference', 'eitaaRefreshToken', 'updates.getDifference']);
+    expect(e.calls.at(-1)!.token).toBe('NEW-TOKEN');
+    expect(t.tg.of('sendMessage', OWNER.id)).toHaveLength(1);
+    e.respond('updates.getDifference', { _: 'updates.differenceEmpty', date: 1, seq: 0 });
+    await t.cron();
+    expect(e.calls.at(-1)!.token).toBe('NEW-TOKEN'); // persisted (encrypted) across invocations
+    expect(one(t.monshiDb, "SELECT value FROM app_state WHERE key = 'eitaa_session'").value).not.toContain('NEW-TOKEN');
+  });
+
+  it('an unknown reply alerts the owner instead of going silent', async () => {
+    const { t, e } = await loggedIn();
+    e.respond('updates.getDifference', { _: 'eitaa_token_updating' });
+    await t.cron();
+    expect(t.tg.texts(OWNER.id).at(-1)).toContain('eitaaTokenUpdating');
+  });
+});
+
 describe('owner reply → Eitaa customer', () => {
   it('a text Reply to the notification is sent from the Eitaa account, stored as the owner and acknowledged', async () => {
     const { t, e } = await loggedIn();
