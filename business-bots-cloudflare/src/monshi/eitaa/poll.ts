@@ -43,10 +43,16 @@ export async function pollEitaa(app: MonshiApp): Promise<void> {
       return;
     }
     const users = new Map<string, any>((diff.users ?? []).map((u: any) => [String(u.id), u]));
-    for (const m of diff.new_messages ?? []) {
-      // out of budget: keep the old cursor, the next minute fetches the rest again (already stored ones dedupe)
-      if (app.apps.budget.remaining() < PER_MESSAGE_BUDGET) return;
+    // message ids only grow, so lastId marks what's done: a big backlog advances a few messages per minute
+    // without re-reading the handled ones, and the cursor moves once all of them are through
+    const todo = (diff.new_messages ?? []).filter((m: any) => m.id > (s.lastId ?? 0)).sort((a: any, b: any) => a.id - b.id);
+    for (const m of todo) {
+      if (app.apps.budget.remaining() < PER_MESSAGE_BUDGET) {
+        await saveSession(app, s);
+        return;
+      }
       await handleMessage(app, s.me.id, m, users);
+      s.lastId = m.id;
     }
     const next = diff.state ?? diff.intermediate_state;
     if (next) await saveSession(app, { ...s, pts: next.pts, date: next.date, qts: next.qts });

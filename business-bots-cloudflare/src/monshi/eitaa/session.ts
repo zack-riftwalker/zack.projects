@@ -11,6 +11,8 @@ export interface EitaaSession extends Credentials {
   pts?: number;
   date?: number;
   qts?: number;
+  /** highest message id already handed to the owner */
+  lastId?: number;
 }
 
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));

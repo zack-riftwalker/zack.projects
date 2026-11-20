@@ -111,6 +111,20 @@ describe('Eitaa messages → owner', () => {
   });
 });
 
+describe('Eitaa backlog', () => {
+  it('a backlog larger than one minute\'s budget is worked through over several polls, each message once', async () => {
+    const { t, e } = await loggedIn();
+    const msgs = Array.from({ length: 10 }, (_, i) => eMsg(i + 1, peerUser(CUSTOMER), 'پیام ' + (i + 1)));
+    const d = difference(150, msgs, [eUser(CUSTOMER, 'علی')]);
+    e.respond('updates.getDifference', d, d, d, d, d, d, d, d);
+    for (let i = 0; i < 8; i++) await t.cron();
+    const texts = t.tg.texts(OWNER.id);
+    expect(texts).toHaveLength(10);
+    expect(texts.map((x) => x.match(/پیام (\d+)/)![1])).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
+    expect(JSON.parse(one(t.monshiDb, "SELECT value FROM app_state WHERE key = 'eitaa_session'").value)).toMatchObject({ pts: 150, lastId: 10 });
+  });
+});
+
 describe('Eitaa token expiry', () => {
   it('an expired token is renewed, saved and the poll retried — later calls use the new token', async () => {
     const { t, e } = await loggedIn();
