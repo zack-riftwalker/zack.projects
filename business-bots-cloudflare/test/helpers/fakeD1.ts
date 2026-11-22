@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 type Row = Record<string, unknown>;
 
-const isRead = (sql: string) => /^\s*(select|with|pragma|explain)\b/i.test(sql);
+const isRead = (sql: string) => /^\s*(select|with|pragma|explain)\b/i.test(sql) || /\breturning\b/i.test(sql);
 
 class FakeStmt {
   constructor(private db: DatabaseSync, readonly sql: string, readonly args: unknown[] = [], private log: string[] = []) {}

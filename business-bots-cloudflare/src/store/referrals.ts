@@ -82,10 +82,9 @@ export async function onPurchaseConfirmed(app: StoreApp, order: { id: number; cu
   const referral = await app.db.getReferralByInvitee(order.customer_telegram_id);
   if (!referral || referral.qualified_at) return;
   if (order.price < cfg.minAmount) return; // a later, bigger order can still qualify
-  if (!(await app.db.qualifyReferral(referral.id, order.id))) return;
+  // eligibility is stamped in the same statement as the qualify: turning the option on later never rewards people who qualified in the past
+  if (!(await app.db.qualifyReferral(referral.id, order.id, cfg.inviteeProductId !== null))) return;
   console.log('🎁 [Referral] Invite of customer ' + order.customer_telegram_id + ' qualified (referrer ' + referral.referrer_telegram_id + ').');
-  // eligibility is stamped now: turning the option on later never rewards people who qualified in the past
-  if (cfg.inviteeProductId !== null) await app.db.markInviteeGiftEligible(referral.id);
   await tryGrantRewards(app, referral.referrer_telegram_id);
   if (cfg.inviteeProductId !== null) await tryGrantInviteeGift(app, referral.id);
   // otherwise the cron sweep grants it
@@ -186,8 +185,8 @@ export async function tryGrantInviteeGift(app: StoreApp, referralId: number): Pr
 
   let orderId: number | null = null;
   try {
-    orderId = await app.db.createRewardOrder({ customerTelegramId: inviteeId, product });
-    await app.db.finishInviteeGift(referralId, orderId);
+    // the order and the record of its id commit together; if this throws we can't know whether they did, so the claim stays for the sweep
+    orderId = await app.db.issueInviteeGiftOrder(referralId, { customerTelegramId: inviteeId, product });
     try {
       await app.api.sendMessage(inviteeId, '🎁 چون با لینک دعوت دوستتان خرید کردید، یک «' + product.name + '» رایگان هدیه گرفتید!\nسفارش #' + orderId + ' ثبت شد و به‌زودی تحویل داده می‌شود.');
     } catch (err: any) {
@@ -199,10 +198,7 @@ export async function tryGrantInviteeGift(app: StoreApp, referralId: number): Pr
       adminHeader: '🎁 هدیه‌ی دوستِ دعوت‌شده صادر شد\n👤 مشتری: ' + inviteeId + '\n🏆 سفارش رایگان #' + orderId,
     });
   } catch (err: any) {
-    if (orderId === null) {
-      // no order exists: release the claim so the sweep can retry
-      await app.db.finishInviteeGift(referralId, null).catch(() => {});
-    }
+    // never released here: when orderId is null an order may still exist (a lost reply); the sweep links it or, after an hour, releases the claim
     if (err instanceof BudgetExceededError) throw err;
     console.error('❌ [Referral] Invitee gift for referral ' + referralId + ' failed:', err.message);
     if (orderId !== null) await notifyAdmins(app, '⚠️ هدیه‌ی دوستِ دعوت‌شده برای مشتری ' + inviteeId + ' (سفارش #' + orderId + ') نیمه‌کاره ماند. لطفاً دستی رسیدگی کنید.');
@@ -280,17 +276,18 @@ export async function sweepReferralRewards(app: StoreApp): Promise<void> {
   const cfg = await getReferralConfig(app);
   if (!cfg.enabled) return;
   for (const referrerId of await app.db.getReferrersReadyForReward(cfg.required, cfg.repeatable, 5)) {
-    if (app.apps.budget.remaining() < grantBudgetNeeded(app)) return;
+    if (app.apps.budget.remaining() < grantBudgetNeeded(app)) break; // the gift sweep below has its own check
     try {
       await tryGrantRewards(app, referrerId);
     } catch (err: any) {
-      if (err instanceof BudgetExceededError) return;
+      if (err instanceof BudgetExceededError) break;
       console.error('❌ [Referral] Sweep failed for ' + referrerId + ':', err.message);
     }
   }
   // round 4 (§2): the invitee gifts that were not issued inline (at most 3 per tick)
+  if (cfg.inviteeProductId === null) return; // switched off: nothing is owed
   try {
-    await app.db.resetStuckInviteeGifts();
+    await app.db.resetStuckInviteeGifts(cfg.inviteeProductId);
     for (const referralId of await app.db.getPendingInviteeGiftIds(3)) {
       if (app.apps.budget.remaining() < grantBudgetNeeded(app)) return;
       await tryGrantInviteeGift(app, referralId);

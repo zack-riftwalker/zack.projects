@@ -103,7 +103,9 @@ export async function checkStalledOrders(app: StoreApp): Promise<void> {
 // ─── Abandoned checkout reminder (round 4, CAMPAIGN_PLAN.md §4) ───────────────
 
 export const CART_REMINDER_KEY = 'cart_reminder_enabled';
-const CART_RESERVE = 4;
+/** units left for the supplier orders and the broadcast; at most this many rows per tick so a tick never eats more than ~13 */
+const CART_RESERVE = 10;
+const CART_PER_TICK = 4;
 const CART_MIN_AGE_MIN = 60;
 const CART_MAX_AGE_H = 23;
 const CART_PURGE_H = 48;
@@ -126,30 +128,43 @@ export async function sendCartReminders(app: StoreApp): Promise<void> {
   if (tehranParts(now).hour < QUIET_HOURS_END) return;
 
   const ago = (ms: number) => tehranDateTime(new Date(now.getTime() - ms));
-  const rows = await app.db.getDueCheckoutDrafts(ago(CART_MIN_AGE_MIN * 60_000), ago(CART_MAX_AGE_H * 3_600_000), 15);
-  const reminded: number[] = [];
+  const rows = await app.db.getDueCheckoutDrafts(ago(CART_MIN_AGE_MIN * 60_000), ago(CART_MAX_AGE_H * 3_600_000), CART_PER_TICK);
+  const candidates: typeof rows = [];
   const alreadyOrdered: number[] = [];
   for (const row of rows) {
-    if (budget.remaining() <= CART_RESERVE + 2) break;
+    if (budget.remaining() <= CART_RESERVE + 3) break; // the check, the claim and a send must still fit
     try {
-      if (await app.db.hasOrderSince(row.customer_telegram_id, row.created_at)) {
-        alreadyOrdered.push(row.customer_telegram_id);
-        continue;
-      }
-      await app.api.sendMessage(row.customer_telegram_id, cartReminderText(row.product_name), {
-        ...Markup.inlineKeyboard([[Markup.button.callback('🛍 ادامه‌ی خرید', 'cust_prod_' + row.product_id)]]),
-      });
+      if (await app.db.hasOrderSince(row.customer_telegram_id, row.created_at)) alreadyOrdered.push(row.customer_telegram_id);
+      else candidates.push(row);
     } catch (err: any) {
-      if (err instanceof BudgetExceededError) break; // not attempted: stays due for the next tick
-      console.warn('⚠️ [Scheduler] cart reminder to ' + row.customer_telegram_id + ' failed:', err.message);
+      if (err instanceof BudgetExceededError) break;
+      console.warn('⚠️ [Scheduler] cart reminder order check for ' + row.customer_telegram_id + ' failed:', err.message);
     }
-    reminded.push(row.customer_telegram_id); // also after a failed send, so a dead chat can't retry forever
   }
-  // the batched bookkeeping (one statement each) and the housekeeping; each is best-effort
+  try {
+    // mark first, send after: a failed bookkeeping step must never mean a second reminder (a missed one is the lesser evil)
+    const sendable = candidates.slice(0, Math.max(0, budget.remaining() - CART_RESERVE - 1));
+    const claimed = new Set(await app.db.claimDraftsForReminder(sendable.map((r) => r.customer_telegram_id)));
+    for (const row of sendable) {
+      if (!claimed.has(row.customer_telegram_id)) continue; // a concurrent tick has it
+      if (budget.remaining() <= CART_RESERVE) break;
+      try {
+        await app.api.sendMessage(row.customer_telegram_id, cartReminderText(row.product_name), {
+          ...Markup.inlineKeyboard([[Markup.button.callback('🛍 ادامه‌ی خرید', 'cust_prod_' + row.product_id)]]),
+        });
+      } catch (err: any) {
+        if (err instanceof BudgetExceededError) break;
+        console.warn('⚠️ [Scheduler] cart reminder to ' + row.customer_telegram_id + ' failed:', err.message); // already marked: a dead chat can't retry forever
+      }
+    }
+  } catch (err: any) {
+    if (err instanceof BudgetExceededError) return;
+    console.error('❌ [Scheduler] cart reminder claim failed:', err.message);
+  }
+  // housekeeping, best-effort and only while the budget has room above the reserve
   for (const job of [
-    () => app.db.markDraftsReminded(reminded),
-    () => app.db.deleteCheckoutDrafts(alreadyOrdered),
-    () => (budget.remaining() > 1 ? app.db.purgeCheckoutDraftsBefore(ago(CART_PURGE_H * 3_600_000)) : Promise.resolve()),
+    () => (alreadyOrdered.length && budget.remaining() > CART_RESERVE ? app.db.deleteCheckoutDrafts(alreadyOrdered) : Promise.resolve()),
+    () => (budget.remaining() > CART_RESERVE ? app.db.purgeCheckoutDraftsBefore(ago(CART_PURGE_H * 3_600_000)) : Promise.resolve()),
   ]) {
     try {
       await job();

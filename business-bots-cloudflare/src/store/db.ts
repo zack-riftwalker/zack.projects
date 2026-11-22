@@ -43,6 +43,22 @@ export interface CheckoutDraft { customer_telegram_id: number; product_id: numbe
 export const DUE_DRAFTS_SQL = 'SELECT * FROM checkout_drafts WHERE reminded = 0 AND created_at <= ? AND created_at >= ? ORDER BY created_at LIMIT ?';
 /** `reminded IN (0, 1)` lets the (reminded, created_at) index serve the range */
 export const PURGE_DRAFTS_SQL = 'DELETE FROM checkout_drafts WHERE reminded IN (0, 1) AND created_at < ?';
+/** a free (0-Toman) order for the invitee of `referrals`, for the gift product (arg), made since the referral qualified */
+const GIFT_ORDER_SQL = 'SELECT 1 FROM orders o WHERE o.customer_telegram_id = referrals.invitee_telegram_id AND o.price = 0 AND o.customer_product_id = ? AND o.created_at >= referrals.qualified_at';
+/** an order since the draft: created after it, or (a manual link made earlier) confirmed after it */
+export const HAS_ORDER_SINCE_SQL = "SELECT 1 FROM orders WHERE customer_telegram_id = ? AND (created_at >= ? OR (status IN ('confirmed', 'delivered') AND decided_at >= ?)) LIMIT 1";
+/** claims the drafts that are still unreminded and says which ones this caller got */
+export const CLAIM_DRAFTS_SQL_PREFIX = 'UPDATE checkout_drafts SET reminded = 1 WHERE reminded = 0 AND customer_telegram_id IN (';
+export const PENDING_GIFTS_SQL = 'SELECT id FROM referrals WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id IS NULL ORDER BY id LIMIT ?';
+/** a claim never finished and no free order exists for the invitee: released (args: qualified_at cut-off is built in) */
+export const RESET_GIFTS_SQL = `UPDATE referrals SET invitee_reward_order_id = NULL
+  WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id = -1 AND qualified_at <= datetime('now', '+03:30', '-1 hours')
+    AND NOT EXISTS (${GIFT_ORDER_SQL})`;
+/** a claim never finished but the free order exists: link it instead of issuing a second one */
+export const LINK_GIFTS_SQL = `UPDATE referrals SET invitee_reward_order_id = (${GIFT_ORDER_SQL.replace('SELECT 1', 'SELECT o.id')} ORDER BY o.id LIMIT 1)
+  WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id = -1 AND qualified_at <= datetime('now', '+03:30', '-1 hours')
+    AND EXISTS (${GIFT_ORDER_SQL})`;
+export const DISCOUNT_REVENUE_SQL = "SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS sum FROM orders WHERE discount_code_id = ? AND status IN ('confirmed', 'delivered')";
 export const RUNNING_BROADCAST_SQL = "SELECT * FROM broadcast_jobs WHERE status = 'running' AND cancelled = 0 AND (send_after IS NULL OR send_after <= ?) ORDER BY id LIMIT 1";
 export const SCHEDULED_BROADCASTS_SQL = "SELECT id, text, audience, send_after FROM broadcast_jobs WHERE status = 'running' AND cancelled = 0 AND send_after > ? ORDER BY send_after LIMIT ?";
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
@@ -576,7 +592,7 @@ export class StoreDb {
 
   /** round 4 (§8): orders and revenue that used this code (confirmed / delivered only) */
   async getDiscountCodeRevenue(id: number): Promise<{ n: number; sum: number }> {
-    return (await this.q("SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS sum FROM orders WHERE discount_code_id = ? AND status IN ('confirmed', 'delivered')", id).first<{ n: number; sum: number }>())!;
+    return (await this.q(DISCOUNT_REVENUE_SQL, id).first<{ n: number; sum: number }>())!;
   }
 
   async setDiscountCodeStart(id: number, startsAt: string | null) {
@@ -681,12 +697,14 @@ export class StoreDb {
   }
 
   async hasOrderSince(customerId: number, since: string): Promise<boolean> {
-    return !!(await this.q('SELECT 1 FROM orders WHERE customer_telegram_id = ? AND created_at >= ? LIMIT 1', customerId, since).first());
+    return !!(await this.q(HAS_ORDER_SINCE_SQL, customerId, since, since).first());
   }
 
-  async markDraftsReminded(customerIds: number[]): Promise<void> {
-    if (!customerIds.length) return;
-    await this.q('UPDATE checkout_drafts SET reminded = 1 WHERE customer_telegram_id IN (' + customerIds.map(() => '?').join(',') + ')', ...customerIds).run();
+  /** Marks the drafts reminded BEFORE the send and returns the ids this caller really got (a missed reminder beats a doubled one). */
+  async claimDraftsForReminder(customerIds: number[]): Promise<number[]> {
+    if (!customerIds.length) return [];
+    const r = await this.q(CLAIM_DRAFTS_SQL_PREFIX + customerIds.map(() => '?').join(',') + ') RETURNING customer_telegram_id', ...customerIds).all<{ customer_telegram_id: number }>();
+    return r.results.map((x) => x.customer_telegram_id);
   }
 
   async deleteCheckoutDrafts(customerIds: number[]): Promise<void> {
@@ -732,14 +750,18 @@ export class StoreDb {
     return this.q('SELECT id, referrer_telegram_id, qualified_at FROM referrals WHERE invitee_telegram_id = ?', inviteeId).first();
   }
 
-  async qualifyReferral(id: number, orderId: number): Promise<boolean> {
-    const r = await this.q("UPDATE referrals SET qualified_at = datetime('now', '+03:30'), qualifying_order_id = ? WHERE id = ? AND qualified_at IS NULL", orderId, id).run();
+  /** `inviteeGift`: stamps the gift eligibility in the same statement (round 4, §2: never retroactive) */
+  async qualifyReferral(id: number, orderId: number, inviteeGift = false): Promise<boolean> {
+    const r = await this.q(
+      "UPDATE referrals SET qualified_at = datetime('now', '+03:30'), qualifying_order_id = ?, invitee_reward_eligible = ? WHERE id = ? AND qualified_at IS NULL",
+      orderId, inviteeGift ? 1 : 0, id,
+    ).run();
     return r.meta.changes === 1;
   }
 
-  /** round 4 (§2): stamps the invitee gift eligibility at qualify time (never retroactive) */
-  async markInviteeGiftEligible(referralId: number): Promise<void> {
-    await this.q('UPDATE referrals SET invitee_reward_eligible = 1 WHERE id = ? AND invitee_reward_order_id IS NULL', referralId).run();
+  /** the gift was switched off: rows waiting for it are no longer owed one */
+  async clearPendingInviteeGifts(): Promise<void> {
+    await this.q('UPDATE referrals SET invitee_reward_eligible = 0 WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id IS NULL').run();
   }
 
   async getInviteeGiftTarget(referralId: number): Promise<number | null> {
@@ -752,17 +774,29 @@ export class StoreDb {
     return r.meta.changes === 1;
   }
 
-  async finishInviteeGift(referralId: number, orderId: number | null): Promise<void> {
-    await this.q('UPDATE referrals SET invitee_reward_order_id = ? WHERE id = ? AND invitee_reward_order_id = -1', orderId, referralId).run();
+  /**
+   * The free order and the record of its id in ONE batch (one D1 transaction), so a claim can never hold an order the row doesn't know.
+   * Returns the new order id.
+   */
+  async issueInviteeGiftOrder(referralId: number, p: { customerTelegramId: number; product: CustomerProduct }): Promise<number> {
+    const rs = await this.db.batch([
+      this.rewardOrderStmt(p),
+      this.q('UPDATE referrals SET invitee_reward_order_id = last_insert_rowid() WHERE id = ? AND invitee_reward_order_id = -1', referralId),
+    ]);
+    return rs[0].meta.last_row_id;
   }
 
   async getPendingInviteeGiftIds(limit: number): Promise<number[]> {
-    return (await this.q('SELECT id FROM referrals WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id IS NULL ORDER BY id LIMIT ?', limit).all<{ id: number }>()).results.map((r) => r.id);
+    return (await this.q(PENDING_GIFTS_SQL, limit).all<{ id: number }>()).results.map((r) => r.id);
   }
 
-  /** a claim older than an hour (by qualified_at) that never got an order is released */
-  async resetStuckInviteeGifts(): Promise<void> {
-    await this.q("UPDATE referrals SET invitee_reward_order_id = NULL WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id = -1 AND qualified_at <= datetime('now', '+03:30', '-1 hours')").run();
+  /**
+   * A claim older than an hour (by qualified_at) that never finished: if the free order exists it is linked, otherwise the claim is released.
+   * Never releases a claim whose order exists, so the sweep can't issue a second one.
+   */
+  async resetStuckInviteeGifts(giftProductId: number): Promise<void> {
+    await this.q(LINK_GIFTS_SQL, giftProductId, giftProductId).run();
+    await this.q(RESET_GIFTS_SQL, giftProductId).run();
   }
 
   async countUnrewardedReferrals(referrerId: number): Promise<number> {
@@ -802,11 +836,15 @@ export class StoreDb {
 
   /** A free-product reward: an already-confirmed 0-Toman order that follows the normal delivery flow. */
   async createRewardOrder(p: { customerTelegramId: number; product: CustomerProduct }): Promise<number> {
-    const r = await this.q(`
+    return (await this.rewardOrderStmt(p).run()).meta.last_row_id;
+  }
+
+  /** the INSERT of a reward order, not yet run (so it can join a batch) */
+  rewardOrderStmt(p: { customerTelegramId: number; product: CustomerProduct }) {
+    return this.q(`
     INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, purchase_source, status, decided_at, decided_by, duration_days, warranty_days, customer_username)
     VALUES (?, ?, ?, 0, 'manual', 'confirmed', datetime('now', '+03:30'), 0, ?, ?, (SELECT username FROM customers WHERE telegram_id = ?))
-  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null, p.customerTelegramId).run();
-    return r.meta.last_row_id;
+  `, p.customerTelegramId, p.product.id, p.product.name, p.product.duration_days || null, p.product.warranty_days || null, p.customerTelegramId);
   }
 
   /** Customer-facing numbers + the latest issued rewards, one batch. */
@@ -917,10 +955,11 @@ export class StoreDb {
   }
 
   /** true = cancelled; false = already started (or not a scheduled job) */
-  async cancelScheduledBroadcast(id: number): Promise<boolean> {
+  async cancelScheduledBroadcast(id: number, nowLocal: string): Promise<boolean> {
+    // a job whose time has come may already be sending its first batch (the cursor moves only after it): not cancellable
     const r = await this.q(
-      "UPDATE broadcast_jobs SET cancelled = 1, status = 'done', finished_at = datetime('now', '+03:30') WHERE id = ? AND status = 'running' AND cursor_customer_id = 0 AND send_after IS NOT NULL",
-      id,
+      "UPDATE broadcast_jobs SET cancelled = 1, status = 'done', finished_at = datetime('now', '+03:30') WHERE id = ? AND status = 'running' AND cursor_customer_id = 0 AND send_after IS NOT NULL AND send_after > ?",
+      id, nowLocal,
     ).run();
     return r.meta.changes === 1;
   }

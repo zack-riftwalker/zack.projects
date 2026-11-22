@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeD1 } from './helpers/fakeD1';
-import { DUE_DRAFTS_SQL, PURGE_DRAFTS_SQL, RUNNING_BROADCAST_SQL, SCHEDULED_BROADCASTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
+import { CLAIM_DRAFTS_SQL_PREFIX, DISCOUNT_REVENUE_SQL, DUE_DRAFTS_SQL, HAS_ORDER_SINCE_SQL, LINK_GIFTS_SQL, PENDING_GIFTS_SQL, RESET_GIFTS_SQL, PURGE_DRAFTS_SQL, RUNNING_BROADCAST_SQL, SCHEDULED_BROADCASTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
@@ -67,10 +67,14 @@ describe('store hot queries use indexes', () => {
     ['my recent rejections', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'rejected' AND decided_at >= datetime('now', '+03:30', '-7 days') ORDER BY id DESC LIMIT 5", [1]],
     ['receipt duplicate lookup', 'SELECT id, status, customer_telegram_id FROM orders WHERE receipt_unique_id = ? ORDER BY id DESC LIMIT 1', ['x']],
     ['report codes', CAMPAIGN_SQL.codes, ['a', 'b']],
-    ['code revenue', "SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS sum FROM orders WHERE discount_code_id = ? AND status IN ('confirmed', 'delivered')", [1]],
+    ['code revenue', DISCOUNT_REVENUE_SQL, [1]],
     ['report sources', CAMPAIGN_SQL.sources, ['a', 'b', 'a', 'b', 'a', 'b']],
     ['cart reminder due', DUE_DRAFTS_SQL, ['a', 'b', 15]],
-    ['cart reminder order check', 'SELECT 1 FROM orders WHERE customer_telegram_id = ? AND created_at >= ? LIMIT 1', [1, 'a']],
+    ['cart reminder order check', HAS_ORDER_SINCE_SQL, [1, 'a', 'a']],
+    ['cart reminder claim', CLAIM_DRAFTS_SQL_PREFIX + '?, ?) RETURNING customer_telegram_id', [1, 2]],
+    ['invitee gifts waiting (LIMIT)', PENDING_GIFTS_SQL, [3]],
+    ['invitee gift claims: link the order', LINK_GIFTS_SQL, [1, 1]],
+    ['invitee gift claims: release', RESET_GIFTS_SQL, [1]],
     ['cart reminder purge', PURGE_DRAFTS_SQL, ['a']],
     ['waitlist count', 'SELECT COUNT(*) AS n FROM product_waitlist WHERE product_id = ?', [1]],
     ['waitlist clear', 'DELETE FROM product_waitlist WHERE product_id = ? AND created_at <= ?', [1, 'x']],

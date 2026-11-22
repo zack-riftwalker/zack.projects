@@ -197,6 +197,7 @@ async function onAdminCallback(ctx: StoreContext) {
   if (rest === 'inv_off') {
     cfg.inviteeProductId = null;
     await save(ctx, cfg);
+    await app.db.clearPendingInviteeGifts(); // nobody who qualified before is owed a gift after it is turned off
     await ans('🚫 خاموش شد');
     await renderPanel(ctx, cfg, true);
     return;

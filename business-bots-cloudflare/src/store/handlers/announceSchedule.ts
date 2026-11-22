@@ -32,7 +32,7 @@ export async function buildScheduledList(app: StoreApp): Promise<{ text: string;
 export function registerAnnounceScheduleHandler(bot: Bot<StoreContext>, isAdmin: (id: number | undefined) => boolean) {
   bot.callbackQuery(/^ann_sched_cancel_(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery('⛔️ دسترسی ندارید.');
-    const cancelled = await ctx.app.db.cancelScheduledBroadcast(parseInt(ctx.match![1], 10));
+    const cancelled = await ctx.app.db.cancelScheduledBroadcast(parseInt(ctx.match![1], 10), tehranDateTime(ctx.app.apps.now()));
     if (!cancelled) {
       await ctx.answerCallbackQuery({ text: '⚠️ ارسال این اطلاعیه شروع شده و دیگر قابل لغو نیست.', show_alert: true });
       return;

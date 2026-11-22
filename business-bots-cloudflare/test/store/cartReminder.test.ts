@@ -152,7 +152,7 @@ describe('cart reminder: cron job', () => {
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThan(10);
     expect(drafts(t).filter((d) => d.reminded === 1)).toHaveLength(first);
-    await sendCartReminders(t.apps().store!);
+    for (let i = 0; i < 3; i++) await sendCartReminders(t.apps().store!); // at most 4 rows per tick
     expect(reminders(t)).toHaveLength(10);
     expect(new Set(reminders(t).map((c) => c.payload.chat_id)).size).toBe(10);
   });
@@ -168,6 +168,57 @@ describe('cart reminder: cron job', () => {
     const delivered = t.tg.of('sendMessage').filter((c) => c.payload.text === 'HELLO ALL').length;
     expect(delivered).toBeGreaterThan(0);
     expect(t.maxBudget).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('cart reminder: review fixes', () => {
+  const customer = (t: TestEnv, id: number) => q(t.storeDb, 'INSERT INTO customers (telegram_id, display_name) VALUES (?, ?)', id, 'c' + id);
+
+  it('at most 4 reminders per tick', async () => {
+    const t = setup();
+    for (let i = 0; i < 10; i++) draft(t, 7300 + i, '2026-10-07 10:00:0' + i);
+    await t.cron(NOW);
+    expect(reminders(t)).toHaveLength(4);
+  });
+
+  it('with Eitaa leaving ~15 units, the broadcast still sends a batch on the :x7 tick', async () => {
+    const LATER = new Date(Date.UTC(2026, 9, 7, 10, 7)); // 13:37 Tehran: no daily reminders job in this tick
+    const t = setup({ now: LATER });
+    t.deps.onBudget = (b) => b.take(35); // what the Eitaa poll took
+    for (let i = 0; i < 10; i++) draft(t, 7400 + i, '2026-10-07 10:00:0' + i);
+    for (let i = 0; i < 12; i++) customer(t, 8100 + i);
+    q(t.storeDb, "INSERT INTO broadcast_jobs (admin_chat_id, text, status, total, audience) VALUES (?, 'HELLO ALL', 'running', 12, 'all')", ADMIN.id);
+    await t.cron(LATER);
+    expect(t.tg.of('sendMessage').filter((c) => c.payload.text === 'HELLO ALL').length).toBeGreaterThan(0);
+    expect(reminders(t).length).toBeLessThanOrEqual(4);
+  });
+
+  it('the draft is marked reminded BEFORE the message goes out (a failed bookkeeping step can never mean a second reminder)', async () => {
+    const t = setup();
+    draft(t, 7001, '2026-10-07 10:00:00');
+    const seen: number[] = [];
+    t.tg.fail('sendMessage', (c) => {
+      if (c.payload.chat_id === 7001) seen.push(drafts(t)[0].reminded);
+      return false;
+    });
+    await t.cron(NOW);
+    expect(seen).toEqual([1]);
+  });
+
+  it('two overlapping ticks remind each customer once', async () => {
+    const t = setup();
+    for (let i = 0; i < 3; i++) draft(t, 7500 + i, '2026-10-07 10:00:0' + i);
+    await Promise.all([sendCartReminders(t.apps().store!), sendCartReminders(t.apps().store!)]);
+    expect(reminders(t)).toHaveLength(3);
+  });
+
+  it('a manual-link order made BEFORE the draft but confirmed after it stops the reminder', async () => {
+    const t = setup();
+    draft(t, 7001, '2026-10-07 10:00:00');
+    q(t.storeDb, "INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, status, created_at, decided_at) VALUES (7001, 1, 'GPT Plus', 5, 'confirmed', '2026-10-07 09:00:00', '2026-10-07 10:20:00')");
+    await t.cron(NOW);
+    expect(reminders(t)).toHaveLength(0);
+    expect(drafts(t)).toEqual([]);
   });
 });
 

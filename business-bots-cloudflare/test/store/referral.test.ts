@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN, makeTestEnv, type TestEnv } from '../helpers/env';
 import { callbackUpdate, photoUpdate, textUpdate } from '../helpers/updates';
 import { one, q, seedProduct } from '../helpers/seed';
-import { onPurchaseConfirmed, tryGrantInviteeGift, tryGrantRewards } from '../../src/store/referrals';
+import { onPurchaseConfirmed, sweepReferralRewards, tryGrantInviteeGift, tryGrantRewards } from '../../src/store/referrals';
 import { DEFAULT_REFERRAL_CONFIG, getReferralConfig } from '../../src/store/referralConfig';
 
 const REF = { id: 3001, first_name: 'Referrer', username: 'ref_user' };
@@ -483,6 +483,100 @@ describe('referral: invitee gift (round 4, §2)', () => {
     await onPurchaseConfirmed(t.apps().store!, { id: 99, customer_telegram_id: F1.id, price: 0 });
     expect(gift(t)).toEqual({ e: 0, o: null });
     expect(referrals(t)[0].ok).toBe(0);
+  });
+
+  // a qualified referral whose claim (-1) is old enough for the sweep; the invitee is customer 3101
+  const stuckRow = (t: TestEnv) => {
+    q(t.storeDb, "INSERT INTO customers (telegram_id, display_name) VALUES (3101, 'a')");
+    q(t.storeDb, "INSERT INTO referrals (referrer_telegram_id, invitee_telegram_id, qualified_at, invitee_reward_eligible, invitee_reward_order_id) VALUES (?, 3101, datetime('now', '+03:30', '-2 hours'), 0, NULL)", REF.id);
+    q(t.storeDb, 'UPDATE referrals SET invitee_reward_eligible = 1');
+  };
+
+  it('the record step fails after the order was inserted: the sweep links it, exactly one free order', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    stuckRow(t);
+    const app = t.apps().store!;
+    const db = (app.db as any).db;
+    const batch = db.batch.bind(db);
+    db.batch = async (stmts: unknown[]) => { await batch(stmts); throw new Error('lost reply'); }; // committed, but the caller sees an error
+    await tryGrantInviteeGift(app, 1);
+    expect(gift(t).o).not.toBeNull(); // linked in the same transaction
+    // the older, non-atomic flow left the claim at -1 with an order; the sweep must not issue a second one
+    q(t.storeDb, 'UPDATE referrals SET invitee_reward_order_id = -1');
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, 3101)).toHaveLength(1);
+    expect(gift(t).o).toBe(freeOrders(t, 3101)[0].id);
+  });
+
+  it('an error after the insert committed (claim kept, order unknown to the caller): one free order after the sweep', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    stuckRow(t);
+    const app = t.apps().store!;
+    const db = (app.db as any).db;
+    const batch = db.batch.bind(db);
+    db.batch = async (stmts: unknown[]) => { await batch(stmts); throw new Error('lost reply'); };
+    await tryGrantInviteeGift(app, 1);
+    q(t.storeDb, 'UPDATE referrals SET invitee_reward_order_id = -1'); // the state the old two-step flow could leave
+    expect(freeOrders(t, 3101)).toHaveLength(1);
+    await t.cron(at(5, 5));
+    await t.cron(at(5, 15));
+    expect(freeOrders(t, 3101)).toHaveLength(1);
+  });
+
+  it('the record step throws before anything commits: the claim stays for the sweep, which then issues exactly one order', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    stuckRow(t);
+    const app = t.apps().store!;
+    const db = (app.db as any).db;
+    db.batch = async () => { throw new Error('D1 down'); };
+    await tryGrantInviteeGift(app, 1);
+    expect(gift(t).o).toBe(-1); // not released at once: we can't be sure
+    expect(freeOrders(t, 3101)).toHaveLength(0);
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, 3101)).toHaveLength(1);
+  });
+
+  it('a gift claim whose free order exists is never released by the sweep', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    stuckRow(t);
+    q(t.storeDb, 'UPDATE referrals SET invitee_reward_order_id = -1');
+    q(t.storeDb, "INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, status, created_at) VALUES (3101, 2, 'VPN 5G', 0, 'confirmed', datetime('now', '+03:30', '-1 hours'))");
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, 3101)).toHaveLength(1);
+    expect(gift(t).o).toBe(freeOrders(t, 3101)[0].id);
+  });
+
+  it('qualifyReferral stamps the gift eligibility in the same statement', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    q(t.storeDb, 'INSERT INTO referrals (referrer_telegram_id, invitee_telegram_id) VALUES (1, 11), (1, 12)');
+    const db = t.apps().store!.db;
+    expect(await db.qualifyReferral(1, 5, true)).toBe(true);
+    expect(await db.qualifyReferral(2, 6)).toBe(true);
+    expect(q(t.storeDb, 'SELECT invitee_reward_eligible AS e FROM referrals ORDER BY id').map((r) => r.e)).toEqual([1, 0]);
+  });
+
+  it('turning the gift off clears the rows still waiting for it (turning it on later is not retroactive)', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    stuckRow(t);
+    q(t.storeDb, "INSERT INTO referrals (referrer_telegram_id, invitee_telegram_id, qualified_at, invitee_reward_eligible, invitee_reward_order_id) VALUES (?, 3102, datetime('now'), 1, 99)", REF.id);
+    enable(t, { required: 1, inviteeProductId: 2 });
+    await t.send('store', callbackUpdate(ADMIN, 'ref_adm_inv_off'));
+    expect(q(t.storeDb, 'SELECT invitee_reward_eligible AS e FROM referrals ORDER BY id').map((r) => r.e)).toEqual([0, 1]); // an issued gift keeps its stamp
+    enable(t, { required: 1, inviteeProductId: 2 });
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, 3101)).toHaveLength(0);
+  });
+
+  it('the gift sweep still runs when the referrer loop stops for budget', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    q(t.storeDb, "INSERT INTO referrals (referrer_telegram_id, invitee_telegram_id, qualified_at) VALUES (5, 1, datetime('now')), (5, 2, datetime('now'))"); // a referrer ready for a reward
+    enable(t, { required: 2, inviteeProductId: 2 });
+    stuckRow(t);
+    q(t.storeDb, 'UPDATE referrals SET invitee_reward_order_id = -1 WHERE invitee_telegram_id = 3101');
+    const app = t.apps().store!;
+    app.apps.budget.take(30); // 20 left: the sweep's own queries fit, a grant (17+) no longer does after them
+    await sweepReferralRewards(app);
+    expect(q(t.storeDb, 'SELECT invitee_reward_order_id AS o FROM referrals WHERE invitee_telegram_id = 3101')[0].o).toBeNull(); // the stuck claim was released
   });
 
   it('customer view mentions the friend gift; the admin picker sets and clears it', async () => {

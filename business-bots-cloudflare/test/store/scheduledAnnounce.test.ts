@@ -128,6 +128,18 @@ describe('scheduled announcements: list and cancel', () => {
     expect(ans.text).toContain('شروع شده و دیگر قابل لغو نیست');
   });
 
+  it('a due job whose first batch is on its way (cursor still 0) cannot be cancelled either', async () => {
+    const { t, clock } = setup();
+    await schedule(t, jal(min(10)));
+    clock.now = min(11); // due; no cron tick has moved the cursor yet
+    expect(jobs(t)[0].cur).toBe(0);
+    await t.send('store', callbackUpdate(ADMIN, 'ann_sched_cancel_1', { chatId: ADMIN.id }));
+    expect(jobs(t)[0]).toMatchObject({ status: 'running', cancelled: 0 });
+    expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toContain('شروع شده و دیگر قابل لغو نیست');
+    await t.cron(clock.now);
+    expect(got(t, 'SALE SOON')).toHaveLength(3);
+  });
+
   it('non-admins cannot cancel; an empty list says so', async () => {
     const { t } = setup();
     await schedule(t, jal(min(60)));
