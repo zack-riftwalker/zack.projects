@@ -10,6 +10,8 @@ export interface SceneControl {
 export interface WizardControl {
   readonly state: Record<string, any>;
   next(): void;
+  /** Jumps back (or forward) to a step, e.g. to ask the same question again. */
+  select(step: number): void;
 }
 export interface WizardFlavor {
   scene: SceneControl;
@@ -93,6 +95,9 @@ export class Stage<C extends Context & WizardFlavor> {
         },
         next() {
           if (session?.__scene) session.__scene.step += 1;
+        },
+        select(step: number) {
+          if (session?.__scene) session.__scene.step = step;
         },
       };
 

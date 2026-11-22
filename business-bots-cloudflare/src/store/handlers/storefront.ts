@@ -7,16 +7,21 @@ import { Markup } from '../../lib/markup';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
 import {
-  escapeMarkdown, formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTime, catalogLabel,
+  escapeMarkdown, escapeHtml, formatPrice, buildPagedKeyboard, formatJalaliDate, parseLocalDateTime,
 } from '../utils';
+import {
+  loadCatalogEntries, sortOptions, optionButtonLabel, groupHeaderText, type CatalogEntry,
+} from '../catalog';
+import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
   validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, DISCOUNT_ERROR_LABEL,
 } from './discountCodes';
 import { formatCardNumber } from './storeSettings';
 import { buildReceiptCaption, deliverReceiptToAdmins } from '../services/receiptDelivery';
 import {
-  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REFERRAL_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL,
+  ACTIVATION_CONTACT, DUPLICATE_REASON_TEXT, MAX_REJECT_REASON_LENGTH, MY_SUBS_LABEL, REFERRAL_LABEL, REJECT_REASONS, RENEWAL_NOTE, STOREFRONT_LABEL, SUPPLIER_CONFIRM_TEXT,
 } from '../labels';
+import { markSupplierFulfillment, sourceSummary, startSupplierFulfillment } from '../suppliers/engine';
 import type { StoreContext } from '../types';
 import type { CustomerProduct, Order } from '../db';
 
@@ -48,11 +53,27 @@ export async function customerKeyboard(app: StoreApp) {
 
 const CATALOG_CANCEL_BTN = Markup.button.callback('❌ بستن', 'cust_catalog_close');
 
-function catalogKeyboard(products: CustomerProduct[], page: number) {
-  return productPickerKeyboard(products, page, 'cust_prod_', 'cust_catalog_page_', CATALOG_CANCEL_BTN, catalogLabel);
+const CATALOG_TEXT = '🛍 *فهرست محصولات*\n\nمحصول مورد نظر خود را انتخاب کنید:';
+
+function catalogKeyboard(entries: CatalogEntry[], page: number) {
+  return buildPagedKeyboard(entries, page, (e) => Markup.button.callback(e.label, e.callback), 'cust_catalog_page_', CATALOG_CANCEL_BTN);
 }
 
 // ─── Discount-question step (shared by catalog pick and renew button) ────────
+
+/** A product was picked: answer the callback, then the waitlist (unavailable) or the discount question. */
+async function openProduct(ctx: StoreContext, product: CustomerProduct) {
+  await ctx.answerCallbackQuery();
+  if (product.is_available === 0) {
+    await ctx.reply(
+      '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
+      'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
+      Markup.inlineKeyboard([[Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id)]]),
+    );
+    return;
+  }
+  await sendDiscountPrompt(ctx, product);
+}
 
 async function sendDiscountPrompt(ctx: StoreContext, product: CustomerProduct) {
   // A fresh product selection supersedes any half-finished discount-code entry.
@@ -167,16 +188,13 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
   // ── Entry point: "🛍 لیست محصولات" persistent button ────────────────────────
   bot.hears(STOREFRONT_LABEL, async (ctx) => {
-    const products = await ctx.app.db.getAllActiveCustomerProducts();
-    if (products.length === 0) {
+    const entries = await loadCatalogEntries(ctx.app);
+    if (entries.length === 0) {
       await ctx.reply('😔 فعلاً محصولی در فروشگاه موجود نیست.');
       return;
     }
 
-    await ctx.reply(
-      '🛍 *فهرست محصولات*\n\nمحصول مورد نظر خود را انتخاب کنید:',
-      { parse_mode: 'Markdown', ...catalogKeyboard(products, 0) },
-    );
+    await ctx.reply(CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, 0) });
   });
 
   // ── Entry point: "📋 اشتراک‌های من" persistent button ───────────────────────
@@ -212,16 +230,28 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         : {});
     }
 
+    // delivered orders whose accounts are stored (supplier / stock / manual text) get «🔑 نمایش اطلاعات اکانت»
+    const viewable = new Set<number>();
+    if (orders.length) {
+      const rows = (await ctx.app.raw.prepare(
+        `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
+         AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`,
+      ).bind(ctx.from!.id).all<{ id: number }>()).results;
+      for (const r of rows) viewable.add(r.id);
+    }
+
     for (const order of orders) {
       const buttons = [];
       if (isWarrantyActive(order)) {
         buttons.push(Markup.button.callback('🛠 مشکل دارم', 'warranty_claim_' + order.id));
       }
       buttons.push(Markup.button.callback('🔄 تمدید / خرید مجدد', 'renew_' + order.customer_product_id));
+      const rows = [buttons];
+      if (viewable.has(order.id)) rows.push([Markup.button.callback('🔑 نمایش اطلاعات اکانت', 'acct_show_' + order.id)]);
 
       await ctx.reply(subscriptionCardText(order), {
         parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([buttons]),
+        ...Markup.inlineKeyboard(rows),
       }).catch((err) => console.warn('⚠️ [Storefront] Subscription card failed for order #' + order.id + ':', err.message));
     }
   });
@@ -246,25 +276,14 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       return;
     }
 
-    const customerLabel = escapeMarkdown(ctx.from.first_name || 'مشتری') +
-      (ctx.from.username ? ' (@' + escapeMarkdown(ctx.from.username) + ')' : '');
     const adminMsg =
-      '🛠 *درخواست گارانتی جدید*\n\n' +
-      '👤 مشتری: ' + customerLabel + '\n' +
-      '🆔 آیدی: ' + ctx.from.id + '\n' +
-      '📦 محصول: ' + escapeMarkdown(order.product_name) + ' (سفارش #' + order.id + ')\n' +
+      '🛠 <b>درخواست گارانتی جدید</b>\n\n' +
+      customerRefHtml({ id: ctx.from.id, name: ctx.from.first_name || 'مشتری', username: ctx.from.username }) + '\n' +
+      '📦 محصول: ' + escapeHtml(order.product_name) + ' (سفارش #' + order.id + ')\n' +
       '📅 تاریخ تحویل: ' + formatJalaliDate(order.delivered_at!) + '\n' +
       '🛡 گارانتی تا: ' + formatJalaliDate(order.warranty_expires_at!);
 
-    let delivered = 0;
-    for (const adminId of ctx.app.cfg.adminIds) {
-      try {
-        await ctx.api.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
-        delivered++;
-      } catch (err: any) {
-        console.warn('⚠️ [Storefront] Failed to deliver warranty claim to admin ' + adminId + ':', err.message);
-      }
-    }
+    const delivered = await sendToAdmins(ctx.app, adminMsg, [customerContactRow(ctx.from.id, ctx.from.username, order.id)]);
 
     // No admin got it → don't start the once-a-day lock and don't claim success; the customer may retry.
     if (delivered === 0) {
@@ -300,12 +319,29 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   });
 
   // ── Catalog pagination ──────────────────────────────────────────────────────
+  // Also the «🔙 بازگشت» target of a group's detail message, so it edits the text back to the list.
   bot.callbackQuery(/^cust_catalog_page_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const products = await ctx.app.db.getAllActiveCustomerProducts();
-    await ctx.editMessageReplyMarkup(
-      { reply_markup: catalogKeyboard(products, parseInt(ctx.match![1], 10)).reply_markup },
-    ).catch(() => {});
+    const entries = await loadCatalogEntries(ctx.app);
+    await ctx.editMessageText(CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, parseInt(ctx.match![1], 10)) }).catch(() => {});
+  });
+
+  // ── Group selected (SUPPLIER_PLAN.md §3.1): one option → same as cust_prod; several → choose the option ──
+  bot.callbackQuery(/^cust_grp_(\d+)$/, async (ctx) => {
+    const { group, options } = await ctx.app.db.getGroupWithOptions(parseInt(ctx.match![1], 10));
+    if (!group || options.length === 0) {
+      await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
+      return;
+    }
+    if (options.length === 1) {
+      await openProduct(ctx, options[0]);
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    const rows = sortOptions(options).map((p) => [Markup.button.callback(optionButtonLabel(p), 'cust_prod_' + p.id)]);
+    rows.push([Markup.button.callback('🔙 بازگشت', 'cust_catalog_page_0')]);
+    await ctx.editMessageText(groupHeaderText(group.name), { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }).catch(() => {});
   });
 
   bot.callbackQuery('cust_catalog_close', async (ctx) => {
@@ -321,17 +357,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
       return;
     }
-
-    await ctx.answerCallbackQuery();
-    if (product.is_available === 0) {
-      await ctx.reply(
-        '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
-        'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
-        Markup.inlineKeyboard([[Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id)]]),
-      );
-      return;
-    }
-    await sendDiscountPrompt(ctx, product);
+    await openProduct(ctx, product);
   });
 
   // ── «🔔 موجود شد خبرم کن» ───────────────────────────────────────────────────
@@ -411,7 +437,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
       return;
     }
 
-    const result = await validateDiscountCode(ctx.app, ctx.message.text, productId, ctx.from.id);
+    const result = await validateDiscountCode(ctx.app, ctx.message.text, product, ctx.from.id);
     if (!result.ok) {
       await ctx.reply(
         DISCOUNT_ERROR_LABEL[result.reason] + '\n\nمی‌توانید دوباره تلاش کنید، یا بدون کد ادامه دهید.',
@@ -529,10 +555,17 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     const { productId, productName, price, discountCodeId } = pending;
     let orderId: number;
     try {
+      // keep the customer's @username current: admins see it on the receipt and the contact buttons (SUPPLIER_PLAN.md §2.3)
+      await ctx.app.db.upsertCustomer({
+        telegramId: ctx.from.id,
+        displayName: ctx.from.first_name || ctx.from.username || String(ctx.from.id),
+        username: ctx.from.username ?? null,
+      });
       const result = await ctx.app.db.createOrder({
         customerTelegramId: ctx.from.id,
         customerProductId: productId,
         productName, price, receiptFileId, receiptType, discountCodeId, receiptUniqueId,
+        customerUsername: ctx.from.username ?? null,
       });
       orderId = result.lastInsertRowid;
     } catch (err: any) {
@@ -744,6 +777,7 @@ const DISCOUNT_REASON_ADMIN: Record<string, string> = {
   max_uses: 'ظرفیت کد پر شده',
   already_used: 'مشتری قبلاً از این کد استفاده کرده یا ظرفیت پر شده',
   check_failed: 'بررسی کد ناموفق بود',
+  below_cost: 'قیمت با این کد از قیمت خرید کمتر می‌شود',
 };
 
 /** Shared confirm/reject handler. Double-tap / second-admin safe via decideOrder's status guard. */
@@ -795,10 +829,15 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
   }
 
   let discountWarning = '';
+  // supplier-fulfilled option (SUPPLIER_PLAN.md §7.2): the engine delivers it, monshi stays out of it
+  let supplierFulfilled = false;
+  let enabledSources = 0;
+  let confirmedProduct: Awaited<ReturnType<typeof ctx.app.db.getCustomerProductById>>;
   if (status === 'confirmed') {
     // Snapshot the product's subscription/warranty terms onto the order now
     // (the catalog item may change later).
     const product = await ctx.app.db.getCustomerProductById(order.customer_product_id);
+    confirmedProduct = product;
     try {
       await ctx.app.db.setOrderSubscriptionSnapshot(orderId, {
         durationDays: product?.duration_days ?? null,
@@ -808,11 +847,20 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
       console.error('❌ [Storefront] setOrderSubscriptionSnapshot failed for order #' + orderId + ':', err.message);
     }
 
+    try {
+      const sources = await sourceSummary(ctx.app, order.customer_product_id);
+      supplierFulfilled = sources.total > 0;
+      enabledSources = sources.enabled;
+      if (supplierFulfilled) await markSupplierFulfillment(ctx.app, orderId);
+    } catch (err: any) {
+      console.error('❌ [Storefront] supplier check failed for order #' + orderId + ':', err.message);
+    }
+
     if (order.discount_code_id) {
       // Re-check the code's rules at confirm time (not just at code-entry time), then record the
       // redemption atomically — two receipts sent with the same code can't both consume it.
       const revalidation = await validateDiscountCodeForOrder(
-        ctx.app, order.discount_code_id, order.customer_product_id, order.customer_telegram_id,
+        ctx.app, order.discount_code_id, product, order.customer_telegram_id,
       );
       let reason: string | null = revalidation.ok ? null : revalidation.reason;
       if (revalidation.ok) {
@@ -840,11 +888,14 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
 
   const label = status === 'confirmed' ? '✅ تایید شد' : '❌ رد شد';
   await answer(discountWarning ? { text: label + discountWarning, show_alert: true } : label);
-  await editCaption(originalCaption + '\n\n' + label + ' (توسط ادمین).' + (reason ? '\n📝 دلیل: ' + reason : '') + discountWarning);
+  await editCaption(originalCaption + '\n\n' + label + ' (توسط ادمین).' + (reason ? '\n📝 دلیل: ' + reason : '') + discountWarning +
+    (supplierFulfilled ? '\n🔌 تحویل خودکار از تأمین‌کننده' : ''));
 
   const customerMsg = status === 'confirmed'
-    ? '✅ پرداخت شما تایید شد! سفارش «' + order.product_name + '» با موفقیت ثبت شد.\n\n' +
-      '📩 برای انجام فرایند فعال‌سازی «' + order.product_name + '» به این آیدی پیام بدید: ' + ACTIVATION_CONTACT
+    ? supplierFulfilled
+      ? SUPPLIER_CONFIRM_TEXT(order.product_name)
+      : '✅ پرداخت شما تایید شد! سفارش «' + order.product_name + '» با موفقیت ثبت شد.\n\n' +
+        '📩 برای انجام فرایند فعال‌سازی «' + order.product_name + '» به این آیدی پیام بدید: ' + ACTIVATION_CONTACT
     : '❌ متاسفانه رسید پرداخت شما تایید نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.' +
       (reason ? '\n\n📝 دلیل: ' + reason : '');
   const customerExtra = status === 'rejected' && reason !== DUPLICATE_REASON_TEXT
@@ -857,22 +908,31 @@ async function handleOrderDecision(ctx: StoreContext, status: 'confirmed' | 'rej
     console.warn('⚠️ [Storefront] Failed to notify customer ' + order.customer_telegram_id + ':', err.message);
   }
 
-  // Tell monshi last, so the customer sees the store's "confirmed" message first.
+  // Tell monshi last, so the customer sees the store's "confirmed" message first. Supplier orders never reach it.
   if (status === 'confirmed') {
-    try {
-      await storeOrderPaid(ctx.app.apps, {
-        order_id: orderId,
-        customer_id: order.customer_telegram_id,
-        product: order.product_name,
-      });
-    } catch (err: any) {
-      console.error('❌ [Storefront] Bridge failed for order #' + orderId + ':', err.message);
+    if (!supplierFulfilled) {
+      try {
+        await storeOrderPaid(ctx.app.apps, {
+          order_id: orderId,
+          customer_id: order.customer_telegram_id,
+          product: order.product_name,
+        });
+      } catch (err: any) {
+        console.error('❌ [Storefront] Bridge failed for order #' + orderId + ':', err.message);
+      }
     }
     // an invited customer's first confirmed purchase counts for their inviter
     try {
       await onPurchaseConfirmed(ctx.app, { id: orderId, customer_telegram_id: order.customer_telegram_id, price: order.price });
     } catch (err: any) {
       console.error('❌ [Storefront] Referral qualification failed for order #' + orderId + ':', err.message);
+    }
+    if (supplierFulfilled) {
+      try {
+        await startSupplierFulfillment(ctx.app, order, confirmedProduct, enabledSources);
+      } catch (err: any) {
+        console.error('❌ [Storefront] Supplier fulfillment failed to start for order #' + orderId + ':', err.message);
+      }
     }
   }
 
