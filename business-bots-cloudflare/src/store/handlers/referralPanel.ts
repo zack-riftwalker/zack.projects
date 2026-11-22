@@ -13,6 +13,13 @@ const BACK_BTN = Markup.button.callback('🔙 بازگشت', 'ref_adm_back');
 
 // ─── Customer side ───────────────────────────────────────────────────────────
 
+/** round 4 (§2.3): one extra line when the invitee gets a gift too */
+async function inviteeGiftLine(app: StoreApp, cfg: ReferralConfig): Promise<string> {
+  if (cfg.inviteeProductId === null) return '';
+  const p = await app.db.getCustomerProductById(cfg.inviteeProductId);
+  return p && p.is_active ? '\n🤝 دوستتان هم با اولین خریدش یک «' + p.name + '» رایگان هدیه می‌گیرد.' : '';
+}
+
 async function showCustomerView(ctx: StoreContext): Promise<void> {
   const app = ctx.app;
   const cfg = await getReferralConfig(app);
@@ -32,7 +39,7 @@ async function showCustomerView(ctx: StoreContext): Promise<void> {
 
   const lines = [
     '🎁 دعوت دوستان', '',
-    await rulesText(app, cfg), '',
+    (await rulesText(app, cfg)) + (await inviteeGiftLine(app, cfg)), '',
     '🔗 لینک دعوت شما:', link, '',
     '📊 وضعیت شما:',
     '👥 دعوت‌شده: ' + fa(ov.invited) + ' نفر',
@@ -67,6 +74,7 @@ async function panelView(app: StoreApp, cfg: ReferralConfig) {
     ? 'محصول رایگان «' + (await productName(cfg.productId)) + '»'
     : 'کد تخفیف ' + discountLabel(cfg.discType, cfg.discValue) + ' برای «' + (await productName(cfg.discProductId)) + '» با اعتبار ' + fa(cfg.discValidDays) + ' روز';
 
+  const inviteeProduct = cfg.inviteeProductId ? (await app.db.getCustomerProductById(cfg.inviteeProductId))?.name ?? '—' : null;
   const lines = [
     '🎁 برنامه دعوت دوستان — ' + (cfg.enabled ? '✅ فعال' : '🚫 خاموش'), '',
     '🎯 تعداد دعوت موفق برای هر جایزه: ' + fa(cfg.required),
@@ -84,6 +92,8 @@ async function panelView(app: StoreApp, cfg: ReferralConfig) {
     [Markup.button.callback(cfg.enabled ? '🚫 خاموش کن' : '✅ روشن کن', 'ref_adm_toggle')],
     [Markup.button.callback('🎯 تعداد دعوت', 'ref_adm_req'), Markup.button.callback('💵 حداقل خرید', 'ref_adm_min')],
     [Markup.button.callback('🏆 نوع جایزه', 'ref_adm_type')],
+    [Markup.button.callback('🎁 هدیه‌ی دوستِ دعوت‌شده: ' + (inviteeProduct ? '«' + inviteeProduct + '»' : 'خاموش'), 'ref_adm_inv')],
+    ...(inviteeProduct ? [[Markup.button.callback('🚫 خاموش', 'ref_adm_inv_off')]] : []),
     [Markup.button.callback('🔁 تکرار جایزه: ' + (cfg.repeatable ? 'روشن' : 'خاموش'), 'ref_adm_repeat')],
     [Markup.button.callback('🔙 بستن', 'ref_adm_close')],
   ]);
@@ -127,7 +137,7 @@ function applyInput(cfg: ReferralConfig, key: string, n: number): string | null 
   return null;
 }
 
-async function productPicker(ctx: StoreContext, prefix: 'dprod' | 'pprod', page: number, title: string, edit = true) {
+async function productPicker(ctx: StoreContext, prefix: 'dprod' | 'pprod' | 'iprod', page: number, title: string, edit = true) {
   const products = await ctx.app.db.getAllActiveCustomerProducts();
   if (!products.length) {
     await ctx.reply('⚠️ هیچ محصول فعالی وجود ندارد.');
@@ -176,6 +186,35 @@ async function onAdminCallback(ctx: StoreContext) {
     cfg.enabled = !cfg.enabled;
     await save(ctx, cfg);
     await ans(cfg.enabled ? '✅ روشن شد' : '🚫 خاموش شد');
+    await renderPanel(ctx, cfg, true);
+    return;
+  }
+  if (rest === 'inv') {
+    await ans();
+    await productPicker(ctx, 'iprod', 0, '🎁 کدام محصول به‌عنوان هدیه‌ی دوستِ دعوت‌شده داده شود؟');
+    return;
+  }
+  if (rest === 'inv_off') {
+    cfg.inviteeProductId = null;
+    await save(ctx, cfg);
+    await ans('🚫 خاموش شد');
+    await renderPanel(ctx, cfg, true);
+    return;
+  }
+  if ((m = rest.match(/^iprodpage_(\d+)$/))) {
+    await ans();
+    await productPicker(ctx, 'iprod', parseInt(m[1], 10), '🎁 کدام محصول به‌عنوان هدیه‌ی دوستِ دعوت‌شده داده شود؟');
+    return;
+  }
+  if ((m = rest.match(/^iprod_(\d+)$/))) {
+    const product = await app.db.getCustomerProductById(parseInt(m[1], 10));
+    if (!product || !product.is_active) {
+      await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
+      return;
+    }
+    cfg.inviteeProductId = product.id;
+    await save(ctx, cfg);
+    await ans();
     await renderPanel(ctx, cfg, true);
     return;
   }

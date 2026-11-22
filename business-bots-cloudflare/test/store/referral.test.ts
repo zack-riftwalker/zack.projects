@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN, makeTestEnv, type TestEnv } from '../helpers/env';
 import { callbackUpdate, photoUpdate, textUpdate } from '../helpers/updates';
 import { one, q, seedProduct } from '../helpers/seed';
-import { tryGrantRewards } from '../../src/store/referrals';
+import { onPurchaseConfirmed, tryGrantInviteeGift, tryGrantRewards } from '../../src/store/referrals';
 import { DEFAULT_REFERRAL_CONFIG, getReferralConfig } from '../../src/store/referralConfig';
 
 const REF = { id: 3001, first_name: 'Referrer', username: 'ref_user' };
@@ -382,5 +382,122 @@ describe('referral: admin panel', () => {
     await t.send('store', callbackUpdate(REF, 'ref_adm_toggle'));
     expect(t.tg.of('answerCallbackQuery').at(-1)!.payload.text).toBe('⛔️ دسترسی ندارید.');
     expect((await getReferralConfig(t.apps().store!)).enabled).toBe(false);
+  });
+});
+
+describe('referral: invitee gift (round 4, §2)', () => {
+  async function setup(over: Record<string, unknown> = {}, monshi = false) {
+    const t = makeTestEnv({ monshi });
+    seedProduct(t, { name: 'GPT Plus', price: 500000 });
+    seedProduct(t, { name: 'VPN 5G', price: 100000 });
+    enable(t, { required: 1, ...over });
+    const code = await linkOf(t);
+    return { t, code };
+  }
+  const freeOrders = (t: TestEnv, id: number) => q(t.storeDb, 'SELECT * FROM orders WHERE customer_telegram_id = ? AND price = 0', id);
+  const gift = (t: TestEnv) => q(t.storeDb, 'SELECT invitee_reward_eligible AS e, invitee_reward_order_id AS o FROM referrals')[0];
+
+  it('off (null): no invitee order, nothing stamped', async () => {
+    const { t, code } = await setup();
+    await invite(t, code, F1);
+    await buyConfirmed(t, F1);
+    expect(freeOrders(t, F1.id)).toHaveLength(0);
+    expect(gift(t)).toEqual({ e: 0, o: null });
+    expect(rewards(t)).toHaveLength(1); // the referrer reward is unchanged
+  });
+
+  it('on: the invitee gets exactly one 0-Toman order, a message, and the admins are told; the referrer reward still works', async () => {
+    const { t, code } = await setup({ inviteeProductId: 2 });
+    await invite(t, code, F1);
+    await buyConfirmed(t, F1);
+    const orders = freeOrders(t, F1.id);
+    expect(orders).toHaveLength(1);
+    expect(orders[0]).toMatchObject({ price: 0, status: 'confirmed', product_name: 'VPN 5G' });
+    expect(gift(t)).toEqual({ e: 1, o: orders[0].id });
+    expect(t.tg.texts(F1.id).join('\n')).toContain('یک «VPN 5G» رایگان هدیه گرفتید');
+    const adminText = t.tg.texts(ADMIN.id).join('\n');
+    expect(adminText).toContain('هدیه‌ی دوستِ دعوت‌شده صادر شد');
+    expect(adminText).toContain('سفارش رایگان #' + orders[0].id + ' — لطفاً تحویل دهید');
+    expect(rewards(t)[0]).toMatchObject({ status: 'issued' });
+  });
+
+  it('idempotent: a second onPurchaseConfirmed and a racing sweep issue one gift', async () => {
+    const { t, code } = await setup({ inviteeProductId: 2 });
+    await invite(t, code, F1);
+    const id = await buyConfirmed(t, F1);
+    await onPurchaseConfirmed(t.apps().store!, { id, customer_telegram_id: F1.id, price: 500000 });
+    await Promise.all([tryGrantInviteeGift(t.apps().store!, 1), tryGrantInviteeGift(t.apps().store!, 1)]);
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, F1.id)).toHaveLength(1);
+  });
+
+  it('retroactive guard: qualified while off, option turned on later → no gift', async () => {
+    const { t, code } = await setup();
+    await invite(t, code, F1);
+    await buyConfirmed(t, F1);
+    expect(gift(t)).toEqual({ e: 0, o: null });
+    enable(t, { required: 1, inviteeProductId: 2 });
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, F1.id)).toHaveLength(0);
+  });
+
+  it('budget short at confirm time: the sweep issues the gift on a later tick', async () => {
+    const { t, code } = await setup({ inviteeProductId: 2 });
+    await invite(t, code, F1);
+    await t.send('store', callbackUpdate(F1, 'cust_prod_1'));
+    await t.send('store', callbackUpdate(F1, 'cust_disc_skip_1'));
+    await t.send('store', callbackUpdate(F1, 'cust_agree_1'));
+    await t.send('store', photoUpdate(F1, 'r1'));
+    q(t.storeDb, "UPDATE orders SET status = 'confirmed' WHERE id = 1");
+    const apps = t.apps();
+    apps.budget.take(38);
+    await onPurchaseConfirmed(apps.store!, { id: 1, customer_telegram_id: F1.id, price: 500000 });
+    expect(gift(t)).toEqual({ e: 1, o: null }); // stamped, not issued
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, F1.id)).toHaveLength(1);
+  });
+
+  it('a stuck claim with no order is released by the sweep after an hour', async () => {
+    const { t } = await setup({ inviteeProductId: 2, enabled: true });
+    q(t.storeDb, "INSERT INTO customers (telegram_id, display_name) VALUES (3101, 'a')");
+    q(t.storeDb, "INSERT INTO referrals (referrer_telegram_id, invitee_telegram_id, qualified_at, invitee_reward_eligible, invitee_reward_order_id) VALUES (?, 3101, datetime('now', '+03:30', '-2 hours'), 1, -1)", REF.id);
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, F1.id)).toHaveLength(1);
+  });
+
+  it('an inactive gift product leaves the row pending; the panel blocks enabling with it', async () => {
+    const { t, code } = await setup({ inviteeProductId: 2 });
+    await invite(t, code, F1);
+    q(t.storeDb, 'UPDATE customer_products SET is_active = 0 WHERE id = 2');
+    await buyConfirmed(t, F1);
+    expect(gift(t)).toEqual({ e: 1, o: null });
+    expect(freeOrders(t, F1.id)).toHaveLength(0);
+    q(t.storeDb, 'UPDATE customer_products SET is_active = 1 WHERE id = 2');
+    await t.cron(at(5, 5));
+    expect(freeOrders(t, F1.id)).toHaveLength(1);
+  });
+
+  it('a reward order (price 0) for the invitee triggers nothing', async () => {
+    const { t, code } = await setup({ inviteeProductId: 2 });
+    await invite(t, code, F1);
+    await onPurchaseConfirmed(t.apps().store!, { id: 99, customer_telegram_id: F1.id, price: 0 });
+    expect(gift(t)).toEqual({ e: 0, o: null });
+    expect(referrals(t)[0].ok).toBe(0);
+  });
+
+  it('customer view mentions the friend gift; the admin picker sets and clears it', async () => {
+    const { t } = await setup({ inviteeProductId: 2 });
+    await t.send('store', textUpdate(REF, '🎁 دعوت دوستان'));
+    expect(t.tg.texts(REF.id).at(-1)).toContain('🤝 دوستتان هم با اولین خریدش یک «VPN 5G» رایگان هدیه می‌گیرد.');
+
+    enable(t, { required: 1 });
+    await t.send('store', textUpdate(ADMIN, '🎁 دعوت دوستان'));
+    const panel = t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload;
+    expect(JSON.stringify(panel.reply_markup)).toContain('هدیه‌ی دوستِ دعوت‌شده: خاموش');
+    await t.send('store', callbackUpdate(ADMIN, 'ref_adm_inv'));
+    await t.send('store', callbackUpdate(ADMIN, 'ref_adm_iprod_2'));
+    expect(JSON.parse(q(t.storeDb, "SELECT value FROM store_kv WHERE key = 'referral'")[0].value).inviteeProductId).toBe(2);
+    await t.send('store', callbackUpdate(ADMIN, 'ref_adm_inv_off'));
+    expect(JSON.parse(q(t.storeDb, "SELECT value FROM store_kv WHERE key = 'referral'")[0].value).inviteeProductId).toBeNull();
   });
 });

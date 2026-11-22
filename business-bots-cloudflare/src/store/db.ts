@@ -677,6 +677,34 @@ export class StoreDb {
     return r.meta.changes === 1;
   }
 
+  /** round 4 (§2): stamps the invitee gift eligibility at qualify time (never retroactive) */
+  async markInviteeGiftEligible(referralId: number): Promise<void> {
+    await this.q('UPDATE referrals SET invitee_reward_eligible = 1 WHERE id = ? AND invitee_reward_order_id IS NULL', referralId).run();
+  }
+
+  async getInviteeGiftTarget(referralId: number): Promise<number | null> {
+    return (await this.q('SELECT invitee_telegram_id FROM referrals WHERE id = ? AND invitee_reward_eligible = 1 AND invitee_reward_order_id IS NULL', referralId).first<{ invitee_telegram_id: number }>())?.invitee_telegram_id ?? null;
+  }
+
+  /** atomic claim: true = this caller issues the gift */
+  async claimInviteeGift(referralId: number): Promise<boolean> {
+    const r = await this.q('UPDATE referrals SET invitee_reward_order_id = -1 WHERE id = ? AND invitee_reward_eligible = 1 AND invitee_reward_order_id IS NULL', referralId).run();
+    return r.meta.changes === 1;
+  }
+
+  async finishInviteeGift(referralId: number, orderId: number | null): Promise<void> {
+    await this.q('UPDATE referrals SET invitee_reward_order_id = ? WHERE id = ? AND invitee_reward_order_id = -1', orderId, referralId).run();
+  }
+
+  async getPendingInviteeGiftIds(limit: number): Promise<number[]> {
+    return (await this.q('SELECT id FROM referrals WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id IS NULL ORDER BY id LIMIT ?', limit).all<{ id: number }>()).results.map((r) => r.id);
+  }
+
+  /** a claim older than an hour (by qualified_at) that never got an order is released */
+  async resetStuckInviteeGifts(): Promise<void> {
+    await this.q("UPDATE referrals SET invitee_reward_order_id = NULL WHERE invitee_reward_eligible = 1 AND invitee_reward_order_id = -1 AND qualified_at <= datetime('now', '+03:30', '-1 hours')").run();
+  }
+
   async countUnrewardedReferrals(referrerId: number): Promise<number> {
     return (await this.q('SELECT COUNT(*) AS n FROM referrals WHERE referrer_telegram_id = ? AND qualified_at IS NOT NULL AND reward_id IS NULL', referrerId).first<{ n: number }>())!.n;
   }

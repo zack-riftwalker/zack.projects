@@ -18,11 +18,13 @@ export interface ReferralConfig {
   productId: number | null;
   /** every N invites → another reward; false = one reward max */
   repeatable: boolean;
+  /** round 4 (§2): free product the INVITEE gets with their first qualifying purchase; null = off */
+  inviteeProductId: number | null;
 }
 
 export const DEFAULT_REFERRAL_CONFIG: ReferralConfig = {
   enabled: false, required: 3, minAmount: 0, reward: 'discount', discType: 'percent', discValue: 20,
-  discProductId: null, discValidDays: 30, productId: null, repeatable: true,
+  discProductId: null, discValidDays: 30, productId: null, repeatable: true, inviteeProductId: null,
 };
 
 const KEY = 'referral';
@@ -51,6 +53,7 @@ export function referralConfigProblem(cfg: ReferralConfig, products: CustomerPro
   } else if (!usable(cfg.discProductId)) {
     return '⚠️ اول محصولی که کد تخفیف برای آن صادر می‌شود را انتخاب کنید.';
   }
+  if (cfg.inviteeProductId !== null && !usable(cfg.inviteeProductId)) return '⚠️ محصول هدیه‌ی دوستِ دعوت‌شده فعال نیست.';
   if (cfg.reward === 'discount') {
     if (cfg.discType === 'percent' && !(cfg.discValue >= 1 && cfg.discValue <= 100)) return '⚠️ درصد تخفیف باید بین ۱ تا ۱۰۰ باشد.';
     if (cfg.discType === 'fixed' && !(cfg.discValue > 0)) return '⚠️ مبلغ تخفیف باید بیشتر از صفر باشد.';

@@ -76,6 +76,7 @@ export async function handleRefStart(app: StoreApp, inviteeId: number, code: str
 
 /** Called after an order is confirmed (receipt) or a manual purchase is claimed. */
 export async function onPurchaseConfirmed(app: StoreApp, order: { id: number; customer_telegram_id: number; price: number }): Promise<void> {
+  if (order.price <= 0) return; // a free reward order never qualifies a referral or triggers a gift
   const cfg = await getReferralConfig(app);
   if (!cfg.enabled) return;
   const referral = await app.db.getReferralByInvitee(order.customer_telegram_id);
@@ -83,7 +84,10 @@ export async function onPurchaseConfirmed(app: StoreApp, order: { id: number; cu
   if (order.price < cfg.minAmount) return; // a later, bigger order can still qualify
   if (!(await app.db.qualifyReferral(referral.id, order.id))) return;
   console.log('🎁 [Referral] Invite of customer ' + order.customer_telegram_id + ' qualified (referrer ' + referral.referrer_telegram_id + ').');
+  // eligibility is stamped now: turning the option on later never rewards people who qualified in the past
+  if (cfg.inviteeProductId !== null) await app.db.markInviteeGiftEligible(referral.id);
   await tryGrantRewards(app, referral.referrer_telegram_id);
+  if (cfg.inviteeProductId !== null) await tryGrantInviteeGift(app, referral.id);
   // otherwise the cron sweep grants it
 }
 
@@ -140,6 +144,71 @@ async function markRewardForApproval(app: StoreApp, orderId: number): Promise<vo
   await raiseNeedsAction(app, orderId, 'approval');
 }
 
+/**
+ * Hands a free (0-Toman, already confirmed) order to the normal delivery flow and tells the admins.
+ * Shared by the referrer reward and the invitee gift.
+ */
+async function deliverFreeProductOrder(
+  app: StoreApp,
+  p: { customerId: number; orderId: number; product: { id: number; name: string }; adminHeader: string },
+): Promise<void> {
+  if (await isSupplierOption(app, p.product.id)) {
+    // a free product that costs real money: the admin approves the purchase on a decision card (SUPPLIER_PLAN.md §10.3)
+    await markRewardForApproval(app, p.orderId);
+    await notifyAdmins(app, p.adminHeader + ' — کارت تأیید خرید برایتان آمد');
+    return;
+  }
+  // the normal delivery flow: monshi's «being prepared» message, the delivery button, the 20 h stalled alert
+  try {
+    await storeOrderPaid(app.apps, { order_id: p.orderId, customer_id: p.customerId, product: p.product.name });
+  } catch (err: any) {
+    console.error('❌ [Referral] Bridge failed for reward order #' + p.orderId + ':', err.message);
+  }
+  await notifyAdmins(app, p.adminHeader + ' — لطفاً تحویل دهید');
+}
+
+/**
+ * The invitee's own free product (round 4, §2). Claimed atomically, so a direct call and the cron sweep can't both issue it.
+ * Nothing happens unless the row was stamped eligible when the referral qualified.
+ */
+export async function tryGrantInviteeGift(app: StoreApp, referralId: number): Promise<void> {
+  if (app.apps.budget.remaining() < grantBudgetNeeded(app)) return; // the cron sweep continues
+  const cfg = await getReferralConfig(app);
+  if (cfg.inviteeProductId === null) return;
+  const product = await app.db.getCustomerProductById(cfg.inviteeProductId);
+  if (!product || !product.is_active) {
+    console.warn('⚠️ [Referral] Invitee gift product is not active — gift for referral ' + referralId + ' stays pending');
+    return;
+  }
+  const inviteeId = await app.db.getInviteeGiftTarget(referralId);
+  if (inviteeId === null) return;
+  if (!(await app.db.claimInviteeGift(referralId))) return; // someone else is issuing it
+
+  let orderId: number | null = null;
+  try {
+    orderId = await app.db.createRewardOrder({ customerTelegramId: inviteeId, product });
+    await app.db.finishInviteeGift(referralId, orderId);
+    try {
+      await app.api.sendMessage(inviteeId, '🎁 چون با لینک دعوت دوستتان خرید کردید، یک «' + product.name + '» رایگان هدیه گرفتید!\nسفارش #' + orderId + ' ثبت شد و به‌زودی تحویل داده می‌شود.');
+    } catch (err: any) {
+      if (err instanceof BudgetExceededError) throw err;
+      console.warn('⚠️ [Referral] Invitee gift message to ' + inviteeId + ' failed:', err.message);
+    }
+    await deliverFreeProductOrder(app, {
+      customerId: inviteeId, orderId, product,
+      adminHeader: '🎁 هدیه‌ی دوستِ دعوت‌شده صادر شد\n👤 مشتری: ' + inviteeId + '\n🏆 سفارش رایگان #' + orderId,
+    });
+  } catch (err: any) {
+    if (orderId === null) {
+      // no order exists: release the claim so the sweep can retry
+      await app.db.finishInviteeGift(referralId, null).catch(() => {});
+    }
+    if (err instanceof BudgetExceededError) throw err;
+    console.error('❌ [Referral] Invitee gift for referral ' + referralId + ' failed:', err.message);
+    if (orderId !== null) await notifyAdmins(app, '⚠️ هدیه‌ی دوستِ دعوت‌شده برای مشتری ' + inviteeId + ' (سفارش #' + orderId + ') نیمه‌کاره ماند. لطفاً دستی رسیدگی کنید.');
+  }
+}
+
 async function issueReward(app: StoreApp, referrerId: number, rewardId: number, cfg: ReferralConfig): Promise<void> {
   const intro = '🎉 تبریک! ' + fa(cfg.required) + ' نفر از دوستانتان با لینک شما خرید کردند.\n\n';
 
@@ -154,19 +223,10 @@ async function issueReward(app: StoreApp, referrerId: number, rewardId: number, 
       if (err instanceof BudgetExceededError) throw err;
       console.warn('⚠️ [Referral] Reward message to ' + referrerId + ' failed:', err.message);
     }
-    if (await isSupplierOption(app, product.id)) {
-      // a free product that costs real money: the admin approves the purchase on a decision card (SUPPLIER_PLAN.md §10.3)
-      await markRewardForApproval(app, orderId);
-      await notifyAdmins(app, '🎁 جایزه دعوت صادر شد\n👤 مشتری: ' + referrerId + '\n🎯 ' + fa(cfg.required) + ' دعوت موفق\n🏆 جایزه: سفارش رایگان #' + orderId + ' — کارت تأیید خرید برایتان آمد');
-      return;
-    }
-    // the normal delivery flow: monshi's «being prepared» message, the delivery button, the 20 h stalled alert
-    try {
-      await storeOrderPaid(app.apps, { order_id: orderId, customer_id: referrerId, product: product.name });
-    } catch (err: any) {
-      console.error('❌ [Referral] Bridge failed for reward order #' + orderId + ':', err.message);
-    }
-    await notifyAdmins(app, '🎁 جایزه دعوت صادر شد\n👤 مشتری: ' + referrerId + '\n🎯 ' + fa(cfg.required) + ' دعوت موفق\n🏆 جایزه: سفارش رایگان #' + orderId + ' — لطفاً تحویل دهید');
+    await deliverFreeProductOrder(app, {
+      customerId: referrerId, orderId, product,
+      adminHeader: '🎁 جایزه دعوت صادر شد\n👤 مشتری: ' + referrerId + '\n🎯 ' + fa(cfg.required) + ' دعوت موفق\n🏆 جایزه: سفارش رایگان #' + orderId,
+    });
     return;
   }
 
@@ -227,5 +287,16 @@ export async function sweepReferralRewards(app: StoreApp): Promise<void> {
       if (err instanceof BudgetExceededError) return;
       console.error('❌ [Referral] Sweep failed for ' + referrerId + ':', err.message);
     }
+  }
+  // round 4 (§2): the invitee gifts that were not issued inline (at most 3 per tick)
+  try {
+    await app.db.resetStuckInviteeGifts();
+    for (const referralId of await app.db.getPendingInviteeGiftIds(3)) {
+      if (app.apps.budget.remaining() < grantBudgetNeeded(app)) return;
+      await tryGrantInviteeGift(app, referralId);
+    }
+  } catch (err: any) {
+    if (err instanceof BudgetExceededError) return;
+    console.error('❌ [Referral] Invitee gift sweep failed:', err.message);
   }
 }
