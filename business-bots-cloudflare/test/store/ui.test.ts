@@ -402,3 +402,94 @@ describe('invite friends screen', () => {
     expect(lastSend(t).payload.text).toContain('🔗 لینک دعوت شما:');
   });
 });
+
+// ─── U4: product photo ───────────────────────────────────────────────────────
+
+describe('product photo', () => {
+  const ADM = { id: 1001, first_name: 'Admin' };
+
+  it('admin: set from a photo (largest size), shown on the card, cleared with «حذف», anything else re-asks', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    await t.send('store', textUpdate(ADM, '✏️ ویرایش محصول'));
+    await t.send('store', callbackUpdate(ADM, 'cprod_edit_select_' + pid));
+    await t.send('store', callbackUpdate(ADM, 'cprod_edit_f_photo'));
+    expect(t.tg.texts(ADM.id).at(-1)).toBe('🖼 عکس محصول را بفرستید (یا «حذف»).');
+    await t.send('store', textUpdate(ADM, 'blah'));
+    expect(t.tg.texts(ADM.id).at(-1)).toBe('🖼 عکس محصول را بفرستید (یا «حذف»).');
+    expect(one(t.storeDb, 'SELECT photo_file_id AS f FROM customer_products').f).toBeNull();
+    await t.send('store', photoUpdate(ADM, 'file-big'));
+    expect(one(t.storeDb, 'SELECT photo_file_id AS f FROM customer_products').f).toBe('file-big');
+    expect(t.tg.texts(ADM.id).at(-1)).toContain('🖼 عکس: دارد');
+    await t.send('store', callbackUpdate(ADM, 'cprod_edit_f_photo'));
+    await t.send('store', textUpdate(ADM, 'حذف'));
+    expect(one(t.storeDb, 'SELECT photo_file_id AS f FROM customer_products').f).toBeNull();
+    expect(t.tg.texts(ADM.id).at(-1)).toContain('🖼 عکس: —');
+  });
+
+  async function shopWithPhoto(terms: string | null = null) {
+    const t = makeTestEnv({ monshi: false });
+    seedCard(t);
+    const pid = seedProduct(t, { name: 'Pic', terms });
+    q(t.storeDb, "UPDATE customer_products SET photo_file_id = 'PHOTO1' WHERE id = ?", pid);
+    await t.send('store', textUpdate(C, '/start'));
+    return { t, pid };
+  }
+
+  it('product screen is a photo with the text as caption; text → photo → text navigation deletes + sends', async () => {
+    const { t, pid } = await shopWithPhoto();
+    let screen = t.tg.lastSentId(C.id);
+    await t.send('store', callbackUpdate(C, 'ui_menu_shop', { message_id: screen })); // text → text: edit
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid, { message_id: screen })); // text → photo
+    expect(t.tg.of('deleteMessage').map((c) => c.payload.message_id)).toEqual([screen]);
+    const photo = t.tg.of('sendPhoto', C.id).at(-1)!;
+    expect(photo.payload.photo).toBe('PHOTO1');
+    expect(photo.payload.caption).toContain('📦 Pic');
+    expect(photo.payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toContain('ui_pay_' + pid);
+    screen = photo.result.message_id;
+
+    // photo → text (the agree step): delete the photo, send text
+    await t.send('store', callbackUpdate(C, 'ui_pay_' + pid, { message_id: screen, caption: 'x' }));
+    expect(t.tg.of('deleteMessage').at(-1)!.payload.message_id).toBe(screen);
+    expect(lastSend(t).payload.text).toContain('آیا با شرایط بالا موافقید؟');
+    const textScreen = lastSend(t).result.message_id;
+
+    // text → photo again, then photo → photo edits the media
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid, { message_id: textScreen }));
+    const photo2 = t.tg.of('sendPhoto', C.id).at(-1)!;
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid, { message_id: photo2.result.message_id, caption: 'x' }));
+    const media = t.tg.of('editMessageMedia').at(-1)!.payload;
+    expect(media.media).toMatchObject({ type: 'photo', media: 'PHOTO1' });
+    expect(media.message_id).toBe(photo2.result.message_id);
+  });
+
+  it('long terms: the photo caption stays ≤ 1024 and defers the terms to the agree step', async () => {
+    const long = 'شرط '.repeat(400);
+    const { t, pid } = await shopWithPhoto(long);
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid));
+    const cap = t.tg.of('sendPhoto', C.id).at(-1)!.payload.caption as string;
+    expect(cap.length).toBeLessThanOrEqual(1024);
+    expect(cap).toContain('📜 شرایط در مرحله‌ی بعد نمایش داده می‌شود.');
+    expect(cap).not.toContain('شرط شرط');
+    await t.send('store', callbackUpdate(C, 'ui_pay_' + pid));
+    expect(lastSend(t).payload.text).toContain('شرط شرط');
+  });
+
+  it('short terms stay in the caption; a product without a photo is a plain text screen', async () => {
+    const { t, pid } = await shopWithPhoto('Rule');
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid));
+    expect(t.tg.of('sendPhoto', C.id).at(-1)!.payload.caption).toContain('Rule');
+    q(t.storeDb, 'UPDATE customer_products SET photo_file_id = NULL');
+    t.tg.reset();
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid));
+    expect(t.tg.of('sendPhoto')).toHaveLength(0);
+    expect(lastSend(t).payload.text).toContain('📦 Pic');
+  });
+
+  it('a rejected photo file falls back to the text screen', async () => {
+    const { t, pid } = await shopWithPhoto();
+    t.tg.fail('sendPhoto', () => true, 400, 'Bad Request: wrong file identifier');
+    await t.send('store', callbackUpdate(C, 'cust_prod_' + pid));
+    expect(lastSend(t).payload.text).toContain('📦 Pic');
+  });
+});

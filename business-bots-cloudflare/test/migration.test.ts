@@ -25,6 +25,15 @@ describe('sqlite_to_d1.py target columns', () => {
   });
 });
 
+describe('store migration 0006 (product photo)', () => {
+  it('adds a nullable photo_file_id to customer_products', () => {
+    const f = new FakeD1().migrate('store');
+    expect(columns(f, 'customer_products')).toContain('photo_file_id');
+    f.sqlite.prepare("INSERT INTO customer_products (name, price) VALUES ('p', 1)").run();
+    expect((f.sqlite.prepare('SELECT photo_file_id FROM customer_products').get() as any).photo_file_id).toBeNull();
+  });
+});
+
 describe('store migration 0005 (campaign)', () => {
   it('applies on top of 0001-0004 and the new columns default as documented', () => {
     const f = new FakeD1().migrate('store');

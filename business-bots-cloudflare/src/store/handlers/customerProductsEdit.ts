@@ -13,6 +13,7 @@ const FIELD_PROMPTS: Record<string, string> = {
   name: '✏️ نام جدید محصول را وارد کنید:',
   price: '💰 قیمت جدید را به تومان وارد کنید:\n\nمثال: 1200000',
   compare: '🏷 قیمت قبل از تخفیف را به تومان وارد کنید (یا بنویسید «حذف» تا برداشته شود):',
+  photo: '🖼 عکس محصول را بفرستید (یا «حذف»).',
   terms: '📜 متن جدید شرایط و قوانین را وارد کنید:',
   duration: '⏱ مدت اشتراک را به روز وارد کنید (مثال: 30):',
   warranty: '🛡 مدت گارانتی را به روز وارد کنید (مثال: 7):',
@@ -48,6 +49,7 @@ export function productCardText(p: CustomerProduct): string {
     '💰 قیمت: ' + formatPrice(p.price) + ' تومان\n' +
     '🏷 قیمت قبل از تخفیف: ' + (p.compare_at_price ? formatPrice(p.compare_at_price) + ' ت' : '—') + '\n' +
     '📜 شرایط: ' + (p.terms_text ? 'دارد' : 'ندارد') + '\n' +
+    '🖼 عکس: ' + (p.photo_file_id ? 'دارد' : '—') + '\n' +
     '⏱ مدت اشتراک: ' + (p.duration_days ? p.duration_days + ' روز' : 'ندارد') + '\n' +
     '🛡 گارانتی: ' + (p.warranty_days ? p.warranty_days + ' روز' : 'ندارد') + '\n' +
     '📦 وضعیت: ' + (p.is_available === 0 ? '⛔️ ناموجود' : '✅ موجود') + '\n' +
@@ -63,7 +65,7 @@ function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callb
       ? [Markup.button.callback('🏷 عنوان گزینه', 'cprod_edit_f_label'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')]
       : [Markup.button.callback('✏️ نام', 'cprod_edit_f_name'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')],
     [Markup.button.callback('🏷 قیمت قبل از تخفیف', 'cprod_edit_f_compare')],
-    [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms')],
+    [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms'), Markup.button.callback('🖼 عکس محصول', 'cprod_edit_f_photo')],
     [Markup.button.callback('⏱ مدت اشتراک', 'cprod_edit_f_duration'), Markup.button.callback('🛡 گارانتی', 'cprod_edit_f_warranty')],
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
     ...(canAutoStock ? [[Markup.button.callback('📦 موجودی خودکار', 'cprod_edit_stock_auto')]] : []),
@@ -286,7 +288,7 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
         return;
       }
 
-      const fieldMatch = data.match(/^cprod_edit_f_(name|price|compare|terms|duration|warranty|label|grpname|grpsort|sort)$/);
+      const fieldMatch = data.match(/^cprod_edit_f_(name|price|compare|photo|terms|duration|warranty|label|grpname|grpsort|sort)$/);
       if (fieldMatch) {
         edit.field = fieldMatch[1];
         edit.termsAll = false;
@@ -409,6 +411,21 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
     // ── text input ────────────────────────────────────────────────────────
     if (!edit.productId) {
       await ctx.reply('⚠️ لطفاً یک محصول را از لیست بالا انتخاب کنید.');
+      return;
+    }
+
+    // ── photo field (UI_PLAN.md §7): a photo sets it, «حذف» clears it, anything else asks again ──
+    if (edit.field === 'photo') {
+      const photos = ctx.message?.photo;
+      const typed = ctx.message?.text?.trim();
+      if (!photos?.length && typed !== 'حذف') {
+        await ctx.reply(FIELD_PROMPTS.photo);
+        return;
+      }
+      const fileId = photos?.length ? photos[photos.length - 1].file_id : null; // the largest size
+      if (!(await applyPatch(ctx, { photoFileId: fileId }))) return productGone(ctx);
+      edit.field = null;
+      await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ ذخیره شد.' });
       return;
     }
     const text = ctx.message?.text;

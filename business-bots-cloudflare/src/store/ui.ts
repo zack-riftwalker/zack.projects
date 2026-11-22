@@ -11,26 +11,64 @@ export interface ScreenExtra {
   parse_mode?: 'Markdown';
   entities?: MessageEntity[];
   reply_markup: InlineKb['reply_markup'];
+  /** Telegram file_id: the screen is a photo and `text` is its caption (≤ 1024 characters) */
+  photo?: string;
 }
 
 const isGrammy400 = (err: unknown, re: RegExp): boolean =>
   err instanceof GrammyError && err.error_code === 400 && re.test(err.description);
 
+const textExtra = (extra: ScreenExtra) => {
+  const { photo: _photo, ...rest } = extra;
+  return rest;
+};
+
 async function sendNew(ctx: StoreContext, text: string, extra: ScreenExtra): Promise<void> {
-  const sent = await ctx.reply(text, extra as any);
+  let sent;
+  if (extra.photo) {
+    try {
+      sent = await ctx.api.sendPhoto(ctx.chat!.id, extra.photo, {
+        caption: text, caption_entities: extra.entities, parse_mode: extra.parse_mode, reply_markup: extra.reply_markup,
+      });
+    } catch (err) {
+      if (err instanceof BudgetExceededError) throw err;
+      // a stale / foreign file_id must not break the purchase flow: show the screen without the photo
+      console.warn('⚠️ [UI] sendPhoto failed, falling back to text:', (err as Error)?.message);
+    }
+  }
+  sent ??= await ctx.reply(text, textExtra(extra) as any);
   ctx.session.screenMsgId = sent.message_id;
 }
 
-/** Shows a customer «screen»: edits the screen message the customer pressed, otherwise sends a new one. */
+/**
+ * Shows a customer «screen»: edits the screen message the customer pressed, otherwise sends a new one.
+ * Only `session.screenMsgId` may be edited — never an announcement, reminder or delivery message.
+ */
 export async function showScreen(ctx: StoreContext, text: string, extra: ScreenExtra): Promise<void> {
-  const msg = ctx.callbackQuery?.message;
+  const msg = ctx.callbackQuery?.message as (NonNullable<StoreContext['callbackQuery']>['message'] & { photo?: unknown[] }) | undefined;
   const editable = !!msg && ctx.session.screenMsgId != null && msg.message_id === ctx.session.screenMsgId;
   if (!editable) {
     await sendNew(ctx, text, extra);
     return;
   }
+  const wasPhoto = !!msg.photo;
+  const wantsPhoto = !!extra.photo;
   try {
-    await ctx.editMessageText(text, extra as any);
+    if (wasPhoto !== wantsPhoto) {
+      // photo ↔ text cannot be edited into each other: replace the message
+      await ctx.api.deleteMessage(msg.chat.id, msg.message_id).catch((err) => {
+        if (err instanceof BudgetExceededError) throw err;
+      });
+      await sendNew(ctx, text, extra);
+      return;
+    }
+    if (wantsPhoto) {
+      await ctx.api.editMessageMedia(msg.chat.id, msg.message_id, {
+        type: 'photo', media: extra.photo!, caption: text, caption_entities: extra.entities, parse_mode: extra.parse_mode,
+      }, { reply_markup: extra.reply_markup });
+    } else {
+      await ctx.editMessageText(text, extra as any);
+    }
   } catch (err) {
     if (err instanceof BudgetExceededError) throw err;
     if (isGrammy400(err, /message is not modified/i)) return;

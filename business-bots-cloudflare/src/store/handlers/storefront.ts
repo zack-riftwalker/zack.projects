@@ -100,13 +100,21 @@ async function showProduct(ctx: StoreContext, product: CustomerProduct) {
     return;
   }
 
-  const head = new RichText().add('📦 ').add(product.name, { bold: true }).add('\n' + priceLines(product));
-  if (product.duration_days) head.add('\n⏱ مدت: ' + product.duration_days + ' روز');
-  if (product.warranty_days) head.add('\n🛡 گارانتی: ' + product.warranty_days + ' روز');
-  head.add('\n\n');
-  const body = withTerms(head, product, '');
+  const makeHead = () => {
+    const head = new RichText().add('📦 ').add(product.name, { bold: true }).add('\n' + priceLines(product));
+    if (product.duration_days) head.add('\n⏱ مدت: ' + product.duration_days + ' روز');
+    if (product.warranty_days) head.add('\n🛡 گارانتی: ' + product.warranty_days + ' روز');
+    return head.add('\n\n');
+  };
+  let body = withTerms(makeHead(), product, '');
+  if (product.photo_file_id && body.text.length > CAPTION_LIMIT) {
+    // a caption holds ≤ 1024 characters: the terms are shown at the agree step instead
+    const head = makeHead();
+    body = { text: head.text + '📜 شرایط در مرحله‌ی بعد نمایش داده می‌شود.', entities: head.entities };
+  }
   await showScreen(ctx, body.text, {
     entities: body.entities,
+    ...(product.photo_file_id ? { photo: product.photo_file_id } : {}),
     ...Markup.inlineKeyboard([
       [Markup.button.callback('🎟 کد تخفیف دارم', 'cust_disc_enter_' + product.id, 'primary')],
       [Markup.button.callback('💳 پرداخت کارت به کارت', 'ui_pay_' + product.id, 'success')],
@@ -114,6 +122,8 @@ async function showProduct(ctx: StoreContext, product: CustomerProduct) {
     ]),
   });
 }
+
+const CAPTION_LIMIT = 1024;
 
 /** head + «📜 شرایط و قوانین:» + the admin's terms (with its own entities) + footer — one message, no parse_mode. */
 function withTerms(head: RichText, product: CustomerProduct, footer: string) {
