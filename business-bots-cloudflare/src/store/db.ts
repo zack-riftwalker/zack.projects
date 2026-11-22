@@ -146,7 +146,7 @@ export class StoreDb {
     try {
       const row = await this.q(`
       SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
-             group_id, option_label, sort_order, cost_toman, stock_mode, pricing_mode, markup_percent, markup_fixed
+             group_id, option_label, sort_order, cost_toman, stock_mode, pricing_mode, markup_percent, markup_fixed, compare_at_price
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -173,6 +173,7 @@ export class StoreDb {
   async updateCustomerProduct(id: number, patch: Partial<{
     name: string; price: number; termsText: string | null; termsEntities: any[] | null;
     durationDays: number | null; warrantyDays: number | null; isAvailable: boolean; stockMode: 'auto' | 'manual'; pricingMode: 'auto' | 'manual';
+    compareAtPrice: number | null;
   }>) {
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -186,6 +187,7 @@ export class StoreDb {
     if (patch.isAvailable !== undefined) add('is_available', patch.isAvailable ? 1 : 0);
     if (patch.stockMode !== undefined) add('stock_mode', patch.stockMode);
     if (patch.pricingMode !== undefined) add('pricing_mode', patch.pricingMode);
+    if (patch.compareAtPrice !== undefined) add('compare_at_price', patch.compareAtPrice);
     if (!sets.length) return { changes: 0 };
     const r = await this.q('UPDATE customer_products SET ' + sets.join(', ') + ' WHERE id = ? AND is_active = 1', ...args, id).run();
     return { changes: r.meta.changes };
@@ -206,7 +208,7 @@ export class StoreDb {
   async getCatalogData(): Promise<{ products: CustomerProduct[]; groups: ProductGroup[] }> {
     const [p, g] = await this.db.batch([
       this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
-                     group_id, option_label, sort_order
+                     group_id, option_label, sort_order, compare_at_price
               FROM customer_products WHERE is_active = 1 ORDER BY id ASC`),
       this.q('SELECT id, name, sort_order FROM product_groups WHERE id IN (SELECT group_id FROM customer_products WHERE is_active = 1 AND group_id IS NOT NULL)'),
     ]);
@@ -229,7 +231,7 @@ export class StoreDb {
     const [g, o] = await this.db.batch([
       this.q('SELECT id, name, sort_order FROM product_groups WHERE id = ?', groupId),
       this.q(`SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_available,
-                     group_id, option_label, sort_order, cost_toman
+                     group_id, option_label, sort_order, cost_toman, compare_at_price
               FROM customer_products WHERE group_id = ? AND is_active = 1`, groupId),
     ]);
     return { group: (g.results[0] as ProductGroup) ?? null, options: o.results.map((x) => this.parseProductRow(x)!) };

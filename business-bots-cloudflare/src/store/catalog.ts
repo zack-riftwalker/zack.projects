@@ -48,9 +48,22 @@ export function sortOptions(options: CustomerProduct[]): CustomerProduct[] {
     (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.duration_days ?? 0) - (b.duration_days ?? 0) || a.id - b.id);
 }
 
+/** round 4 (§9): a compare-at price counts only while it is higher than the price */
+export function hasCompareAt(p: Pick<CustomerProduct, 'price' | 'compare_at_price'>): boolean {
+  return typeof p.compare_at_price === 'number' && p.compare_at_price > p.price;
+}
+
+/** The price lines of a product message: «normal → special (N٪ off)» when a compare-at price applies, else today's one line. */
+export function priceLines(p: Pick<CustomerProduct, 'price' | 'compare_at_price'>): string {
+  if (!hasCompareAt(p)) return '💰 قیمت: ' + formatPrice(p.price) + ' تومان';
+  const percent = Math.round((1 - p.price / p.compare_at_price!) * 100);
+  return '💰 قیمت عادی: ' + formatPrice(p.compare_at_price!) + ' تومان\n' +
+    '🔥 قیمت ویژه: ' + formatPrice(p.price) + ' تومان (' + percent.toLocaleString('fa-IR') + '٪ تخفیف)';
+}
+
 export function optionButtonLabel(p: CustomerProduct): string {
   const label = p.option_label ?? p.name;
-  return p.is_available === 0 ? '⛔️ ' + label + ' (ناموجود)' : label + '  |  ' + formatPrice(p.price) + ' ت';
+  return p.is_available === 0 ? '⛔️ ' + label + ' (ناموجود)' : label + '  |  ' + formatPrice(p.price) + ' ت' + (hasCompareAt(p) ? ' 🔥' : '');
 }
 
 export const groupHeaderText = (name: string): string =>

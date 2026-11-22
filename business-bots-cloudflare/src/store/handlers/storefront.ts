@@ -12,7 +12,7 @@ import {
   escapeMarkdown, escapeHtml, formatPrice, buildPagedKeyboard, formatJalaliDate, parseLocalDateTime,
 } from '../utils';
 import {
-  loadCatalogEntries, sortOptions, optionButtonLabel, groupHeaderText, type CatalogEntry,
+  loadCatalogEntries, sortOptions, optionButtonLabel, groupHeaderText, priceLines, type CatalogEntry,
 } from '../catalog';
 import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
@@ -95,7 +95,7 @@ async function sendDiscountPrompt(ctx: StoreContext, product: CustomerProduct) {
 
   await ctx.reply(
     '📦 *' + escapeMarkdown(product.name) + '*\n' +
-    '💰 قیمت: ' + formatPrice(product.price) + ' تومان\n\n' +
+    priceLines(product) + '\n\n' +
     '🎟 آیا کد تخفیف دارید؟',
     {
       parse_mode: 'Markdown',

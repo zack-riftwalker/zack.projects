@@ -12,6 +12,7 @@ const CANCEL_BTN = Markup.button.callback('❌ انصراف', 'cprod_edit_cancel
 const FIELD_PROMPTS: Record<string, string> = {
   name: '✏️ نام جدید محصول را وارد کنید:',
   price: '💰 قیمت جدید را به تومان وارد کنید:\n\nمثال: 1200000',
+  compare: '🏷 قیمت قبل از تخفیف را به تومان وارد کنید (یا بنویسید «حذف» تا برداشته شود):',
   terms: '📜 متن جدید شرایط و قوانین را وارد کنید:',
   duration: '⏱ مدت اشتراک را به روز وارد کنید (مثال: 30):',
   warranty: '🛡 مدت گارانتی را به روز وارد کنید (مثال: 7):',
@@ -45,6 +46,7 @@ export function productCardText(p: CustomerProduct): string {
     '✏️ ویرایش محصول\n\n' +
     '📦 نام: ' + p.name + '\n' +
     '💰 قیمت: ' + formatPrice(p.price) + ' تومان\n' +
+    '🏷 قیمت قبل از تخفیف: ' + (p.compare_at_price ? formatPrice(p.compare_at_price) + ' ت' : '—') + '\n' +
     '📜 شرایط: ' + (p.terms_text ? 'دارد' : 'ندارد') + '\n' +
     '⏱ مدت اشتراک: ' + (p.duration_days ? p.duration_days + ' روز' : 'ندارد') + '\n' +
     '🛡 گارانتی: ' + (p.warranty_days ? p.warranty_days + ' روز' : 'ندارد') + '\n' +
@@ -60,6 +62,7 @@ function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callb
     grouped
       ? [Markup.button.callback('🏷 عنوان گزینه', 'cprod_edit_f_label'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')]
       : [Markup.button.callback('✏️ نام', 'cprod_edit_f_name'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')],
+    [Markup.button.callback('🏷 قیمت قبل از تخفیف', 'cprod_edit_f_compare')],
     [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms')],
     [Markup.button.callback('⏱ مدت اشتراک', 'cprod_edit_f_duration'), Markup.button.callback('🛡 گارانتی', 'cprod_edit_f_warranty')],
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
@@ -283,7 +286,7 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
         return;
       }
 
-      const fieldMatch = data.match(/^cprod_edit_f_(name|price|terms|duration|warranty|label|grpname|grpsort|sort)$/);
+      const fieldMatch = data.match(/^cprod_edit_f_(name|price|compare|terms|duration|warranty|label|grpname|grpsort|sort)$/);
       if (fieldMatch) {
         edit.field = fieldMatch[1];
         edit.termsAll = false;
@@ -457,7 +460,18 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
 
     let patch: Parameters<typeof applyPatch>[1];
     let note = '';
-    if (field === 'name') {
+    if (field === 'compare') {
+      // round 4 (§9): «حذف» clears; otherwise an integer above the current price
+      const normalised = text.trim().replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 0x30)).replace(/[\s,،٬]/g, '');
+      if (normalised === 'حذف') {
+        patch = { compareAtPrice: null };
+      } else if (/^\d{1,12}$/.test(normalised) && Number(normalised) > p.price) {
+        patch = { compareAtPrice: Number(normalised) };
+      } else {
+        await ctx.reply('⚠️ قیمت قبل از تخفیف باید بیشتر از قیمت فعلی باشد.');
+        return;
+      }
+    } else if (field === 'name') {
       const name = text.trim();
       const err = productNameError(name);
       if (err) {
