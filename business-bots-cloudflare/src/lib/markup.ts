@@ -1,5 +1,8 @@
 import type { InlineKeyboardButton } from 'grammy/types';
 
+/** Telegram button colors: blue / green / red. No style = default. */
+export type ButtonStyle = 'primary' | 'success' | 'danger';
+
 export type InlineButton = InlineKeyboardButton;
 
 export interface InlineKb { reply_markup: { inline_keyboard: InlineButton[][] } }
@@ -21,11 +24,11 @@ export const Markup = {
     };
   },
   button: {
-    callback(text: string, data: string): InlineKeyboardButton.CallbackButton {
-      return { text, callback_data: data };
+    callback(text: string, data: string, style?: ButtonStyle): InlineKeyboardButton.CallbackButton {
+      return style ? { text, callback_data: data, style } : { text, callback_data: data };
     },
-    url(text: string, url: string): InlineKeyboardButton.UrlButton {
-      return { text, url };
+    url(text: string, url: string, style?: ButtonStyle): InlineKeyboardButton.UrlButton {
+      return style ? { text, url, style } : { text, url };
     },
   },
 };

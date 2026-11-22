@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 
-export interface Call { token: string; method: string; payload: any }
+export interface Call { token: string; method: string; payload: any; /** canned result (message ids of sends) */ result?: any }
 
 /**
  * Rough legacy-Markdown parse check, like Telegram's "can't parse entities": every unescaped
@@ -71,7 +71,8 @@ export function makeFakeTelegram() {
         if (rule.times > 0) rule.times -= 1;
         return { ok: false, error_code: rule.code, description: rule.description } as any;
       }
-      return { ok: true, result: canned(call) } as any;
+      call.result = canned(call);
+      return { ok: true, result: call.result } as any;
     });
     return api;
   };
@@ -90,6 +91,11 @@ export function makeFakeTelegram() {
     },
     texts(chatId: number) {
       return calls.filter((c) => c.method === 'sendMessage' && c.payload?.chat_id === chatId).map((c) => c.payload.text as string);
+    },
+    /** message id of the newest message sent to a chat */
+    lastSentId(chatId: number): number {
+      const c = calls.filter((x) => x.method === 'sendMessage' && x.payload?.chat_id === chatId).at(-1);
+      return c?.result?.message_id;
     },
     reset() { calls.length = 0; },
   };

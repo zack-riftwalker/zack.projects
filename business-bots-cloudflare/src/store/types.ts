@@ -13,6 +13,10 @@ export interface PurchaseDraft {
 }
 
 export interface StoreSession extends SceneSession {
+  /** message id of the customer's current «screen» (the only message showScreen may edit) */
+  screenMsgId?: number | null;
+  /** the old reply keyboard was removed for this customer */
+  uiV2?: boolean;
   awaitingDiscountCodeFor?: number | null;
   pendingPurchase?: PurchaseDraft | null;
   awaitingReceiptFor?: PurchaseDraft | null;
