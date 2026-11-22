@@ -47,9 +47,10 @@ describe('compare-at price: storefront', () => {
     q(t.storeDb, "INSERT INTO product_groups (name) VALUES ('GPT')");
     q(t.storeDb, "INSERT INTO customer_products (name, price, duration_days, group_id, option_label, compare_at_price) VALUES ('GPT — ۱ ماهه', 800, 30, 1, '۱ ماهه', 1000), ('GPT — ۳ ماهه', 2000, 90, 1, '۳ ماهه', NULL)");
     await t.send('store', callbackUpdate(CUST, 'cust_grp_1'));
-    const labels = t.tg.of('editMessageText').at(-1)!.payload.reply_markup.inline_keyboard.flat().map((b: any) => b.text);
-    expect(labels).toContain('۱ ماهه  |  ' + fa(800) + ' ت 🔥');
-    expect(labels).toContain('۳ ماهه  |  ' + fa(2000) + ' ت');
+    // the table: one row per option, the option's label and its price (🔥 when a compare-at price applies)
+    const rows = t.tg.of('sendMessage').at(-1)!.payload.reply_markup.inline_keyboard;
+    expect(rows[0].map((b: any) => b.text)).toEqual(['۱ ماهه', fa(800) + ' تومان 🔥']);
+    expect(rows[1].map((b: any) => b.text)).toEqual(['۳ ماهه', fa(2000) + ' تومان']);
   });
 });
 

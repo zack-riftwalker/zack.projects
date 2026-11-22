@@ -3,7 +3,7 @@ import type { StoreApp } from '../../apps';
 import { onPurchaseConfirmed } from '../referrals';
 import { getCustomerSummary } from '../customerSummary';
 import { Markup } from '../../lib/markup';
-import { ensureUiV2, showMainMenu, showScreen } from '../ui';
+import { ensureUiV2, showMainMenu, showScreen, HOME_BTN, RichText, withHeader } from '../ui';
 import { showCustomerView } from './referralPanel';
 import { BudgetExceededError } from '../../lib/budget';
 import { tehranDateTime } from '../../lib/time';
@@ -13,7 +13,7 @@ import {
   escapeMarkdown, escapeHtml, formatPrice, buildPagedKeyboard, formatJalaliDate, parseLocalDateTime,
 } from '../utils';
 import {
-  loadCatalogEntries, sortOptions, optionButtonLabel, groupHeaderText, priceLines, type CatalogEntry,
+  loadCatalogEntries, sortOptions, optionRowLabels, groupHeaderText, priceLines, type CatalogEntry,
 } from '../catalog';
 import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
@@ -59,46 +59,69 @@ export async function dropCheckoutDraft(ctx: Pick<StoreContext, 'app'>, customer
 
 // ─── Catalog browsing (paged) ─────────────────────────────────────────────────
 
-const CATALOG_CANCEL_BTN = Markup.button.callback('❌ بستن', 'cust_catalog_close');
-
-const CATALOG_TEXT = '🛍 *فهرست محصولات*\n\nمحصول مورد نظر خود را انتخاب کنید:';
+const CATALOG_TEXT = '🛍 *محصولات*\n\nیک دسته را انتخاب کنید:';
 
 function catalogKeyboard(entries: CatalogEntry[], page: number) {
-  return buildPagedKeyboard(entries, page, (e) => Markup.button.callback(e.label, e.callback), 'cust_catalog_page_', CATALOG_CANCEL_BTN);
+  return buildPagedKeyboard(entries, page, (e) => Markup.button.callback(e.label, e.callback, e.style), 'cust_catalog_page_', HOME_BTN());
 }
 
-// ─── Discount-question step (shared by catalog pick and renew button) ────────
+const homeKb = () => Markup.inlineKeyboard([[HOME_BTN()]]);
 
-/** A product was picked: answer the callback, then the waitlist (unavailable) or the discount question. */
+// ─── Product screen (shared by catalog pick, renew button and «back» from the code entry) ────
+
+/** A product was picked: answer the callback, then the waitlist (unavailable) or the product screen. */
 async function openProduct(ctx: StoreContext, product: CustomerProduct) {
   await ctx.answerCallbackQuery();
+  await showProduct(ctx, product);
+}
+
+/** «🔙 بازگشت» target of a product screen: its group's table when the group has several options, else the categories. */
+async function productBackTarget(ctx: StoreContext, product: CustomerProduct): Promise<string> {
+  if (product.group_id != null) {
+    const { options } = await ctx.app.db.getGroupWithOptions(product.group_id);
+    if (options.length > 1) return 'cust_grp_' + product.group_id;
+  }
+  return 'cust_catalog_page_0';
+}
+
+async function showProduct(ctx: StoreContext, product: CustomerProduct) {
+  // A fresh product selection supersedes any half-finished discount-code entry.
+  ctx.session.awaitingDiscountCodeFor = null;
+  const back = Markup.button.callback('🔙 بازگشت', await productBackTarget(ctx, product));
+
   if (product.is_available === 0) {
-    await ctx.reply(
+    await showScreen(ctx,
       '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
       'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
-      Markup.inlineKeyboard([[Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id)]]),
+      Markup.inlineKeyboard([
+        [Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id, 'primary')],
+        [back], [HOME_BTN()],
+      ]),
     );
     return;
   }
-  await sendDiscountPrompt(ctx, product);
+
+  const head = new RichText().add('📦 ').add(product.name, { bold: true }).add('\n' + priceLines(product));
+  if (product.duration_days) head.add('\n⏱ مدت: ' + product.duration_days + ' روز');
+  if (product.warranty_days) head.add('\n🛡 گارانتی: ' + product.warranty_days + ' روز');
+  head.add('\n\n');
+  const body = withTerms(head, product, '');
+  await showScreen(ctx, body.text, {
+    entities: body.entities,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('🎟 کد تخفیف دارم', 'cust_disc_enter_' + product.id, 'primary')],
+      [Markup.button.callback('💳 پرداخت کارت به کارت', 'ui_pay_' + product.id, 'success')],
+      [back], [HOME_BTN()],
+    ]),
+  });
 }
 
-async function sendDiscountPrompt(ctx: StoreContext, product: CustomerProduct) {
-  // A fresh product selection supersedes any half-finished discount-code entry.
-  ctx.session.awaitingDiscountCodeFor = null;
-
-  await ctx.reply(
-    '📦 *' + escapeMarkdown(product.name) + '*\n' +
-    priceLines(product) + '\n\n' +
-    '🎟 آیا کد تخفیف دارید؟',
-    {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([[
-        Markup.button.callback('🎟 وارد کردن کد تخفیف', 'cust_disc_enter_' + product.id),
-        Markup.button.callback('➡️ ندارم، ادامه بده', 'cust_disc_skip_' + product.id),
-      ]]),
-    },
-  );
+/** head + «📜 شرایط و قوانین:» + the admin's terms (with its own entities) + footer — one message, no parse_mode. */
+function withTerms(head: RichText, product: CustomerProduct, footer: string) {
+  if (!product.terms_text) return { text: head.text + '📜 این محصول شرایط خاصی ندارد.' + footer, entities: head.entities };
+  head.add('📜 شرایط و قوانین:', { bold: true }).add('\n');
+  const r = withHeader(head.text, head.entities, product.terms_text, product.terms_entities);
+  return { text: r.text + footer, entities: r.entities };
 }
 
 // ─── "My Subscriptions" view ─────────────────────────────────────────────────
@@ -143,9 +166,9 @@ function isWarrantyActive(order: Order): boolean {
   return ms !== null && ms > Date.now();
 }
 
-// ─── Terms step (shared by "no code" and "code applied" paths) ───────────────
+// ─── Agree step (shared by "no code" and "code applied" paths) ───────────────
 
-async function showTermsStep(ctx: StoreContext, product: CustomerProduct, finalPrice: number, discountCodeId: number | null) {
+async function showAgreeScreen(ctx: StoreContext, product: CustomerProduct, finalPrice: number, discountCodeId: number | null, prefix = '') {
   ctx.session.pendingPurchase = {
     productId: product.id,
     productName: product.name,
@@ -153,51 +176,47 @@ async function showTermsStep(ctx: StoreContext, product: CustomerProduct, finalP
     discountCodeId,
   };
 
-  const priceBlock = discountCodeId
-    ? '💰 قیمت با تخفیف: *' + formatPrice(finalPrice) + ' تومان* (قیمت اصلی: ' + formatPrice(product.price) + ' تومان)'
-    : '💰 قیمت: ' + formatPrice(finalPrice) + ' تومان';
-
-  const agreeDeclineKb = Markup.inlineKeyboard([[
-    Markup.button.callback('✅ موافقم', 'cust_agree_' + product.id),
-    Markup.button.callback('❌ انصراف', 'cust_decline_' + product.id),
-  ]]);
-
-  if (!product.terms_text) {
-    await ctx.reply(
-      '📦 *' + escapeMarkdown(product.name) + '*\n' +
-      priceBlock + '\n\n' +
-      '📜 این محصول شرایط خاصی ندارد.\n\n' +
-      'آیا با شرایط بالا موافقید؟',
-      { parse_mode: 'Markdown', ...agreeDeclineKb },
-    );
-    return;
+  const head = new RichText();
+  if (prefix) head.add(prefix);
+  head.add('📦 ').add(product.name, { bold: true }).add('\n');
+  if (discountCodeId) {
+    head.add('💰 قیمت با تخفیف: ').add(formatPrice(finalPrice) + ' تومان', { bold: true })
+      .add(' (قیمت اصلی: ' + formatPrice(product.price) + ' تومان)');
+  } else {
+    head.add('💰 قیمت: ' + formatPrice(finalPrice) + ' تومان');
   }
-
-  // Two messages: summary first, then the admin's terms verbatim with its
-  // original entities (entities reuse requires the text to start at offset 0).
-  await ctx.reply(
-    '📦 *' + escapeMarkdown(product.name) + '*\n' +
-    priceBlock + '\n\n' +
-    '📜 *شرایط و قوانین:*',
-    { parse_mode: 'Markdown' },
-  );
-
-  await ctx.reply(
-    product.terms_text + '\n\nآیا با شرایط بالا موافقید؟',
-    {
-      entities: product.terms_entities || undefined,
-      ...agreeDeclineKb,
-    },
-  );
+  head.add('\n\n');
+  const body = withTerms(head, product, '\n\nآیا با شرایط بالا موافقید؟');
+  await showScreen(ctx, body.text, {
+    entities: body.entities,
+    ...Markup.inlineKeyboard([
+      [
+        Markup.button.callback('✅ موافقم', 'cust_agree_' + product.id, 'success'),
+        Markup.button.callback('❌ انصراف', 'cust_decline_' + product.id, 'danger'),
+      ],
+      [HOME_BTN()],
+    ]),
+  });
 }
 
-async function showShop(ctx: StoreContext) {
+/** best-effort: the previous screen keeps no live buttons once a typed answer starts a new screen */
+async function dropScreenKeyboard(ctx: StoreContext): Promise<void> {
+  const id = ctx.session.screenMsgId;
+  if (id == null || !ctx.chat) return;
+  try {
+    await ctx.api.editMessageReplyMarkup(ctx.chat.id, id, { reply_markup: { inline_keyboard: [] } });
+  } catch (err) {
+    if (err instanceof BudgetExceededError) throw err;
+  }
+}
+
+async function showShop(ctx: StoreContext, page = 0) {
   const entries = await loadCatalogEntries(ctx.app);
   if (entries.length === 0) {
-    await ctx.reply('😔 فعلاً محصولی در فروشگاه موجود نیست.');
+    await showScreen(ctx, '😔 فعلاً محصولی در فروشگاه موجود نیست.', homeKb());
     return;
   }
-  await showScreen(ctx, CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, 0) });
+  await showScreen(ctx, CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, page) });
 }
 
 async function showMySubs(ctx: StoreContext) {
@@ -348,18 +367,17 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
     await ctx.answerCallbackQuery();
     await ctx.reply(RENEWAL_NOTE);
-    await sendDiscountPrompt(ctx, product);
+    await showProduct(ctx, product);
   });
 
   // ── Catalog pagination ──────────────────────────────────────────────────────
-  // Also the «🔙 بازگشت» target of a group's detail message, so it edits the text back to the list.
+  // Also the «🔙 بازگشت» target of a group's table and of a product screen.
   bot.callbackQuery(/^cust_catalog_page_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const entries = await loadCatalogEntries(ctx.app);
-    await ctx.editMessageText(CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, parseInt(ctx.match![1], 10)) }).catch(() => {});
+    await showShop(ctx, parseInt(ctx.match![1], 10));
   });
 
-  // ── Group selected (SUPPLIER_PLAN.md §3.1): one option → same as cust_prod; several → choose the option ──
+  // ── Group selected (SUPPLIER_PLAN.md §3.1): one option → same as cust_prod; several → the price table ──
   bot.callbackQuery(/^cust_grp_(\d+)$/, async (ctx) => {
     const { group, options } = await ctx.app.db.getGroupWithOptions(parseInt(ctx.match![1], 10));
     if (!group || options.length === 0) {
@@ -372,14 +390,21 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     }
 
     await ctx.answerCallbackQuery();
-    const rows = sortOptions(options).map((p) => [Markup.button.callback(optionButtonLabel(p), 'cust_prod_' + p.id)]);
+    // two buttons per row, both opening the same product: its label and its price
+    const rows = sortOptions(options).map((p) => {
+      const l = optionRowLabels(p);
+      const style = p.is_available === 0 ? 'danger' : 'success';
+      return [Markup.button.callback(l.name, 'cust_prod_' + p.id, style), Markup.button.callback(l.price, 'cust_prod_' + p.id, style)];
+    });
     rows.push([Markup.button.callback('🔙 بازگشت', 'cust_catalog_page_0')]);
-    await ctx.editMessageText(groupHeaderText(group.name), { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }).catch(() => {});
+    rows.push([HOME_BTN()]);
+    await showScreen(ctx, groupHeaderText(group.name), { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) });
   });
 
+  // old catalog messages still carry «❌ بستن»
   bot.callbackQuery('cust_catalog_close', async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText('🛍 فهرست محصولات بسته شد.').catch(() => {});
+    await showMainMenu(ctx);
   });
 
   // ── Product selected → ask whether the customer has a discount code ────────
@@ -406,31 +431,36 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     }
     if (await ctx.app.db.addToWaitlist(product.id, ctx.from.id)) {
       await ctx.answerCallbackQuery('✅ ثبت شد');
-      await ctx.editMessageText('🔔 ثبت شد. به‌محض موجود شدن «' + product.name + '» خبرتان می‌کنیم.').catch(() => {});
+      await showScreen(ctx, '🔔 ثبت شد. به‌محض موجود شدن «' + product.name + '» خبرتان می‌کنیم.', homeKb());
     } else {
       await ctx.answerCallbackQuery('ℹ️ قبلاً ثبت شده‌اید.');
     }
   });
 
-  // ── No discount code → straight to terms at the original price ─────────────
-  bot.callbackQuery(/^cust_disc_skip_(\d+)$/, async (ctx) => {
-    const product = await ctx.app.db.getCustomerProductById(parseInt(ctx.match![1], 10));
+  // ── Pay without a code → straight to the agree step at the original price ─
+  // (cust_disc_skip_ is the old «ندارم» button of pre-UI messages)
+  bot.callbackQuery(/^(ui_pay|cust_disc_skip)_(\d+)$/, async (ctx) => {
+    const product = await ctx.app.db.getCustomerProductById(parseInt(ctx.match![2], 10));
     if (!product || !product.is_active) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
-      await ctx.editMessageText('❌ این محصول دیگر موجود نیست.').catch(() => {});
+      await showScreen(ctx, '❌ این محصول دیگر موجود نیست.', homeKb());
       return;
     }
     if (product.is_available === 0) {
       await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
-      await ctx.editMessageText('⛔️ این محصول فعلاً ناموجود است.').catch(() => {});
+      await showScreen(ctx, '⛔️ این محصول فعلاً ناموجود است.', homeKb());
       return;
     }
 
     ctx.session.awaitingDiscountCodeFor = null;
 
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText('➡️ بدون کد تخفیف ادامه داده شد.').catch(() => {});
-    await showTermsStep(ctx, product, product.price, null);
+    // an old pre-UI discount question is not the current screen: close it as it always was
+    const pressed = ctx.callbackQuery.message?.message_id;
+    if (ctx.match![1] === 'cust_disc_skip' && pressed !== ctx.session.screenMsgId) {
+      await ctx.editMessageText('➡️ بدون کد تخفیف ادامه داده شد.').catch(() => {});
+    }
+    await showAgreeScreen(ctx, product, product.price, null);
   });
 
   // ── Has a discount code → expect the code text next ─────────────────────────
@@ -438,19 +468,20 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     const product = await ctx.app.db.getCustomerProductById(parseInt(ctx.match![1], 10));
     if (!product || !product.is_active) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
-      await ctx.editMessageText('❌ این محصول دیگر موجود نیست.').catch(() => {});
+      await showScreen(ctx, '❌ این محصول دیگر موجود نیست.', homeKb());
       return;
     }
     if (product.is_available === 0) {
       await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
-      await ctx.editMessageText('⛔️ این محصول فعلاً ناموجود است.').catch(() => {});
+      await showScreen(ctx, '⛔️ این محصول فعلاً ناموجود است.', homeKb());
       return;
     }
 
     ctx.session.awaitingDiscountCodeFor = product.id;
 
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText('🎟 لطفاً کد تخفیف را تایپ کنید:').catch(() => {});
+    await showScreen(ctx, '🎟 لطفاً کد تخفیف را تایپ کنید:',
+      Markup.inlineKeyboard([[Markup.button.callback('🔙 بازگشت', 'cust_prod_' + product.id)]]));
   });
 
   // ── Discount-code text step — must run before the receipt nudge / catch-all ─
@@ -472,21 +503,21 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
     const result = await validateDiscountCode(ctx.app, ctx.message.text, product, ctx.from.id);
     if (!result.ok) {
-      await ctx.reply(
+      await dropScreenKeyboard(ctx);
+      await showScreen(ctx,
         discountErrorText(result) + '\n\nمی‌توانید دوباره تلاش کنید، یا بدون کد ادامه دهید.',
-        {
-          ...Markup.inlineKeyboard([[
-            Markup.button.callback('➡️ بدون کد، ادامه بده', 'cust_disc_skip_' + productId),
-          ]]),
-        },
+        Markup.inlineKeyboard([
+          [Markup.button.callback('💳 پرداخت بدون کد', 'ui_pay_' + productId, 'success')],
+          [HOME_BTN()],
+        ]),
       );
       return;
     }
 
     ctx.session.awaitingDiscountCodeFor = null;
     const finalPrice = applyDiscount(product.price, result.discountCode);
-    await ctx.reply('✅ کد تخفیف اعمال شد!');
-    await showTermsStep(ctx, product, finalPrice, result.discountCode.id);
+    await dropScreenKeyboard(ctx);
+    await showAgreeScreen(ctx, product, finalPrice, result.discountCode.id, '✅ کد تخفیف اعمال شد!\n\n');
   });
 
   // ── Agree → expect a receipt next ───────────────────────────────────────────
@@ -494,12 +525,12 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     const product = await ctx.app.db.getCustomerProductById(parseInt(ctx.match![1], 10));
     if (!product || !product.is_active) {
       await ctx.answerCallbackQuery('❌ این محصول دیگر موجود نیست.');
-      await ctx.editMessageText('❌ این محصول دیگر موجود نیست.').catch(() => {});
+      await showScreen(ctx, '❌ این محصول دیگر موجود نیست.', homeKb());
       return;
     }
     if (product.is_available === 0) {
       await ctx.answerCallbackQuery('⛔️ این محصول فعلاً ناموجود است.');
-      await ctx.editMessageText('⛔️ این محصول فعلاً ناموجود است.').catch(() => {});
+      await showScreen(ctx, '⛔️ این محصول فعلاً ناموجود است.', homeKb());
       return;
     }
 
@@ -537,7 +568,10 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         '📸 سپس عکس یا فایل رسید پرداخت را ارسال کنید.'
       : '✅ عالی!\n\n📸 لطفاً عکس یا فایل رسید پرداخت را ارسال کنید.';
 
-    await ctx.editMessageText(receiptMsg, { parse_mode: 'Markdown' }).catch(() => {});
+    await showScreen(ctx, receiptMsg, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[Markup.button.callback('❌ انصراف', 'cust_decline_' + product.id, 'danger')]]),
+    });
   });
 
   bot.callbackQuery(/^cust_decline_(\d+)$/, async (ctx) => {
@@ -545,7 +579,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     ctx.session.awaitingDiscountCodeFor = null;
     await dropCheckoutDraft(ctx, ctx.from?.id);
     await ctx.answerCallbackQuery('خرید لغو شد.');
-    await ctx.editMessageText('❌ خرید لغو شد.').catch(() => {});
+    await showMainMenu(ctx, '❌ خرید لغو شد.\n\n');
   });
 
   // ── Receipt-step text nudge ─────────────────────────────────────────────────
@@ -672,7 +706,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     }
 
     ctx.session.awaitingReceiptFor = null;
-    await ctx.reply('✅ رسید شما دریافت شد و برای بررسی به مدیر ارسال شد. لطفاً منتظر تایید بمانید.');
+    await ctx.reply('✅ رسید شما دریافت شد و برای بررسی به مدیر ارسال شد. لطفاً منتظر تایید بمانید.', homeKb());
     console.log(
       '🧾 [Storefront] New order #' + orderId + ' pending — customer ' + ctx.from.id +
       ', delivered to ' + delivery.successfulAdminIds.length + ' admin(s).',

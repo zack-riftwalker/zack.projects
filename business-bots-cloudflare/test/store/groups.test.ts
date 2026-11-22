@@ -44,7 +44,8 @@ describe('catalog entries (SUPPLIER_PLAN.md §3.1)', () => {
     ];
     const entries = buildCatalogEntries(products, groups);
     expect(entries.map((e) => e.callback)).toEqual(['cust_prod_4', 'cust_grp_2', 'cust_prod_3', 'cust_grp_1']);
-    expect(entries.find((e) => e.callback === 'cust_grp_1')!.label).toBe('GPT  |  از ۲۰۰ ت');
+    expect(entries.find((e) => e.callback === 'cust_grp_1')!.label).toBe('GPT');
+    expect(entries.map((e) => e.style)).toEqual(['success', 'success', 'success', 'success']);
   });
 
   it('a group with no active option is not listed; all options unavailable → ⛔️ label', () => {
@@ -54,12 +55,13 @@ describe('catalog entries (SUPPLIER_PLAN.md §3.1)', () => {
       product(11, { group_id: 1, is_available: 0, price: 200 }),
     ];
     const entries = buildCatalogEntries(products, groups);
-    expect(entries).toEqual([{ label: '⛔️ GPT (ناموجود)', callback: 'cust_grp_1', sortOrder: 0, minId: 10 }]);
+    expect(entries).toEqual([{ label: '⛔️ GPT (ناموجود)', callback: 'cust_grp_1', style: 'danger', sortOrder: 0, minId: 10 }]);
   });
 
   it('the minimum price counts only available options', () => {
     const products = [product(10, { group_id: 1, price: 100, is_available: 0 }), product(11, { group_id: 1, price: 250 })];
-    expect(buildCatalogEntries(products, [{ id: 1, name: 'G', sort_order: 0 }])[0].label).toBe('G  |  از ۲۵۰ ت');
+    // the price moved into the group's table: the category button shows the name only
+    expect(buildCatalogEntries(products, [{ id: 1, name: 'G', sort_order: 0 }])[0].label).toBe('G');
   });
 
   it('storefront paging: 9 entries → two pages, page 1 holds the last entry', async () => {
@@ -81,7 +83,7 @@ describe('storefront group flow', () => {
     expect(t.tg.of('editMessageText')).toHaveLength(0);
     const prompt = t.tg.of('sendMessage').at(-1)!.payload;
     expect(prompt.text).toContain('Solo — ۱ ماهه');
-    expect(JSON.stringify(prompt.reply_markup)).toContain('cust_disc_skip_' + pid);
+    expect(JSON.stringify(prompt.reply_markup)).toContain('ui_pay_' + pid);
   });
 
   it('several options: the group message lists them, the back button returns to the catalog text', async () => {
@@ -90,16 +92,17 @@ describe('storefront group flow', () => {
     const a = seedOption(t, g, 'GPT', '۱ ماهه', { price: 100, sort: 0 });
     const b = seedOption(t, g, 'GPT', '۳ ماهه', { price: 300, duration: 90, sort: 0 });
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_grp_' + g));
-    const edit = t.tg.of('editMessageText').at(-1)!.payload;
+    const edit = t.tg.of('sendMessage').at(-1)!.payload;
     expect(edit.text).toContain('*GPT*');
     expect(edit.text).toContain('لطفاً مدت/نوع را انتخاب کنید:');
     const rows = edit.reply_markup.inline_keyboard;
-    expect(rows.map((r: any[]) => r[0].callback_data)).toEqual(['cust_prod_' + a, 'cust_prod_' + b, 'cust_catalog_page_0']);
-    expect(rows[0][0].text).toBe('۱ ماهه  |  ۱۰۰ ت');
+    expect(rows.map((r: any[]) => r[0].callback_data)).toEqual(['cust_prod_' + a, 'cust_prod_' + b, 'cust_catalog_page_0', 'ui_menu_home']);
+    expect(rows[0].map((b: any) => b.callback_data)).toEqual(['cust_prod_' + a, 'cust_prod_' + a]);
+    expect(rows[0].map((b: any) => b.text)).toEqual(['۱ ماهه', '۱۰۰ تومان']);
 
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_catalog_page_0'));
-    const back = t.tg.of('editMessageText').at(-1)!.payload;
-    expect(back.text).toContain('فهرست محصولات');
+    const back = t.tg.of('sendMessage').at(-1)!.payload;
+    expect(back.text).toContain('محصولات');
     expect(back.reply_markup.inline_keyboard.flat().some((b: any) => b.callback_data === 'cust_grp_' + g)).toBe(true);
   });
 
@@ -109,8 +112,9 @@ describe('storefront group flow', () => {
     const a = seedOption(t, g, 'GPT', '۱ ماهه', { available: 0 });
     seedOption(t, g, 'GPT', '۳ ماهه', { available: 0, duration: 90 });
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_grp_' + g));
-    const labels = t.tg.of('editMessageText').at(-1)!.payload.reply_markup.inline_keyboard.map((r: any[]) => r[0].text);
-    expect(labels).toEqual(['⛔️ ۱ ماهه (ناموجود)', '⛔️ ۳ ماهه (ناموجود)', '🔙 بازگشت']);
+    const rows = t.tg.of('sendMessage').at(-1)!.payload.reply_markup.inline_keyboard;
+    expect(rows.map((r: any[]) => r.map((b) => b.text))).toEqual([['⛔️ ۱ ماهه', 'ناموجود'], ['⛔️ ۳ ماهه', 'ناموجود'], ['🔙 بازگشت'], ['🏠 منوی اصلی']]);
+    expect(rows[0].map((b: any) => b.style)).toEqual(['danger', 'danger']);
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_prod_' + a));
     expect(JSON.stringify(t.tg.of('sendMessage').at(-1)!.payload.reply_markup)).toContain('waitlist_join_' + a);
   });

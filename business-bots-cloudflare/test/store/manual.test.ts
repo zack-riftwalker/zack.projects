@@ -180,6 +180,7 @@ describe('subscriptions & warranty', () => {
     await t.send('store', callbackUpdate(CUSTOMER, 'renew_' + pid));
     const texts = t.tg.texts(CUSTOMER.id);
     expect(texts.at(-2)).toContain('«تمدید» یعنی دریافت یک اکانت جدید');
-    expect(texts.at(-1)).toContain('🎟 آیا کد تخفیف دارید؟');
+    expect(texts.at(-1)).toContain('📦 GPT Plus');
+    expect(JSON.stringify(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload.reply_markup)).toContain('cust_disc_enter_' + pid);
   });
 });

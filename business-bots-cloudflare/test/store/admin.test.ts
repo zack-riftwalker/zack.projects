@@ -84,8 +84,12 @@ describe('store: admin wizards', () => {
     // customer sees the terms with the original entities
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_disc_skip_' + row.id));
     const termsMsg = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
-    expect(termsMsg.text).toBe('Rule one\n\nآیا با شرایط بالا موافقید؟');
-    expect(termsMsg.entities).toEqual([terms]);
+    // one message now: product header + price + terms + question; the admin's entity is shifted past the header
+    const at = termsMsg.text.indexOf('Rule one');
+    expect(at).toBeGreaterThan(0);
+    expect(termsMsg.text.endsWith('Rule one\n\nآیا با شرایط بالا موافقید؟')).toBe(true);
+    expect(termsMsg.parse_mode).toBeUndefined();
+    expect(termsMsg.entities).toContainEqual({ type: 'bold', offset: at, length: 4 });
 
     // delete wizard
     await t.send('store', textUpdate(ADMIN, '🗑 حذف محصول'));
@@ -153,8 +157,11 @@ describe('store: discount codes', () => {
     expect(one(t.storeDb, 'SELECT code, discount_type, discount_value, max_uses FROM discount_codes')).toEqual({ code: 'SUMMER20', discount_type: 'percent', discount_value: 20, max_uses: null });
 
     await buyOnce(t, pid, 'summer20');
-    const terms = t.tg.of('sendMessage', CUSTOMER.id).filter((c) => c.payload.text.includes('قیمت با تخفیف')).at(-1)!.payload.text;
-    expect(terms).toContain(`*${(400000).toLocaleString('fa-IR')} تومان*`);
+    const agree = t.tg.of('sendMessage', CUSTOMER.id).filter((c) => c.payload.text.includes('قیمت با تخفیف')).at(-1)!.payload;
+    const price = `${(400000).toLocaleString('fa-IR')} تومان`;
+    expect(agree.text).toContain('✅ کد تخفیف اعمال شد!');
+    expect(agree.text).toContain(price);
+    expect(agree.entities).toContainEqual({ type: 'bold', offset: agree.text.indexOf(price), length: price.length });
     expect(one(t.storeDb, 'SELECT price, discount_code_id FROM orders')).toEqual({ price: 400000, discount_code_id: 1 });
     expect(q(t.storeDb, 'SELECT * FROM discount_code_redemptions')).toHaveLength(0);
 

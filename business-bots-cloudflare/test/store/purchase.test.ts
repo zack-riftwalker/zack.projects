@@ -39,15 +39,19 @@ describe('store: purchase flow', () => {
     expect(catalog.payload.reply_markup.inline_keyboard[0][0].callback_data).toBe('cust_prod_' + pid);
 
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_prod_' + pid));
-    expect(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload.text).toContain('🎟 آیا کد تخفیف دارید؟');
+    const product = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
+    expect(product.text).toContain('📦 GPT Plus');
+    expect(product.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toEqual(
+      ['cust_disc_enter_' + pid, 'ui_pay_' + pid, 'cust_catalog_page_0', 'ui_menu_home']);
 
-    await t.send('store', callbackUpdate(CUSTOMER, 'cust_disc_skip_' + pid));
+    await t.send('store', callbackUpdate(CUSTOMER, 'ui_pay_' + pid));
     const terms = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
     expect(terms.text).toContain('این محصول شرایط خاصی ندارد');
 
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_agree_' + pid));
-    const edit = t.tg.of('editMessageText').at(-1)!.payload;
+    const edit = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
     expect(edit.text).toContain('6037-1234-1234-1234');
+    expect(edit.reply_markup.inline_keyboard).toEqual([[{ text: '❌ انصراف', callback_data: 'cust_decline_' + pid, style: 'danger' }]]);
 
     await t.send('store', photoUpdate(CUSTOMER));
     const copies = t.tg.of('copyMessage');
@@ -157,7 +161,7 @@ describe('store: card settings without a card number', () => {
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_prod_' + pid));
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_disc_skip_' + pid));
     await t.send('store', callbackUpdate(CUSTOMER, 'cust_agree_' + pid));
-    expect(t.tg.of('editMessageText').at(-1)!.payload.text).toContain('لطفاً عکس یا فایل رسید پرداخت را ارسال کنید');
+    expect(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload.text).toContain('لطفاً عکس یا فایل رسید پرداخت را ارسال کنید');
     await t.send('store', textUpdate(ADMIN, '💳 شماره کارت'));
     expect(t.tg.texts(ADMIN.id).at(-1)).toContain('تنظیم شماره کارت فروشگاه');
   });

@@ -69,3 +69,37 @@ export async function ensureUiV2(ctx: StoreContext): Promise<void> {
   await ctx.reply('✨ منوی ربات به‌روز شد.', { reply_markup: { remove_keyboard: true } });
   ctx.session.uiV2 = true;
 }
+
+// ─── Plain text + entities builder ───────────────────────────────────────────
+
+/**
+ * Builds a message as plain text + entities (no parse_mode), so the admin's stored `terms_entities` can sit in the
+ * same message as our own bold header. Offsets are UTF-16 code units, i.e. JS `string.length`.
+ */
+export class RichText {
+  text = '';
+  entities: MessageEntity[] = [];
+  add(chunk: string, opts: { bold?: boolean } = {}): this {
+    if (opts.bold && chunk.length) this.entities.push({ type: 'bold', offset: this.text.length, length: chunk.length });
+    this.text += chunk;
+    return this;
+  }
+  /** appends `body` and its own entities, shifted to where the body now starts */
+  addEntitied(body: string, bodyEntities: MessageEntity[] | null | undefined): this {
+    const shift = this.text.length;
+    for (const e of bodyEntities ?? []) this.entities.push({ ...e, offset: e.offset + shift });
+    this.text += body;
+    return this;
+  }
+}
+
+/** header + body in one text; the body's entities (which start at 0) are shifted by the header's length. */
+export function withHeader(
+  header: string, headerEntities: MessageEntity[], body: string, bodyEntities: MessageEntity[] | null | undefined,
+): { text: string; entities: MessageEntity[] } {
+  const rt = new RichText();
+  rt.text = header;
+  rt.entities = [...headerEntities];
+  rt.addEntitied(body, bodyEntities);
+  return { text: rt.text, entities: rt.entities };
+}

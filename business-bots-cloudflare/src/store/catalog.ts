@@ -1,11 +1,14 @@
 import type { StoreApp } from '../apps';
 import type { CustomerProduct, ProductGroup } from './db';
+import type { ButtonStyle } from '../lib/markup';
 import { catalogLabel, escapeMarkdown, formatPrice } from './utils';
 
 export interface CatalogEntry {
   /** group entries first show the group name; standalone products keep their own label */
   label: string;
   callback: string;
+  /** button color: success while buyable, danger when unavailable */
+  style: ButtonStyle;
   sortOrder: number;
   /** smallest product id in the entry (tie-breaker) */
   minId: number;
@@ -19,18 +22,17 @@ export function buildCatalogEntries(products: CustomerProduct[], groups: Product
   const entries: CatalogEntry[] = [];
   for (const p of products) {
     if (p.group_id == null) {
-      entries.push({ label: catalogLabel(p), callback: 'cust_prod_' + p.id, sortOrder: p.sort_order ?? 0, minId: p.id });
+      entries.push({ label: catalogLabel(p), callback: 'cust_prod_' + p.id, style: p.is_available === 0 ? 'danger' : 'success', sortOrder: p.sort_order ?? 0, minId: p.id });
     }
   }
   for (const g of groups) {
     const options = products.filter((p) => p.group_id === g.id);
     if (options.length === 0) continue;
     const available = options.filter((p) => p.is_available !== 0);
-    const label = available.length === 0
-      ? '⛔️ ' + g.name + ' (ناموجود)'
-      : g.name + '  |  از ' + formatPrice(Math.min(...available.map((p) => p.price))) + ' ت';
+    // the price lives in the group's table now, so the category button shows only the name
+    const label = available.length === 0 ? '⛔️ ' + g.name + ' (ناموجود)' : g.name;
     entries.push({
-      label, callback: 'cust_grp_' + g.id, sortOrder: g.sort_order,
+      label, callback: 'cust_grp_' + g.id, style: available.length === 0 ? 'danger' : 'success', sortOrder: g.sort_order,
       minId: Math.min(...options.map((p) => p.id)),
     });
   }
@@ -64,6 +66,14 @@ export function priceLines(p: Pick<CustomerProduct, 'price' | 'compare_at_price'
 export function optionButtonLabel(p: CustomerProduct): string {
   const label = p.option_label ?? p.name;
   return p.is_available === 0 ? '⛔️ ' + label + ' (ناموجود)' : label + '  |  ' + formatPrice(p.price) + ' ت' + (hasCompareAt(p) ? ' 🔥' : '');
+}
+
+/** The two buttons of an option's row in the group table: its label and its price (both open the product). */
+export function optionRowLabels(p: CustomerProduct): { name: string; price: string } {
+  const label = p.option_label ?? p.name;
+  return p.is_available === 0
+    ? { name: '⛔️ ' + label, price: 'ناموجود' }
+    : { name: label, price: formatPrice(p.price) + ' تومان' + (hasCompareAt(p) ? ' 🔥' : '') };
 }
 
 export const groupHeaderText = (name: string): string =>
