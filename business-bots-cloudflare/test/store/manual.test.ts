@@ -125,10 +125,14 @@ describe('subscriptions & warranty', () => {
     const t = makeTestEnv({ monshi: false });
     const pid = await delivered(t);
     await t.send('store', textUpdate(CUSTOMER, '📋 اشتراک‌های من'));
+    const list = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
+    expect(list.reply_markup.inline_keyboard[0][0]).toMatchObject({ text: '📦 GPT Plus', callback_data: 'ui_sub_1', style: 'primary' });
+    await t.send('store', callbackUpdate(CUSTOMER, 'ui_sub_1'));
     const m = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
     expect(m.text).toContain('📦 *GPT Plus*');
     expect(m.text).toContain('🛡 گارانتی: فعال تا');
     expect(m.reply_markup.inline_keyboard[0].map((b: any) => b.callback_data)).toEqual(['warranty_claim_1', 'renew_' + pid]);
+    expect(m.reply_markup.inline_keyboard.slice(1).flat().map((b: any) => b.callback_data)).toEqual(['ui_menu_subs', 'ui_menu_home']);
   });
 
   it('no delivered orders → friendly empty message', async () => {

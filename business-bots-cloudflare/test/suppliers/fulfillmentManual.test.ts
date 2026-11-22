@@ -158,6 +158,7 @@ describe('✍️ ارسال متن اکانت (fo_text)', () => {
     // under «📋 اشتراک‌های من» the customer sees the account again
     t.tg.reset();
     await t.send('store', textUpdate(CUSTOMER, '📋 اشتراک‌های من'));
+    await pressAs(t, CUSTOMER, 'ui_sub_' + orderId);
     expect(callbackDataOf(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload)).toContain('acct_show_' + orderId);
     await pressAs(t, CUSTOMER, 'acct_show_' + orderId);
     expect(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload.text).toContain('<code>user: a@b.c\npass: &lt;123&gt;</code>');

@@ -7,6 +7,7 @@ import { getReferralConfig, referralConfigProblem, setReferralConfig, type Refer
 import { discountLabel, getOrCreateRefCode, rulesText } from '../referrals';
 import { adminProductLabel, formatPrice, productPickerKeyboard } from '../utils';
 import type { StoreContext } from '../types';
+import { HOME_BTN, ensureUiV2, showScreen, type ScreenExtra } from '../ui';
 
 const fa = (n: number) => n.toLocaleString('fa-IR');
 const BACK_BTN = Markup.button.callback('🔙 بازگشت', 'ref_adm_back');
@@ -20,19 +21,18 @@ async function inviteeGiftLine(app: StoreApp, cfg: ReferralConfig): Promise<stri
   return p && p.is_active ? '\n🤝 دوستتان هم با اولین خریدش یک «' + p.name + '» رایگان هدیه می‌گیرد.' : '';
 }
 
-export async function showCustomerView(ctx: StoreContext): Promise<void> {
+/** The customer's invite screen: text + keyboard, or a plain notice (the same text for «program off» as before). */
+export async function customerReferralScreen(ctx: StoreContext): Promise<{ text: string; extra: ScreenExtra }> {
   const app = ctx.app;
   const cfg = await getReferralConfig(app);
   if (!cfg.enabled) {
-    await ctx.reply('🎁 برنامه دعوت دوستان فعلاً فعال نیست.');
-    return;
+    return { text: '🎁 برنامه دعوت دوستان فعلاً فعال نیست.', extra: Markup.inlineKeyboard([[HOME_BTN()]]) };
   }
   const me = ctx.from!;
   await app.db.upsertCustomer({ telegramId: me.id, displayName: me.first_name || me.username || String(me.id) });
   const code = await getOrCreateRefCode(app, me.id);
   if (!code) {
-    await ctx.reply('❌ ساخت لینک دعوت ممکن نشد. لطفاً دوباره تلاش کنید.');
-    return;
+    return { text: '❌ ساخت لینک دعوت ممکن نشد. لطفاً دوباره تلاش کنید.', extra: Markup.inlineKeyboard([[HOME_BTN()]]) };
   }
   const link = 'https://t.me/' + ctx.me.username + '?start=ref_' + code;
   const ov = await app.db.getReferralOverview(me.id);
@@ -62,7 +62,15 @@ export async function showCustomerView(ctx: StoreContext): Promise<void> {
   }
 
   const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent('با این لینک وارد فروشگاه شو 👇');
-  await ctx.reply(lines.join('\n'), Markup.inlineKeyboard([[Markup.button.url('📤 ارسال لینک برای دوستان', shareUrl)]]));
+  return {
+    text: lines.join('\n'),
+    extra: Markup.inlineKeyboard([[Markup.button.url('📤 ارسال لینک برای دوستان', shareUrl)], [HOME_BTN()]]),
+  };
+}
+
+export async function showCustomerView(ctx: StoreContext): Promise<void> {
+  const { text, extra } = await customerReferralScreen(ctx);
+  await showScreen(ctx, text, extra);
 }
 
 // ─── Admin panel ─────────────────────────────────────────────────────────────
@@ -349,6 +357,13 @@ export function registerReferralHandler(bot: Bot<StoreContext>, isAdmin: (id: nu
       await renderPanel(ctx, await getReferralConfig(ctx.app), false);
       return;
     }
+    await ensureUiV2(ctx);
+    await showCustomerView(ctx);
+  });
+
+  // «🎁 دعوت دوستان» of the inline main menu (customers only)
+  bot.callbackQuery('ui_menu_ref', async (ctx) => {
+    await ctx.answerCallbackQuery();
     await showCustomerView(ctx);
   });
 

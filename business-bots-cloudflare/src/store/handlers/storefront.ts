@@ -2,9 +2,8 @@ import type { Bot } from 'grammy';
 import type { StoreApp } from '../../apps';
 import { onPurchaseConfirmed } from '../referrals';
 import { getCustomerSummary } from '../customerSummary';
-import { Markup } from '../../lib/markup';
+import { Markup, type InlineButton } from '../../lib/markup';
 import { ensureUiV2, showMainMenu, showScreen, HOME_BTN, RichText, withHeader } from '../ui';
-import { showCustomerView } from './referralPanel';
 import { BudgetExceededError } from '../../lib/budget';
 import { tehranDateTime } from '../../lib/time';
 import { storeOrderPaid } from '../../bridge';
@@ -219,62 +218,80 @@ async function showShop(ctx: StoreContext, page = 0) {
   await showScreen(ctx, CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, page) });
 }
 
-async function showMySubs(ctx: StoreContext) {
-    const { inProgress, rejected, delivered: orders } = await ctx.app.db.getCustomerOrderOverview(ctx.from!.id);
-    if (inProgress.length === 0 && rejected.length === 0 && orders.length === 0) {
-      await ctx.reply('😔 شما هنوز سفارش تحویل‌شده‌ای ندارید.\n\nبعد از تحویل اولین سفارش، وضعیت اشتراک و گارانتی آن اینجا نمایش داده می‌شود.');
-      return;
-    }
+const SUBS_PAGE_SIZE = 8;
 
-    if (inProgress.length || rejected.length) {
-      const lines = ['🧾 سفارش‌های در جریان:', ''];
-      for (const o of inProgress) {
-        lines.push(o.status === 'pending'
-          ? '⏳ «' + o.product_name + '» — رسید شما در صف بررسی است (ثبت: ' + formatJalaliDate(o.created_at) + ').'
-          : '🔄 «' + o.product_name + '» — پرداخت تأیید شد؛ در حال آماده‌سازی (حداکثر ۲۴ ساعت).');
-      }
-      for (const o of rejected) {
-        lines.push('❌ «' + o.product_name + '» — رسید تأیید نشد. دلیل: ' + (o.reject_reason || 'نامشخص'));
-      }
-      // «📸 ارسال مجدد رسید» only where it can work: active + available product, and not a reused receipt
-      const retryable = [];
-      if (rejected.length) {
-        const products = await ctx.app.db.getAllActiveCustomerProducts();
-        for (const o of rejected) {
-          const p = products.find((x) => x.id === o.customer_product_id);
-          if (p && p.is_available !== 0 && o.reject_reason !== DUPLICATE_REASON_TEXT) retryable.push(o);
-          if (retryable.length === 3) break;
-        }
-      }
-      await ctx.reply(lines.join('\n'), retryable.length
-        ? Markup.inlineKeyboard(retryable.map((o) => [Markup.button.callback('📸 ارسال مجدد رسید (#' + o.id + ')', 'reupload_' + o.id)]))
-        : {});
-    }
+async function showMySubs(ctx: StoreContext, page = 0) {
+  const { inProgress, rejected, delivered: orders } = await ctx.app.db.getCustomerOrderOverview(ctx.from!.id);
+  if (inProgress.length === 0 && rejected.length === 0 && orders.length === 0) {
+    await showScreen(ctx, '😔 شما هنوز سفارش تحویل‌شده‌ای ندارید.\n\nبعد از تحویل اولین سفارش، وضعیت اشتراک و گارانتی آن اینجا نمایش داده می‌شود.', homeKb());
+    return;
+  }
 
-    // delivered orders whose accounts are stored (supplier / stock / manual text) get «🔑 نمایش اطلاعات اکانت»
-    const viewable = new Set<number>();
-    if (orders.length) {
-      const rows = (await ctx.app.raw.prepare(
-        `SELECT o.id FROM orders o WHERE o.customer_telegram_id = ? AND o.status = 'delivered'
-         AND EXISTS (SELECT 1 FROM order_deliveries d WHERE d.order_id = o.id AND d.sent_ok = 1)`,
-      ).bind(ctx.from!.id).all<{ id: number }>()).results;
-      for (const r of rows) viewable.add(r.id);
+  let text = '📋 *اشتراک‌های من*';
+  const rows: InlineButton[][] = [];
+  if (inProgress.length || rejected.length) {
+    const lines = ['', '🧾 سفارش‌های در جریان:', ''];
+    for (const o of inProgress) {
+      lines.push(o.status === 'pending'
+        ? '⏳ «' + escapeMarkdown(o.product_name) + '» — رسید شما در صف بررسی است (ثبت: ' + formatJalaliDate(o.created_at) + ').'
+        : '🔄 «' + escapeMarkdown(o.product_name) + '» — پرداخت تأیید شد؛ در حال آماده‌سازی (حداکثر ۲۴ ساعت).');
     }
+    for (const o of rejected) {
+      lines.push('❌ «' + escapeMarkdown(o.product_name) + '» — رسید تأیید نشد. دلیل: ' + escapeMarkdown(o.reject_reason || 'نامشخص'));
+    }
+    text += '\n' + lines.join('\n');
+  }
 
-    for (const order of orders) {
-      const buttons = [];
-      if (isWarrantyActive(order)) {
-        buttons.push(Markup.button.callback('🛠 مشکل دارم', 'warranty_claim_' + order.id));
+  // one button per delivered order, newest first (the query is ordered by delivery date)
+  const pages = Math.max(1, Math.ceil(orders.length / SUBS_PAGE_SIZE));
+  const p = Math.min(Math.max(0, page), pages - 1);
+  for (const o of orders.slice(p * SUBS_PAGE_SIZE, (p + 1) * SUBS_PAGE_SIZE)) {
+    rows.push([Markup.button.callback('📦 ' + o.product_name, 'ui_sub_' + o.id, 'primary')]);
+  }
+  if (pages > 1) {
+    const nav: InlineButton[] = [];
+    if (p > 0) nav.push(Markup.button.callback('▶️ قبلی', 'ui_subs_' + (p - 1)));
+    if (p < pages - 1) nav.push(Markup.button.callback('بیشتر ◀️', 'ui_subs_' + (p + 1)));
+    rows.push(nav);
+  }
+
+  // «📸 ارسال مجدد رسید» only where it can work: active + available product, and not a reused receipt
+  if (rejected.length) {
+    const products = await ctx.app.db.getAllActiveCustomerProducts();
+    let n = 0;
+    for (const o of rejected) {
+      const prod = products.find((x) => x.id === o.customer_product_id);
+      if (prod && prod.is_available !== 0 && o.reject_reason !== DUPLICATE_REASON_TEXT) {
+        rows.push([Markup.button.callback('📸 ارسال مجدد رسید (#' + o.id + ')', 'reupload_' + o.id)]);
+        if (++n === 3) break;
       }
-      buttons.push(Markup.button.callback('🔄 تمدید / خرید مجدد', 'renew_' + order.customer_product_id));
-      const rows = [buttons];
-      if (viewable.has(order.id)) rows.push([Markup.button.callback('🔑 نمایش اطلاعات اکانت', 'acct_show_' + order.id)]);
-
-      await ctx.reply(subscriptionCardText(order), {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard(rows),
-      }).catch((err) => console.warn('⚠️ [Storefront] Subscription card failed for order #' + order.id + ':', err.message));
     }
+  }
+  rows.push([HOME_BTN()]);
+  await showScreen(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) });
+}
+
+/** One delivered order: its card with the usual actions (warranty, renew, account info). */
+async function showSubDetail(ctx: StoreContext, orderId: number) {
+  const order = await ctx.app.db.getOrderById(orderId);
+  // callback data is forgeable → ownership + state re-check
+  if (!order || order.customer_telegram_id !== ctx.from?.id || order.status !== 'delivered' || !order.delivered_at) {
+    await ctx.answerCallbackQuery('❌ سفارش یافت نشد.');
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  const buttons: InlineButton[] = [];
+  if (isWarrantyActive(order)) buttons.push(Markup.button.callback('🛠 مشکل دارم', 'warranty_claim_' + order.id, 'primary'));
+  buttons.push(Markup.button.callback('🔄 تمدید / خرید مجدد', 'renew_' + order.customer_product_id, 'primary'));
+  const rows = [buttons];
+  // delivered orders whose accounts are stored (supplier / stock / manual text) get «🔑 نمایش اطلاعات اکانت»
+  const viewable = await ctx.app.raw.prepare(
+    "SELECT 1 AS x FROM order_deliveries d WHERE d.order_id = ? AND d.sent_ok = 1 LIMIT 1",
+  ).bind(order.id).first();
+  if (viewable) rows.push([Markup.button.callback('🔑 نمایش اطلاعات اکانت', 'acct_show_' + order.id, 'primary')]);
+  rows.push([Markup.button.callback('🔙 بازگشت', 'ui_menu_subs')]);
+  rows.push([HOME_BTN()]);
+  await showScreen(ctx, subscriptionCardText(order), { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) });
 }
 
 export function registerStorefrontHandler(bot: Bot<StoreContext>) {
@@ -293,14 +310,15 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     await ctx.answerCallbackQuery();
     await showMainMenu(ctx);
   });
-  bot.callbackQuery('ui_menu_ref', async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await showCustomerView(ctx);
-  });
   bot.callbackQuery('ui_menu_subs', async (ctx) => {
     await ctx.answerCallbackQuery();
     await showMySubs(ctx);
   });
+  bot.callbackQuery(/^ui_subs_(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showMySubs(ctx, parseInt(ctx.match![1], 10));
+  });
+  bot.callbackQuery(/^ui_sub_(\d+)$/, (ctx) => showSubDetail(ctx, parseInt(ctx.match![1], 10)));
 
   // ── Entry point: "📋 اشتراک‌های من" persistent button ───────────────────────
   bot.hears(MY_SUBS_LABEL, async (ctx) => {

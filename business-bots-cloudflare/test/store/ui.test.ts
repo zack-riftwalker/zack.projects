@@ -325,3 +325,80 @@ describe('shop screens', () => {
     expect(Math.max(...budgets.map((b) => b.used))).toBeLessThanOrEqual(35);
   });
 });
+
+// ─── U3: subscriptions and invite screens ────────────────────────────────────
+
+describe('subscriptions screens', () => {
+  const deliver = (t: any, pid: number, n: number, customer = C.id) => {
+    for (let i = 0; i < n; i++) {
+      q(t.storeDb, `INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, status, delivered_at, warranty_expires_at)
+        VALUES (?, ?, ?, 5, 'delivered', datetime('now','+03:30','-' || ? || ' hours'), datetime('now','+03:30','+6 days'))`, customer, pid, 'Prod ' + i, i + 1);
+    }
+  };
+
+  it('list: ≤ 8 buttons newest first, paging, home; pressing a button edits the screen with the detail + back', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    deliver(t, pid, 10);
+    await t.send('store', textUpdate(C, '/start'));
+    const id = t.tg.lastSentId(C.id);
+    await t.send('store', callbackUpdate(C, 'ui_menu_subs', { message_id: id }));
+    const list = t.tg.of('editMessageText').at(-1)!.payload;
+    const b = list.reply_markup.inline_keyboard;
+    expect(b.slice(0, 8).map((r: any[]) => r[0].text)).toEqual(Array.from({ length: 8 }, (_, i) => '📦 Prod ' + i));
+    expect(b[8]).toEqual([{ text: 'بیشتر ◀️', callback_data: 'ui_subs_1' }]);
+    expect(b.at(-1)).toEqual([{ text: '🏠 منوی اصلی', callback_data: 'ui_menu_home' }]);
+
+    await t.send('store', callbackUpdate(C, 'ui_subs_1', { message_id: id }));
+    const p2 = t.tg.of('editMessageText').at(-1)!.payload.reply_markup.inline_keyboard;
+    expect(p2.slice(0, 2).map((r: any[]) => r[0].text)).toEqual(['📦 Prod 8', '📦 Prod 9']);
+    expect(p2[2]).toEqual([{ text: '▶️ قبلی', callback_data: 'ui_subs_0' }]);
+
+    await t.send('store', callbackUpdate(C, 'ui_sub_1', { message_id: id }));
+    const d = t.tg.of('editMessageText').at(-1)!.payload;
+    expect(d.text).toContain('📦 *Prod 0*');
+    expect(d.reply_markup.inline_keyboard.flat().map((x: any) => x.callback_data)).toEqual(
+      ['warranty_claim_1', 'renew_' + pid, 'ui_menu_subs', 'ui_menu_home']);
+    expect(t.tg.of('sendMessage', C.id)).toHaveLength(2); // nothing but the /start pair
+  });
+
+  it('a forged ui_sub_ of another customer (or a non-delivered order) is refused', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    deliver(t, pid, 1, 9999);
+    q(t.storeDb, "INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, status) VALUES (?, ?, 'P', 5, 'pending')", C.id, pid);
+    await t.send('store', callbackUpdate(C, 'ui_sub_1'));
+    await t.send('store', callbackUpdate(C, 'ui_sub_2'));
+    await t.send('store', callbackUpdate(C, 'ui_sub_404'));
+    expect(t.tg.of('answerCallbackQuery').map((c) => c.payload.text)).toEqual(['❌ سفارش یافت نشد.', '❌ سفارش یافت نشد.', '❌ سفارش یافت نشد.']);
+    expect(t.tg.of('sendMessage')).toHaveLength(0);
+    expect(t.tg.of('editMessageText')).toHaveLength(0);
+  });
+
+  it('names with Markdown characters are escaped in the in-progress lines', async () => {
+    const t = makeTestEnv({ monshi: false });
+    const pid = seedProduct(t);
+    q(t.storeDb, "INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, status) VALUES (?, ?, 'A_b*c', 5, 'pending')", C.id, pid);
+    await t.send('store', callbackUpdate(C, 'ui_menu_subs'));
+    expect(lastSend(t).payload.text).toContain('A\\_b\\*c');
+  });
+});
+
+describe('invite friends screen', () => {
+  const enable = (t: any) => t.storeDb.sqlite.prepare("INSERT OR REPLACE INTO store_kv (key, value) VALUES ('referral', ?)").run(JSON.stringify({ enabled: true, required: 3, minAmount: 0, reward: 'discount', discType: 'percent', discValue: 20, discProductId: null, discValidDays: 30, productId: null, repeatable: true, inviteeProductId: null }));
+
+  it('ui_menu_ref shows the link screen with a home button; old label does the same; off → same notice', async () => {
+    const t = makeTestEnv({ monshi: false });
+    seedProduct(t);
+    await t.send('store', callbackUpdate(C, 'ui_menu_ref'));
+    expect(lastSend(t).payload.text).toBe('🎁 برنامه دعوت دوستان فعلاً فعال نیست.');
+    enable(t);
+    await t.send('store', callbackUpdate(C, 'ui_menu_ref'));
+    const m = lastSend(t).payload;
+    expect(m.text).toContain('🔗 لینک دعوت شما:');
+    expect(m.reply_markup.inline_keyboard[0][0].url).toContain('https://t.me/share/url?url=');
+    expect(m.reply_markup.inline_keyboard.at(-1)).toEqual([{ text: '🏠 منوی اصلی', callback_data: 'ui_menu_home' }]);
+    await t.send('store', textUpdate(C, '🎁 دعوت دوستان'));
+    expect(lastSend(t).payload.text).toContain('🔗 لینک دعوت شما:');
+  });
+});

@@ -274,6 +274,8 @@ describe('«📋 اشتراک‌های من» shows the account again (acct_show
 
     t.tg.reset();
     await t.send('store', textUpdate(CUSTOMER, '📋 اشتراک‌های من'));
+    expect(callbackDataOf(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload)).toContain('ui_sub_' + orderId);
+    await t.send('store', callbackUpdate(CUSTOMER, 'ui_sub_' + orderId)); // the order's detail screen
     const card = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload;
     expect(callbackDataOf(card)).toContain('acct_show_' + orderId);
 
@@ -300,6 +302,7 @@ describe('«📋 اشتراک‌های من» shows the account again (acct_show
     t.storeDb.sqlite.prepare(`INSERT INTO orders (customer_telegram_id, customer_product_id, product_name, price, status, delivered_at)
       VALUES (?, ?, 'Plain', 1000, 'delivered', datetime('now', '+03:30'))`).run(CUSTOMER.id, plain);
     await t.send('store', textUpdate(CUSTOMER, '📋 اشتراک‌های من'));
+    await t.send('store', callbackUpdate(CUSTOMER, 'ui_sub_1'));
     expect(callbackDataOf(t.tg.of('sendMessage', CUSTOMER.id).at(-1)!.payload)).not.toContain('acct_show_1');
   });
 });

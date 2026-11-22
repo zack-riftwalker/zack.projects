@@ -22,7 +22,7 @@ describe('my subscriptions: orders in progress', () => {
     expect(sent(t)[0].payload.text).toContain('هنوز سفارش تحویل‌شده‌ای ندارید');
   });
 
-  it('shows pending and confirmed orders in one message, before the delivered cards', async () => {
+  it('shows pending and confirmed orders and the delivered order button in ONE screen', async () => {
     const t = makeTestEnv({ monshi: false });
     const pid = seedProduct(t);
     order(t, pid, 'pending');
@@ -30,11 +30,12 @@ describe('my subscriptions: orders in progress', () => {
     order(t, pid, 'delivered', "delivered_at=datetime('now', '+03:30')");
     await t.send('store', textUpdate(CUSTOMER, '📋 اشتراک‌های من'));
     const msgs = sent(t).map((c) => c.payload.text as string);
-    expect(msgs).toHaveLength(2);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toContain('📋 *اشتراک‌های من*');
     expect(msgs[0]).toContain('🧾 سفارش‌های در جریان');
     expect(msgs[0]).toContain('⏳ «GPT Plus» — رسید شما در صف بررسی است');
     expect(msgs[0]).toContain('🔄 «GPT Plus» — پرداخت تأیید شد');
-    expect(msgs[1]).toContain('📦');
+    expect(sent(t)[0].payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toEqual(['ui_sub_3', 'ui_menu_home']);
   });
 
   it('only in-progress orders: no "no delivered orders" text', async () => {
@@ -58,7 +59,7 @@ describe('my subscriptions: orders in progress', () => {
     const msg = sent(t)[0].payload;
     expect(msg.text).toContain('دلیل: تصویر رسید خوانا نیست.');
     expect(msg.text).toContain('دلیل: نامشخص');
-    expect(msg.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toEqual(['reupload_1']);
+    expect(msg.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toEqual(['reupload_1', 'ui_menu_home']);
   });
 
   it('old rejections and other customers\' orders are not shown', async () => {
