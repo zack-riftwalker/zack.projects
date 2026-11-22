@@ -66,6 +66,8 @@ describe('store hot queries use indexes', () => {
     ['my orders in progress', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status IN ('pending', 'confirmed') ORDER BY id DESC LIMIT 10", [1]],
     ['my recent rejections', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'rejected' AND decided_at >= datetime('now', '+03:30', '-7 days') ORDER BY id DESC LIMIT 5", [1]],
     ['receipt duplicate lookup', 'SELECT id, status, customer_telegram_id FROM orders WHERE receipt_unique_id = ? ORDER BY id DESC LIMIT 1', ['x']],
+    ['report codes', CAMPAIGN_SQL.codes, ['a', 'b']],
+    ['code revenue', "SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS sum FROM orders WHERE discount_code_id = ? AND status IN ('confirmed', 'delivered')", [1]],
     ['report sources', CAMPAIGN_SQL.sources, ['a', 'b', 'a', 'b', 'a', 'b']],
     ['cart reminder due', DUE_DRAFTS_SQL, ['a', 'b', 15]],
     ['cart reminder order check', 'SELECT 1 FROM orders WHERE customer_telegram_id = ? AND created_at >= ? LIMIT 1', [1, 'a']],
@@ -76,7 +78,7 @@ describe('store hot queries use indexes', () => {
   for (const [label, sql, args] of cases) {
     it(label, () => assertNoScan(plan(f, sql, ...args), label, label.includes('(LIMIT)')));
   }
-  for (const audience of ['all', 'active', 'expired', 'never', 'buyers:1', 'waitlist:1']) {
+  for (const audience of ['all', 'active', 'expired', 'never', 'buyers_any', 'buyers:1', 'waitlist:1']) {
     it('broadcast batch: ' + audience, () => {
       const fl = audienceFilter(audience);
       assertNoScan(plan(f, 'SELECT c.id, c.telegram_id FROM customers c WHERE c.id > ? AND (' + fl.where + ') ORDER BY c.id LIMIT ?', 0, ...fl.args, 40), 'broadcast ' + audience);

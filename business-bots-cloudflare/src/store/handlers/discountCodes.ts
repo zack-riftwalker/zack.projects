@@ -861,6 +861,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
     const product = await ctx.app.db.getCustomerProductById(discountCode.customer_product_id);
     const group = discountCode.product_group_id != null ? await ctx.app.db.getProductGroup(discountCode.product_group_id) : undefined;
     const used = await ctx.app.db.countDiscountCodeRedemptions(id);
+    const revenue = await ctx.app.db.getDiscountCodeRevenue(id);
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
@@ -869,6 +870,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
       '📐 نوع: ' + (discountCode.discount_type === 'percent' ? 'درصدی' : 'مبلغ ثابت') + '\n' +
       '💰 مقدار: ' + (discountCode.discount_type === 'percent' ? discountCode.discount_value + '٪' : formatPrice(discountCode.discount_value) + ' تومان') + '\n' +
       '🔢 استفاده‌شده: ' + used + ' از ' + (discountCode.max_uses ?? 'نامحدود') + '\n' +
+      '💰 درآمد: ' + formatPrice(revenue.sum) + ' تومان (' + revenue.n.toLocaleString('fa-IR') + ' سفارش)\n' +
       '▶️ شروع: ' + (discountCode.starts_at ? formatJalaliDateTime(discountCode.starts_at) : 'از ابتدا') + '\n' +
       '📅 انقضا: ' + formatJalaliDateTime(discountCode.expires_at) + '\n' +
       '📌 وضعیت: ' + (discountCode.is_active ? 'فعال' : 'غیرفعال'),

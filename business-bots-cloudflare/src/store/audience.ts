@@ -1,5 +1,5 @@
 /** Announcement audiences (broadcast_jobs.audience). Strictly validated: the value is parsed, never interpolated. */
-export const AUDIENCE_RE = /^(all|active|expired|never|buyers:\d+|waitlist:\d+)$/;
+export const AUDIENCE_RE = /^(all|active|expired|never|buyers_any|buyers:\d+|waitlist:\d+)$/;
 
 const ACTIVE_COND =
   "EXISTS (SELECT 1 FROM orders o WHERE o.customer_telegram_id = c.telegram_id AND o.status = 'delivered' " +
@@ -12,6 +12,10 @@ const EXPIRED_COND =
 const NEVER_COND =
   "NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_telegram_id = c.telegram_id AND o.status IN ('confirmed', 'delivered'))";
 
+/** round 4 (§7): anyone with at least one paid, confirmed order (0-Toman reward orders don't count) */
+const BUYERS_ANY_COND =
+  "EXISTS (SELECT 1 FROM orders o WHERE o.customer_telegram_id = c.telegram_id AND o.status IN ('confirmed', 'delivered') AND o.price > 0)";
+
 /** WHERE fragment (over customers `c`) + its bound args. Throws on an invalid audience. */
 export function audienceFilter(audience: string): { where: string; args: unknown[] } {
   if (!AUDIENCE_RE.test(audience)) throw new Error('invalid audience: ' + audience);
@@ -19,6 +23,7 @@ export function audienceFilter(audience: string): { where: string; args: unknown
   if (audience === 'active') return { where: ACTIVE_COND, args: [] };
   if (audience === 'expired') return { where: EXPIRED_COND, args: [] };
   if (audience === 'never') return { where: NEVER_COND, args: [] };
+  if (audience === 'buyers_any') return { where: BUYERS_ANY_COND, args: [] };
   const [kind, id] = audience.split(':');
   const pid = parseInt(id, 10);
   if (kind === 'buyers') {
@@ -38,4 +43,5 @@ export const AUDIENCE_LABEL: Record<string, string> = {
   active: 'مشتری‌های دارای اشتراک فعال',
   expired: 'مشتری‌هایی که اشتراکشان تمام شده',
   never: 'کسانی که هنوز خرید نکرده‌اند',
+  buyers_any: 'همه‌ی خریدارها (هر محصولی)',
 };

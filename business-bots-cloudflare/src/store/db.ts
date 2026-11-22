@@ -572,6 +572,11 @@ export class StoreDb {
     return { lastInsertRowid: r.meta.last_row_id };
   }
 
+  /** round 4 (§8): orders and revenue that used this code (confirmed / delivered only) */
+  async getDiscountCodeRevenue(id: number): Promise<{ n: number; sum: number }> {
+    return (await this.q("SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS sum FROM orders WHERE discount_code_id = ? AND status IN ('confirmed', 'delivered')", id).first<{ n: number; sum: number }>())!;
+  }
+
   async setDiscountCodeStart(id: number, startsAt: string | null) {
     const r = await this.q('UPDATE discount_codes SET starts_at = ? WHERE id = ?', startsAt, id).run();
     return { changes: r.meta.changes };

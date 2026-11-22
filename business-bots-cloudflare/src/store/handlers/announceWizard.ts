@@ -24,6 +24,7 @@ const audienceKb = (cartOn: boolean) => Markup.inlineKeyboard([
   [Markup.button.callback('✅ اشتراک فعال', 'ann_aud_active')],
   [Markup.button.callback('⌛️ اشتراک تمام‌شده', 'ann_aud_expired')],
   [Markup.button.callback('🛍 خریداران یک محصول', 'ann_aud_buyers')],
+  [Markup.button.callback('💎 همه‌ی خریدارها', 'ann_aud_buyers_any')],
   [Markup.button.callback('🆕 هنوز خرید نکرده‌اند', 'ann_aud_never')],
   [Markup.button.callback('🗓 اطلاعیه‌های زمان‌بندی‌شده', 'ann_sched_list')],
   [Markup.button.callback(cartLabel(cartOn), 'ann_cart_toggle')],
@@ -106,7 +107,7 @@ export const announceWizard = new WizardScene<StoreContext>(
       }
       audience = 'buyers:' + product.id;
       label = 'خریداران «' + product.name + '»';
-    } else if (/^ann_aud_(all|active|expired|never)$/.test(data)) {
+    } else if (/^ann_aud_(all|active|expired|never|buyers_any)$/.test(data)) {
       audience = data.slice('ann_aud_'.length);
       label = AUDIENCE_LABEL[audience];
     }
