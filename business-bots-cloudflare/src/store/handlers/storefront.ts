@@ -16,7 +16,7 @@ import {
 } from '../catalog';
 import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
-  validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, DISCOUNT_ERROR_LABEL,
+  validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, discountErrorText,
 } from './discountCodes';
 import { formatCardNumber } from './storeSettings';
 import { buildReceiptCaption, deliverReceiptToAdmins } from '../services/receiptDelivery';
@@ -454,7 +454,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     const result = await validateDiscountCode(ctx.app, ctx.message.text, product, ctx.from.id);
     if (!result.ok) {
       await ctx.reply(
-        DISCOUNT_ERROR_LABEL[result.reason] + '\n\nمی‌توانید دوباره تلاش کنید، یا بدون کد ادامه دهید.',
+        discountErrorText(result) + '\n\nمی‌توانید دوباره تلاش کنید، یا بدون کد ادامه دهید.',
         {
           ...Markup.inlineKeyboard([[
             Markup.button.callback('➡️ بدون کد، ادامه بده', 'cust_disc_skip_' + productId),

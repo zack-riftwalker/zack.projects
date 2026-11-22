@@ -25,22 +25,29 @@ export const DISCOUNT_ERROR_LABEL: Record<string, string> = {
   not_owner: '❌ این کد تخفیف مخصوص حساب دیگری است.',
   wrong_product: '❌ این کد تخفیف برای این محصول معتبر نیست.',
   expired: '⌛️ این کد تخفیف منقضی شده است.',
+  not_started: '⏳ این کد تخفیف هنوز فعال نشده است.',
   max_uses: '❌ ظرفیت استفاده از این کد تخفیف تمام شده است.',
   already_used: 'ℹ️ شما قبلاً از این کد تخفیف استفاده کرده‌اید.',
   check_failed: '❌ خطا در بررسی کد تخفیف. لطفاً دوباره تلاش کنید.',
   below_cost: '❌ این کد برای این محصول قابل استفاده نیست.',
 };
 
-export type DiscountValidation = { ok: true; discountCode: DiscountCode } | { ok: false; reason: string };
+export type DiscountValidation = { ok: true; discountCode: DiscountCode } | { ok: false; reason: string; startsAt?: string };
+
+/** The customer-facing sentence for a refused code; «not started» also says when it becomes usable. */
+export function discountErrorText(result: { reason: string; startsAt?: string }): string {
+  const base = DISCOUNT_ERROR_LABEL[result.reason] ?? DISCOUNT_ERROR_LABEL.check_failed;
+  return result.reason === 'not_started' && result.startsAt ? base + ' از ' + formatJalaliDateTime(result.startsAt) + ' قابل استفاده است.' : base;
+}
 
 /**
- * active → matches product → not expired → not used by this customer → cap not reached → (at code entry only)
+ * active → matches product → not expired → (at code entry only) started → not used by this customer → cap not reached → (at code entry only)
  * not below the supplier cost. Fails closed. The cost floor is not re-checked at receipt confirmation: the
  * customer paid the price they were shown, and skipping the redemption would make a single-use code reusable.
  */
 async function validateDiscountCodeRecord(
   app: StoreApp, discountCode: DiscountCode | undefined, product: CustomerProduct | undefined, customerTelegramId: number,
-  checkFloor: boolean,
+  atEntry: boolean,
 ): Promise<DiscountValidation> {
   if (!discountCode) return { ok: false, reason: 'not_found' };
   if (!discountCode.is_active) return { ok: false, reason: 'inactive' };
@@ -51,7 +58,10 @@ async function validateDiscountCodeRecord(
     ? product?.group_id === discountCode.product_group_id
     : product !== undefined && discountCode.customer_product_id === product.id;
   if (!matches) return { ok: false, reason: 'wrong_product' };
-  if (discountCode.expires_at < (await app.db.nowLocalDateTimeString())) return { ok: false, reason: 'expired' };
+  const now = await app.db.nowLocalDateTimeString();
+  if (discountCode.expires_at < now) return { ok: false, reason: 'expired' };
+  // the start time is checked when the customer types the code, not when the order is confirmed later (§6)
+  if (atEntry && discountCode.starts_at && discountCode.starts_at > now) return { ok: false, reason: 'not_started', startsAt: discountCode.starts_at };
 
   try {
     if (await app.db.hasCustomerRedeemedCode(discountCode.id, customerTelegramId)) {
@@ -67,7 +77,7 @@ async function validateDiscountCodeRecord(
   }
 
   // never below the supplier cost (SUPPLIER_PLAN.md §5.4), checked last, at code entry only
-  if (checkFloor && product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {
+  if (atEntry && product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {
     return { ok: false, reason: 'below_cost' };
   }
   return { ok: true, discountCode };
@@ -267,6 +277,40 @@ async function receiveMaxUses(ctx: StoreContext, stateKey: string): Promise<'ret
   return 'ok';
 }
 
+const DISC_START_NOW_ACTION = 'disc_start_now';
+const DISC_START_CUSTOM_ACTION = 'disc_start_custom';
+const START_PROMPT = '⏰ زمان شروع را بنویسید (تاریخ شمسی، به وقت تهران)، مثلاً:\n۱۴۰۵/۰۹/۰۴ ۲۰:۰۰';
+
+function startTimeKeyboard(cancelBtn: InlineButton) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('▶️ از همین الان', DISC_START_NOW_ACTION), Markup.button.callback('⏰ زمان مشخص', DISC_START_CUSTOM_ACTION)],
+    [cancelBtn],
+  ]);
+}
+
+/** A typed start time: in the future and before the code expires. Returns the local time, or 'retry' after explaining. */
+async function receiveStartTime(ctx: StoreContext, expiresAt: string): Promise<string | 'retry'> {
+  if (!ctx.message?.text) {
+    await ackStrayCallback(ctx);
+    await ctx.reply('⚠️ لطفاً زمان شروع را به صورت متن وارد کنید.');
+    return 'retry';
+  }
+  const startsAt = parseJalaliDateTime(ctx.message.text);
+  if (!startsAt) {
+    await ctx.reply('❌ فرمت تاریخ نامعتبر است.\nمثال درست: ۱۴۰۵/۰۹/۰۴ ۲۰:۰۰\nدوباره وارد کنید:');
+    return 'retry';
+  }
+  if (startsAt <= (await ctx.app.db.nowLocalDateTimeString())) {
+    await ctx.reply('⚠️ این زمان گذشته است.');
+    return 'retry';
+  }
+  if (startsAt >= expiresAt) {
+    await ctx.reply('⚠️ زمان شروع باید قبل از انقضای کد باشد.');
+    return 'retry';
+  }
+  return startsAt;
+}
+
 // ─── Wizard Scene: Add ────────────────────────────────────────────────────────
 
 const ADD_CANCEL_BTN = Markup.button.callback('❌ انصراف', 'disc_add_cancel');
@@ -429,8 +473,38 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
       return;
     }
 
-    const { code, discountType, discountValue, customerProductId, productName, maxUses, productGroupId } =
-      ctx.wizard.state.newDiscountCode;
+    ctx.wizard.state.newDiscountCode.expiresAt = expiresAt;
+    await ctx.reply('⏰ کد از چه زمانی فعال شود؟', startTimeKeyboard(ADD_CANCEL_BTN));
+    return ctx.wizard.next();
+  },
+
+  // STEP 7 (round 4, §6): the start time (now, or a specific moment), then save and confirm.
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === 'disc_add_cancel') return leaveAddCancelled(ctx);
+
+    const st = ctx.wizard.state.newDiscountCode;
+    let startsAt: string | null = null;
+    if (!st.awaitingStartText) {
+      const data = ctx.callbackQuery?.data;
+      if (data === DISC_START_CUSTOM_ACTION) {
+        await ctx.answerCallbackQuery();
+        st.awaitingStartText = true;
+        await ctx.reply(START_PROMPT, ADD_CANCEL_KB);
+        return;
+      }
+      if (data !== DISC_START_NOW_ACTION) {
+        await ackStrayCallback(ctx);
+        await ctx.reply('⚠️ لطفاً یکی از دو گزینه بالا را انتخاب کنید.');
+        return;
+      }
+      await ctx.answerCallbackQuery();
+    } else {
+      const parsed = await receiveStartTime(ctx, st.expiresAt);
+      if (parsed === 'retry') return;
+      startsAt = parsed;
+    }
+
+    const { code, discountType, discountValue, customerProductId, productName, maxUses, productGroupId, expiresAt } = st;
 
     const floor = await codeFloorViolation(ctx.app, { customerProductId, productGroupId }, { discount_type: discountType, discount_value: discountValue });
     if (floor) {
@@ -439,7 +513,7 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
     }
 
     try {
-      await ctx.app.db.createDiscountCode({ code, customerProductId, discountType, discountValue, maxUses, expiresAt, productGroupId });
+      await ctx.app.db.createDiscountCode({ code, customerProductId, discountType, discountValue, maxUses, expiresAt, productGroupId, startsAt });
     } catch (err: any) {
       console.error('❌ [DiscountCodes Wizard] DB insert failed:', err.message);
       await ctx.reply('❌ خطا در ذخیره کد تخفیف. لطفاً دوباره تلاش کنید.');
@@ -455,6 +529,7 @@ export const discountCodeAddWizard = new WizardScene<StoreContext>(
         '│ 📐 نوع: ' + (discountType === 'percent' ? 'درصدی' : 'مبلغ ثابت') + '\n' +
         '│ 💰 مقدار: ' + (discountType === 'percent' ? discountValue + '٪' : formatPrice(discountValue) + ' تومان') + '\n' +
         '│ 🔢 سقف استفاده: ' + (maxUses ?? 'نامحدود') + '\n' +
+        '│ ▶️ شروع: ' + (startsAt ? formatJalaliDateTime(startsAt) : 'از ابتدا') + '\n' +
         '│ 📅 انقضا: ' + formatJalaliDateTime(expiresAt) + '\n' +
         '└─────────────────────',
         { parse_mode: 'Markdown' },
@@ -605,6 +680,38 @@ export const discountCodeEditWizard = new WizardScene<StoreContext>(
   },
 );
 
+// ─── Wizard Scene: change the start time of an existing code (round 4, §6) ───
+
+const START_CANCEL_BTN = Markup.button.callback('❌ انصراف', 'disc_startedit_cancel');
+
+export const discountCodeStartWizard = new WizardScene<StoreContext>(
+  'discount-code-start-wizard', // entered with { codeId }
+
+  async (ctx) => {
+    const discountCode = await ctx.app.db.getDiscountCodeById(ctx.wizard.state.codeId);
+    if (!discountCode) {
+      await ctx.reply('❌ کد تخفیف یافت نشد.');
+      return ctx.scene.leave();
+    }
+    ctx.wizard.state.expiresAt = discountCode.expires_at;
+    await ctx.reply(START_PROMPT + '\n\nانقضای کد: ' + formatJalaliDateTime(discountCode.expires_at), Markup.inlineKeyboard([[START_CANCEL_BTN]]));
+    return ctx.wizard.next();
+  },
+
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === 'disc_startedit_cancel') {
+      await ctx.answerCallbackQuery();
+      await ctx.editMessageText('❌ تغییر زمان شروع لغو شد.').catch(() => {});
+      return ctx.scene.leave();
+    }
+    const startsAt = await receiveStartTime(ctx, ctx.wizard.state.expiresAt);
+    if (startsAt === 'retry') return;
+    const result = await ctx.app.db.setDiscountCodeStart(ctx.wizard.state.codeId, startsAt);
+    await ctx.reply(result.changes === 1 ? '✅ زمان شروع کد: ' + formatJalaliDateTime(startsAt) : '❌ کد تخفیف یافت نشد.');
+    return ctx.scene.leave();
+  },
+);
+
 // ─── Wizard Scene: Renew ──────────────────────────────────────────────────────
 
 const RENEW_CANCEL_BTN = Markup.button.callback('❌ انصراف', 'disc_renew_cancel');
@@ -689,13 +796,15 @@ export const discountCodeRenewWizard = new WizardScene<StoreContext>(
 
 const DISC_LIST_CANCEL_BTN = Markup.button.callback('❌ بستن', 'cprod_disc_close');
 
-function discListButton(c: DiscountCode): InlineButton {
+/** `now` = local Tehran time; a code that has not started yet gets an ⏳ prefix */
+function discListButton(c: DiscountCode, now: string): InlineButton {
   const statusIcon = c.is_active ? '✅' : '⛔️';
-  return Markup.button.callback(statusIcon + ' ' + c.code, 'cprod_disc_view_' + c.id);
+  const waiting = c.starts_at && c.starts_at > now ? '⏳ ' : '';
+  return Markup.button.callback(waiting + statusIcon + ' ' + c.code, 'cprod_disc_view_' + c.id);
 }
 
-function discListKeyboard(codes: DiscountCode[], page: number) {
-  return buildPagedKeyboard(codes, page, discListButton, 'cprod_disc_page_', DISC_LIST_CANCEL_BTN);
+function discListKeyboard(codes: DiscountCode[], page: number, now: string) {
+  return buildPagedKeyboard(codes, page, (c) => discListButton(c, now), 'cprod_disc_page_', DISC_LIST_CANCEL_BTN);
 }
 
 const NO_ACCESS = '⛔️ دسترسی ندارید.';
@@ -719,7 +828,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
 
     await ctx.editMessageText(
       '🎟 *لیست کدهای تخفیف*\n\nیک کد را برای مشاهده جزئیات انتخاب کنید:',
-      { parse_mode: 'Markdown', ...discListKeyboard(codes, 0) },
+      { parse_mode: 'Markdown', ...discListKeyboard(codes, 0, await ctx.app.db.nowLocalDateTimeString()) },
     ).catch(() => {});
   });
 
@@ -729,7 +838,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
     await ctx.answerCallbackQuery();
     const codes = await ctx.app.db.getAllDiscountCodes();
     await ctx.editMessageReplyMarkup(
-      { reply_markup: discListKeyboard(codes, parseInt(ctx.match![1], 10)).reply_markup },
+      { reply_markup: discListKeyboard(codes, parseInt(ctx.match![1], 10), await ctx.app.db.nowLocalDateTimeString()).reply_markup },
     ).catch(() => {});
   });
 
@@ -760,6 +869,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
       '📐 نوع: ' + (discountCode.discount_type === 'percent' ? 'درصدی' : 'مبلغ ثابت') + '\n' +
       '💰 مقدار: ' + (discountCode.discount_type === 'percent' ? discountCode.discount_value + '٪' : formatPrice(discountCode.discount_value) + ' تومان') + '\n' +
       '🔢 استفاده‌شده: ' + used + ' از ' + (discountCode.max_uses ?? 'نامحدود') + '\n' +
+      '▶️ شروع: ' + (discountCode.starts_at ? formatJalaliDateTime(discountCode.starts_at) : 'از ابتدا') + '\n' +
       '📅 انقضا: ' + formatJalaliDateTime(discountCode.expires_at) + '\n' +
       '📌 وضعیت: ' + (discountCode.is_active ? 'فعال' : 'غیرفعال'),
       {
@@ -769,6 +879,7 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
             Markup.button.callback('✏️ ویرایش', 'cprod_disc_edit_' + id),
             Markup.button.callback('⏳ تمدید', 'cprod_disc_renew_' + id),
           ],
+          [Markup.button.callback('⏰ تغییر زمان شروع', 'cprod_disc_start_' + id)],
           [Markup.button.callback('🗑 حذف', 'cprod_disc_del_' + id)],
           [Markup.button.callback('🔙 بازگشت به لیست', 'cprod_disc_list')],
         ]),
@@ -788,6 +899,28 @@ export function registerDiscountCodeHandler(bot: Bot<StoreContext>, isAdmin: (id
     const id = parseInt(ctx.match![1], 10);
     await ctx.answerCallbackQuery();
     await ctx.scene.enter('discount-code-renew-wizard', { codeId: id });
+  });
+
+  bot.callbackQuery(/^cprod_disc_start_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery(NO_ACCESS);
+    const id = parseInt(ctx.match![1], 10);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('⏰ کد از چه زمانی فعال شود؟', Markup.inlineKeyboard([
+      [Markup.button.callback('▶️ از همین الان', 'cprod_disc_startnow_' + id), Markup.button.callback('⏰ زمان مشخص', 'cprod_disc_startat_' + id)],
+      [Markup.button.callback('🔙 بازگشت', 'cprod_disc_view_' + id)],
+    ])).catch(() => {});
+  });
+
+  bot.callbackQuery(/^cprod_disc_startnow_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery(NO_ACCESS);
+    const result = await ctx.app.db.setDiscountCodeStart(parseInt(ctx.match![1], 10), null);
+    await ctx.answerCallbackQuery(result.changes === 1 ? '✅ از همین الان فعال است.' : '❌ کد یافت نشد.');
+  });
+
+  bot.callbackQuery(/^cprod_disc_startat_(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery(NO_ACCESS);
+    await ctx.answerCallbackQuery();
+    await ctx.scene.enter('discount-code-start-wizard', { codeId: parseInt(ctx.match![1], 10) });
   });
 
   bot.callbackQuery(/^cprod_disc_del_(\d+)$/, async (ctx) => {
@@ -844,7 +977,7 @@ const CANCEL_REPLY =
   '❌ *عملیات لغو شد.*\n\n' +
   'برای بازگشت به پنل /panel را بزنید.';
 
-for (const scene of [discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard]) {
+for (const scene of [discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, discountCodeStartWizard]) {
   scene.command('cancel', async (ctx) => {
     await ctx.reply(CANCEL_REPLY, { parse_mode: 'Markdown' });
     return ctx.scene.leave();

@@ -31,6 +31,7 @@ async function addCode(t: TestEnv, pid: number) {
   await press(t, 'disc_scope_one');
   await press(t, 'disc_maxuses_unlimited');
   await say(t, futureJalali());
+  await press(t, 'disc_start_now');
 }
 
 async function buyWithCode(t: TestEnv, pid: number, code: string, user = CUSTOMER): Promise<number> {

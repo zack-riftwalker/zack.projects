@@ -11,7 +11,7 @@ import { customerProductsEditWizard } from './handlers/customerProductsEdit';
 import { registerStorefrontHandler, customerKeyboard } from './handlers/storefront';
 import { registerSalesReportHandler } from './handlers/salesReport';
 import {
-  discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, registerDiscountCodeHandler,
+  discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, discountCodeStartWizard, registerDiscountCodeHandler,
 } from './handlers/discountCodes';
 import { storeSettingsWizard } from './handlers/storeSettings';
 import { sourceLinkWizard } from './handlers/sourceLink';
@@ -79,7 +79,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
 
   const stage = new Stage<StoreContext>([
     announceWizard, customerProductsWizard, customerProductsDeactivateWizard, customerProductsEditWizard,
-    discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard,
+    discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, discountCodeStartWizard,
     storeSettingsWizard,
     manualPurchaseWizard, sourceLinkWizard,
   ], {

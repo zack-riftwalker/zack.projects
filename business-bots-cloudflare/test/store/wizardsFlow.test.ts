@@ -40,6 +40,7 @@ describe('discount wizards: a value under the supplier cost is asked again, not 
     await press(t, 'disc_prod_select_' + pid);
     await press(t, 'disc_maxuses_unlimited');
     await say(t, futureJalali());
+    await press(t, 'disc_start_now');
     expect(one(t.storeDb, 'SELECT code, discount_value FROM discount_codes')).toEqual({ code: 'DEEP', discount_value: 20000 });
     expect(lastAdmin(t)).toContain('کد تخفیف با موفقیت ثبت شد');
   });
@@ -63,6 +64,7 @@ describe('discount wizards: a value under the supplier cost is asked again, not 
     await press(t, 'disc_scope_group');
     await press(t, 'disc_maxuses_unlimited');
     await say(t, futureJalali());
+    await press(t, 'disc_start_now');
     expect(one(t.storeDb, 'SELECT product_group_id, discount_value FROM discount_codes')).toEqual({ product_group_id: g, discount_value: 20000 });
   });
 
@@ -103,6 +105,7 @@ describe('S2 wizards driven through their real steps (review: missing tests)', (
     await press(t, 'disc_scope_one');
     await press(t, 'disc_maxuses_unlimited');
     await say(t, futureJalali());
+    await press(t, 'disc_start_now');
     expect(one(t.storeDb, 'SELECT customer_product_id, product_group_id FROM discount_codes')).toEqual({ customer_product_id: a, product_group_id: null });
   });
 

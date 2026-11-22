@@ -560,14 +560,21 @@ export class StoreDb {
   async createDiscountCode(p: {
     code: string; customerProductId: number; discountType: string; discountValue: number; maxUses: number | null; expiresAt: string;
     ownerTelegramId?: number | null; source?: 'admin' | 'referral'; productGroupId?: number | null;
+    /** round 4 (§6): local Tehran start time; omitted/null = active at once (referral codes keep NULL) */
+    startsAt?: string | null;
   }) {
     const r = await this.q(`
     INSERT INTO discount_codes
-      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source, product_group_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (code, customer_product_id, discount_type, discount_value, max_uses, expires_at, owner_telegram_id, source, product_group_id, starts_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, p.code.toUpperCase(), p.customerProductId, p.discountType, p.discountValue, p.maxUses ?? null, p.expiresAt,
-      p.ownerTelegramId ?? null, p.source ?? 'admin', p.productGroupId ?? null).run();
+      p.ownerTelegramId ?? null, p.source ?? 'admin', p.productGroupId ?? null, p.startsAt ?? null).run();
     return { lastInsertRowid: r.meta.last_row_id };
+  }
+
+  async setDiscountCodeStart(id: number, startsAt: string | null) {
+    const r = await this.q('UPDATE discount_codes SET starts_at = ? WHERE id = ?', startsAt, id).run();
+    return { changes: r.meta.changes };
   }
 
   async getDiscountCodeByCode(code: string): Promise<DiscountCode | undefined> {

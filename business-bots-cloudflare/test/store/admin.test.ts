@@ -142,6 +142,7 @@ describe('store: discount codes', () => {
     if (opts.maxUses) await t.send('store', textUpdate(ADMIN, opts.maxUses));
     else await t.send('store', callbackUpdate(ADMIN, 'disc_maxuses_unlimited'));
     await t.send('store', textUpdate(ADMIN, futureJalali()));
+    await t.send('store', callbackUpdate(ADMIN, 'disc_start_now'));
   }
 
   it('wizard creates the code; customer gets the discount; redemption is recorded on confirm only; reuse is refused', async () => {
