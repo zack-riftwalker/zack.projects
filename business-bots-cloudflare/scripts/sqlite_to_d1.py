@@ -31,11 +31,11 @@ EMBEDDING_VERSION = "3-768"
 
 # (table, target columns) in import order — must match migrations/*/*.sql (guarded by a test).
 STORE_TABLES = [
-    ("customers", ["id", "telegram_id", "display_name", "created_at", "ref_code", "username"]),
+    ("customers", ["id", "telegram_id", "display_name", "created_at", "ref_code", "username", "source"]),
     ("customer_products", ["id", "name", "price", "terms_text", "terms_entities", "duration_days", "warranty_days", "is_active", "created_at", "is_available",
-                           "group_id", "option_label", "sort_order", "pricing_mode", "markup_percent", "markup_fixed", "cost_toman", "stock_mode", "price_updated_at"]),
+                           "group_id", "option_label", "sort_order", "pricing_mode", "markup_percent", "markup_fixed", "cost_toman", "stock_mode", "price_updated_at", "compare_at_price"]),
     ("discount_codes", ["id", "code", "customer_product_id", "discount_type", "discount_value", "max_uses", "expires_at", "is_active", "created_at", "owner_telegram_id", "source",
-                        "product_group_id"]),
+                        "product_group_id", "starts_at"]),
     ("orders", ["id", "customer_telegram_id", "customer_product_id", "product_name", "price", "receipt_file_id", "receipt_type",
                 "purchase_source", "status", "created_at", "decided_at", "decided_by", "discount_code_id", "duration_days",
                 "warranty_days", "delivered_at", "expires_at", "warranty_expires_at", "reminded_7d", "reminded_3d",

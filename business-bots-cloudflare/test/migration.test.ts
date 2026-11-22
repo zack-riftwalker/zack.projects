@@ -25,6 +25,28 @@ describe('sqlite_to_d1.py target columns', () => {
   });
 });
 
+describe('store migration 0005 (campaign)', () => {
+  it('applies on top of 0001-0004 and the new columns default as documented', () => {
+    const f = new FakeD1().migrate('store');
+    const has = (t: string, c: string) => columns(f, t).includes(c);
+    expect(has('referrals', 'invitee_reward_eligible') && has('referrals', 'invitee_reward_order_id')).toBe(true);
+    expect(has('customers', 'source')).toBe(true);
+    expect(has('broadcast_jobs', 'send_after') && has('broadcast_jobs', 'cancelled')).toBe(true);
+    expect(has('discount_codes', 'starts_at')).toBe(true);
+    expect(has('customer_products', 'compare_at_price')).toBe(true);
+    expect(columns(f, 'checkout_drafts').sort()).toEqual(['created_at', 'customer_telegram_id', 'price', 'product_id', 'product_name', 'reminded']);
+
+    f.sqlite.prepare("INSERT INTO customers (telegram_id, display_name) VALUES (1, 'a')").run();
+    expect((f.sqlite.prepare('SELECT source FROM customers').get() as any).source).toBeNull();
+    f.sqlite.prepare("INSERT INTO broadcast_jobs (admin_chat_id, text, total) VALUES (1, 'x', 0)").run();
+    const b = f.sqlite.prepare('SELECT send_after, cancelled FROM broadcast_jobs').get() as any;
+    expect(b.send_after).toBeNull();
+    expect(b.cancelled).toBe(0);
+    f.sqlite.prepare("INSERT INTO checkout_drafts (customer_telegram_id, product_id, product_name, price, created_at) VALUES (1, 2, 'p', 10, '2026-01-01 00:00:00')").run();
+    expect((f.sqlite.prepare('SELECT reminded FROM checkout_drafts').get() as any).reminded).toBe(0);
+  });
+});
+
 describe.skipIf(!existsSync(join(LEGACY, 'store-bot', 'src', 'db', 'schema.sql')) || !existsSync(join(LEGACY, 'monshi-bot', 'db.py')))(
   'legacy data migration (needs legacy/)',
   () => {

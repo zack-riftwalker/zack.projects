@@ -7,6 +7,8 @@ export interface CustomerProduct {
   // round 3 (SUPPLIER_PLAN.md §2.1); present on rows that select them
   group_id?: number | null; option_label?: string | null; sort_order?: number; pricing_mode?: string; markup_percent?: number | null;
   markup_fixed?: number | null; cost_toman?: number | null; stock_mode?: string; price_updated_at?: string | null;
+  // round 4 (CAMPAIGN_PLAN.md §9)
+  compare_at_price?: number | null;
 }
 export interface Order {
   id: number; customer_telegram_id: number; customer_product_id: number; product_name: string; price: number;
@@ -26,12 +28,16 @@ export interface DiscountCode {
   id: number; code: string; customer_product_id: number; discount_type: 'percent' | 'fixed';
   discount_value: number; max_uses: number | null; expires_at: string; is_active: number; created_at: string;
   owner_telegram_id?: number | null; source?: string; product_group_id?: number | null;
+  /** round 4 (§6): local Tehran start time; NULL = active immediately */
+  starts_at?: string | null;
 }
 export interface ProductGroup { id: number; name: string; sort_order: number }
 export interface BroadcastJob {
   id: number; admin_chat_id: number; text: string; entities: any[] | null; status: string;
   cursor_customer_id: number; total: number; sent: number; failed: number;
   audience?: string; reply_markup?: string | null; created_at?: string;
+  /** round 4 (§5): local Tehran time; NULL = send now */
+  send_after?: string | null; cancelled?: number;
 }
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
 
