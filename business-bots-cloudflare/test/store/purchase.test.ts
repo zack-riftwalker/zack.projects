@@ -6,13 +6,14 @@ import { one, q, seedCard, seedProduct } from '../helpers/seed';
 const CUSTOMER = { id: 2002, first_name: 'Ali_[Test]', username: 'ali_user' };
 
 describe('store: /start', () => {
-  it('customer /start inserts a customers row and shows the storefront keyboard', async () => {
+  it('customer /start inserts a customers row and shows the inline main menu', async () => {
     const t = makeTestEnv({ monshi: false });
     await t.send('store', textUpdate(CUSTOMER, '/start'));
     expect(q(t.storeDb, 'SELECT * FROM customers')).toHaveLength(1);
-    const sent = t.tg.of('sendMessage', CUSTOMER.id)[0];
-    expect(sent.payload.text).toContain('سلام!');
-    expect(sent.payload.reply_markup.keyboard[0].map((b: any) => b.text)).toEqual(['🛍 لیست محصولات', '📋 اشتراک‌های من']);
+    const sent = t.tg.of('sendMessage', CUSTOMER.id).at(-1)!;
+    expect(sent.payload.text).toContain('سلام، خوش آمدید!');
+    expect(sent.payload.reply_markup.inline_keyboard.map((r: any[]) => r[0].callback_data ?? r[0].url))
+      .toEqual(['ui_menu_shop', 'ui_menu_subs', 'https://t.me/maiposhtibani']);
   });
 
   it('admin /start gets the admin keyboard and no customer row', async () => {

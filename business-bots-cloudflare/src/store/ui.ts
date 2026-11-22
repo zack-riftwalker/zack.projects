@@ -1,7 +1,10 @@
 import { GrammyError } from 'grammy';
 import type { MessageEntity } from 'grammy/types';
 import { BudgetExceededError } from '../lib/budget';
-import type { InlineKb } from '../lib/markup';
+import { Markup, type InlineButton, type InlineKb } from '../lib/markup';
+import type { StoreApp } from '../apps';
+import { getReferralConfig } from './referralConfig';
+import { ACTIVATION_CONTACT } from './labels';
 import type { StoreContext } from './types';
 
 export interface ScreenExtra {
@@ -36,4 +39,33 @@ export async function showScreen(ctx: StoreContext, text: string, extra: ScreenE
     }
     await sendNew(ctx, text, extra);
   }
+}
+
+// ─── Main menu ───────────────────────────────────────────────────────────────
+
+export const MENU_TEXT = '👋 *سلام، خوش آمدید!*\n\nاز دکمه‌های زیر انتخاب کنید:';
+export const HOME_BTN = () => Markup.button.callback('🏠 منوی اصلی', 'ui_menu_home');
+
+/** The customer main menu (text + inline keyboard). */
+export async function mainMenu(app: StoreApp): Promise<{ text: string; reply_markup: InlineKb['reply_markup'] }> {
+  const rows: InlineButton[][] = [
+    [Markup.button.callback('🛍 محصولات', 'ui_menu_shop', 'success')],
+    [Markup.button.callback('📋 اشتراک‌های من', 'ui_menu_subs', 'primary')],
+  ];
+  if ((await getReferralConfig(app)).enabled) rows.push([Markup.button.callback('🎁 دعوت دوستان', 'ui_menu_ref', 'primary')]);
+  rows.push([Markup.button.url('💬 پشتیبانی', 'https://t.me/' + ACTIVATION_CONTACT.replace(/^@/, ''))]);
+  return { text: MENU_TEXT, reply_markup: Markup.inlineKeyboard(rows).reply_markup };
+}
+
+/** Shows the main menu as the current screen; `prefix` is prepended to the menu text (e.g. «❌ خرید لغو شد.»). */
+export async function showMainMenu(ctx: StoreContext, prefix = ''): Promise<void> {
+  const menu = await mainMenu(ctx.app);
+  await showScreen(ctx, prefix + menu.text, { parse_mode: 'Markdown', reply_markup: menu.reply_markup });
+}
+
+/** One-time: removes the old reply keyboard (a message carries either an inline keyboard or a removal, hence its own message). */
+export async function ensureUiV2(ctx: StoreContext): Promise<void> {
+  if (ctx.session.uiV2 === true) return;
+  await ctx.reply('✨ منوی ربات به‌روز شد.', { reply_markup: { remove_keyboard: true } });
+  ctx.session.uiV2 = true;
 }

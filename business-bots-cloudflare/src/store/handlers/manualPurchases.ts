@@ -4,7 +4,8 @@ import { formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTim
 import { isAdminId } from '../config';
 import { MANUAL_PURCHASE_LABEL } from '../labels';
 import { adminPanelKeyboard } from './adminPanel';
-import { customerKeyboard, dropCheckoutDraft } from './storefront';
+import { dropCheckoutDraft } from './storefront';
+import { mainMenu } from '../ui';
 import { onPurchaseConfirmed } from '../referrals';
 import { tehranDateTime } from '../../lib/time';
 import { buildPagedKeyboard } from '../utils';
@@ -96,7 +97,7 @@ export async function handleManualPurchaseStart(ctx: StoreContext, payload: stri
   }
 
   if (!match) {
-    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', await customerKeyboard(ctx.app));
+    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', { reply_markup: (await mainMenu(ctx.app)).reply_markup });
     return true;
   }
 
@@ -111,17 +112,17 @@ export async function handleManualPurchaseStart(ctx: StoreContext, payload: stri
     });
   } catch (err: any) {
     console.error('❌ [ManualPurchase] Redemption failed for customer ' + ctx.from!.id + ':', err.message);
-    await ctx.reply('❌ فعال‌سازی با خطا مواجه شد. لطفاً با پشتیبانی تماس بگیرید.', await customerKeyboard(ctx.app));
+    await ctx.reply('❌ فعال‌سازی با خطا مواجه شد. لطفاً با پشتیبانی تماس بگیرید.', { reply_markup: (await mainMenu(ctx.app)).reply_markup });
     return true;
   }
 
   if (result.outcome === 'invalid') {
-    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', await customerKeyboard(ctx.app));
+    await ctx.reply('❌ لینک فعال‌سازی نامعتبر است. لطفاً لینک صحیح را از پشتیبانی دریافت کنید.', { reply_markup: (await mainMenu(ctx.app)).reply_markup });
     return true;
   }
   if (result.outcome === 'claimed_by_other') {
     console.warn('⚠️ [ManualPurchase] Already-used link opened by customer ' + ctx.from!.id + '.');
-    await ctx.reply('❌ این لینک دیگر قابل استفاده نیست. لطفاً با پشتیبانی تماس بگیرید.', await customerKeyboard(ctx.app));
+    await ctx.reply('❌ این لینک دیگر قابل استفاده نیست. لطفاً با پشتیبانی تماس بگیرید.', { reply_markup: (await mainMenu(ctx.app)).reply_markup });
     return true;
   }
 
@@ -136,7 +137,7 @@ export async function handleManualPurchaseStart(ctx: StoreContext, payload: stri
 
   await ctx.reply(
     activatedPurchaseText(result.order!, result.outcome === 'already_claimed'),
-    await customerKeyboard(ctx.app),
+    { reply_markup: (await mainMenu(ctx.app)).reply_markup },
   );
   if (result.outcome === 'claimed') await startLinkFulfillment(ctx, result.order!, result.claim);
   console.log(

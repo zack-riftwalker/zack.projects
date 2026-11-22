@@ -96,7 +96,7 @@ describe('manual purchase', () => {
     const t = makeTestEnv({ monshi: false });
     const payload = await makeLink(t, seedProduct(t));
     await t.send('store', textUpdate(CUSTOMER, '/start somethingelse'));
-    expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('سلام!');
+    expect(t.tg.texts(CUSTOMER.id).at(-1)).toContain('سلام، خوش آمدید!');
     await t.send('store', textUpdate(ADMIN, '/start ' + payload));
     expect(t.tg.texts(ADMIN.id).at(-1)).toContain('توسط ادمین قابل استفاده نیست');
     expect(one(t.storeDb, 'SELECT status FROM manual_purchase_claims').status).toBe('pending');

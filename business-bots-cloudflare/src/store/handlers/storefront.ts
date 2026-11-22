@@ -1,9 +1,10 @@
 import type { Bot } from 'grammy';
 import type { StoreApp } from '../../apps';
-import { getReferralConfig } from '../referralConfig';
 import { onPurchaseConfirmed } from '../referrals';
 import { getCustomerSummary } from '../customerSummary';
 import { Markup } from '../../lib/markup';
+import { ensureUiV2, showMainMenu, showScreen } from '../ui';
+import { showCustomerView } from './referralPanel';
 import { BudgetExceededError } from '../../lib/budget';
 import { tehranDateTime } from '../../lib/time';
 import { storeOrderPaid } from '../../bridge';
@@ -54,13 +55,6 @@ export async function dropCheckoutDraft(ctx: Pick<StoreContext, 'app'>, customer
     if (err instanceof BudgetExceededError) return;
     console.warn('⚠️ [Storefront] checkout draft delete failed:', err.message);
   }
-}
-
-/** The customer's reply keyboard; «🎁 دعوت دوستان» appears only while the referral program is on. */
-export async function customerKeyboard(app: StoreApp) {
-  const rows = [[STOREFRONT_LABEL, MY_SUBS_LABEL]];
-  if ((await getReferralConfig(app)).enabled) rows.push([REFERRAL_LABEL]);
-  return Markup.keyboard(rows).resize();
 }
 
 // ─── Catalog browsing (paged) ─────────────────────────────────────────────────
@@ -197,22 +191,16 @@ async function showTermsStep(ctx: StoreContext, product: CustomerProduct, finalP
   );
 }
 
-export function registerStorefrontHandler(bot: Bot<StoreContext>) {
-  const isAdmin = (ctx: StoreContext) => isAdminId(ctx.app.cfg, ctx.from?.id);
+async function showShop(ctx: StoreContext) {
+  const entries = await loadCatalogEntries(ctx.app);
+  if (entries.length === 0) {
+    await ctx.reply('😔 فعلاً محصولی در فروشگاه موجود نیست.');
+    return;
+  }
+  await showScreen(ctx, CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, 0) });
+}
 
-  // ── Entry point: "🛍 لیست محصولات" persistent button ────────────────────────
-  bot.hears(STOREFRONT_LABEL, async (ctx) => {
-    const entries = await loadCatalogEntries(ctx.app);
-    if (entries.length === 0) {
-      await ctx.reply('😔 فعلاً محصولی در فروشگاه موجود نیست.');
-      return;
-    }
-
-    await ctx.reply(CATALOG_TEXT, { parse_mode: 'Markdown', ...catalogKeyboard(entries, 0) });
-  });
-
-  // ── Entry point: "📋 اشتراک‌های من" persistent button ───────────────────────
-  bot.hears(MY_SUBS_LABEL, async (ctx) => {
+async function showMySubs(ctx: StoreContext) {
     const { inProgress, rejected, delivered: orders } = await ctx.app.db.getCustomerOrderOverview(ctx.from!.id);
     if (inProgress.length === 0 && rejected.length === 0 && orders.length === 0) {
       await ctx.reply('😔 شما هنوز سفارش تحویل‌شده‌ای ندارید.\n\nبعد از تحویل اولین سفارش، وضعیت اشتراک و گارانتی آن اینجا نمایش داده می‌شود.');
@@ -268,6 +256,37 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         ...Markup.inlineKeyboard(rows),
       }).catch((err) => console.warn('⚠️ [Storefront] Subscription card failed for order #' + order.id + ':', err.message));
     }
+}
+
+export function registerStorefrontHandler(bot: Bot<StoreContext>) {
+  const isAdmin = (ctx: StoreContext) => isAdminId(ctx.app.cfg, ctx.from?.id);
+
+  // ── Entry point: "🛍 لیست محصولات" persistent button ────────────────────────
+  bot.hears(STOREFRONT_LABEL, async (ctx) => {
+    await ensureUiV2(ctx);
+    await showShop(ctx);
+  });
+  bot.callbackQuery('ui_menu_shop', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showShop(ctx);
+  });
+  bot.callbackQuery('ui_menu_home', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showMainMenu(ctx);
+  });
+  bot.callbackQuery('ui_menu_ref', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showCustomerView(ctx);
+  });
+  bot.callbackQuery('ui_menu_subs', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showMySubs(ctx);
+  });
+
+  // ── Entry point: "📋 اشتراک‌های من" persistent button ───────────────────────
+  bot.hears(MY_SUBS_LABEL, async (ctx) => {
+    await ensureUiV2(ctx);
+    await showMySubs(ctx);
   });
 
   // ── Warranty claim ("🛠 مشکل دارم") — only while the warranty is active ─────

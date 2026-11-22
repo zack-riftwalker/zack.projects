@@ -41,11 +41,11 @@ describe('referral: customer side and attribution', () => {
     const t = makeTestEnv({ monshi: false });
     seedProduct(t);
     await t.send('store', textUpdate(REF, '/start'));
-    expect(t.tg.of('sendMessage', REF.id).at(-1)!.payload.reply_markup.keyboard).toHaveLength(1);
+    expect(t.tg.of('sendMessage', REF.id).at(-1)!.payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).not.toContain('ui_menu_ref');
     enable(t);
     await t.send('store', textUpdate(REF, '/panel'));
-    const kb = t.tg.of('sendMessage', REF.id).at(-1)!.payload.reply_markup.keyboard;
-    expect(kb.at(-1)).toEqual([{ text: '🎁 دعوت دوستان' }]);
+    const kb = t.tg.of('sendMessage', REF.id).at(-1)!.payload.reply_markup.inline_keyboard;
+    expect(kb[2]).toEqual([{ text: '🎁 دعوت دوستان', callback_data: 'ui_menu_ref', style: 'primary' }]);
   });
 
   it('disabled program: the button explains, no link', async () => {
@@ -78,7 +78,7 @@ describe('referral: customer side and attribution', () => {
     expect(referrals(t)).toEqual([{ r: REF.id, i: F1.id, ok: 0, reward_id: null }]);
     expect(t.tg.texts(REF.id).at(-1)).toContain('یک نفر با لینک دعوت شما وارد فروشگاه شد');
     expect(t.tg.texts(REF.id).at(-1)).toContain('(دعوت موفق فعلی: ۰ از ۲)');
-    expect(t.tg.texts(F1.id).at(-1)).toContain('سلام!'); // the normal welcome still comes
+    expect(t.tg.texts(F1.id).at(-1)).toContain('سلام، خوش آمدید!'); // the normal welcome still comes
   });
 
   it('existing customers, self-invites, bad codes and a disabled program record nothing', async () => {

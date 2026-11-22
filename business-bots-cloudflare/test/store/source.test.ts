@@ -23,7 +23,7 @@ describe('source links: capture', () => {
     const t = makeTestEnv({ monshi: false });
     await t.send('store', textUpdate(U(2001), '/start src_partnera'));
     expect(sourceOf(t, 2001)).toBe('partnera');
-    expect(t.tg.texts(2001).at(-1)).toContain('سلام!');
+    expect(t.tg.texts(2001).at(-1)).toContain('سلام، خوش آمدید!');
   });
 
   it('an existing customer opening a source link never changes anything (first touch only)', async () => {
@@ -40,7 +40,7 @@ describe('source links: capture', () => {
     const t = makeTestEnv({ monshi: false });
     await t.send('store', textUpdate(U(2004), '/start src_Bad-Name!'));
     expect(sourceOf(t, 2004)).toBeNull();
-    expect(t.tg.texts(2004).at(-1)).toContain('سلام!');
+    expect(t.tg.texts(2004).at(-1)).toContain('سلام، خوش آمدید!');
   });
 
   it('ref_ links still work', async () => {

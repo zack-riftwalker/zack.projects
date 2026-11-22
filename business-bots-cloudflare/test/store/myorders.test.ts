@@ -11,7 +11,8 @@ function order(t: TestEnv, pid: number, status: string, extra = '', customer = C
      VALUES (?, ?, 'GPT Plus', 100, 'f', 'photo', ?, ?, datetime('now', '+03:30')${extra ? ', ' + extra.split('=')[1] : ''})`,
     customer, pid, status, reason);
 }
-const sent = (t: TestEnv) => t.tg.of('sendMessage', CUSTOMER.id);
+// the one-time «menu updated» keyboard-removal message (ui round) is not part of these assertions
+const sent = (t: TestEnv) => t.tg.of('sendMessage', CUSTOMER.id).filter((c) => c.payload.text !== '✨ منوی ربات به‌روز شد.');
 
 describe('my subscriptions: orders in progress', () => {
   it('empty: the old text, unchanged', async () => {

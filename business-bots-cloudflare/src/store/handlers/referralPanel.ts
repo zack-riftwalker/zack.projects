@@ -20,7 +20,7 @@ async function inviteeGiftLine(app: StoreApp, cfg: ReferralConfig): Promise<stri
   return p && p.is_active ? '\n🤝 دوستتان هم با اولین خریدش یک «' + p.name + '» رایگان هدیه می‌گیرد.' : '';
 }
 
-async function showCustomerView(ctx: StoreContext): Promise<void> {
+export async function showCustomerView(ctx: StoreContext): Promise<void> {
   const app = ctx.app;
   const cfg = await getReferralConfig(app);
   if (!cfg.enabled) {

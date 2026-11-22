@@ -81,3 +81,58 @@ describe('showScreen', () => {
     expect(h.session.screenMsgId).not.toBe(55);
   });
 });
+
+describe('main menu (U1)', () => {
+  const menuOf = (t: ReturnType<typeof makeTestEnv>) => t.tg.of('sendMessage', C.id).at(-1)!.payload;
+
+  it('new customer /start: keyboard-removal message first, then the colored menu', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await t.send('store', textUpdate(C, '/start'));
+    const sent = t.tg.of('sendMessage', C.id);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].payload.text).toBe('✨ منوی ربات به‌روز شد.');
+    expect(sent[0].payload.reply_markup).toEqual({ remove_keyboard: true });
+    expect(sent[1].payload.parse_mode).toBe('Markdown');
+    expect(sent[1].payload.text).toBe('👋 *سلام، خوش آمدید!*\n\nاز دکمه‌های زیر انتخاب کنید:');
+    expect(sent[1].payload.reply_markup.inline_keyboard).toEqual([
+      [{ text: '🛍 محصولات', callback_data: 'ui_menu_shop', style: 'success' }],
+      [{ text: '📋 اشتراک‌های من', callback_data: 'ui_menu_subs', style: 'primary' }],
+      [{ text: '💬 پشتیبانی', url: 'https://t.me/maiposhtibani' }],
+    ]);
+  });
+
+  it('second /start: only the menu', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await t.send('store', textUpdate(C, '/start'));
+    t.tg.reset();
+    await t.send('store', textUpdate(C, '/start'));
+    expect(t.tg.of('sendMessage', C.id)).toHaveLength(1);
+    expect(menuOf(t).text).toContain('سلام، خوش آمدید!');
+  });
+
+  it('old reply-keyboard label still opens the shop (and removes the keyboard once)', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await t.send('store', textUpdate(C, '🛍 لیست محصولات'));
+    const texts = t.tg.texts(C.id);
+    expect(texts[0]).toBe('✨ منوی ربات به‌روز شد.');
+    expect(texts[1]).toContain('فعلاً محصولی');
+  });
+
+  it('ui_menu_home re-shows the menu; pressing it on the screen edits in place', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await t.send('store', textUpdate(C, '/start'));
+    const screenId = t.tg.lastSentId(C.id);
+    await t.send('store', callbackUpdate(C, 'ui_menu_home', { message_id: screenId }));
+    const edit = t.tg.of('editMessageText').at(-1)!;
+    expect(edit.payload.message_id).toBe(screenId);
+    expect(edit.payload.text).toContain('سلام، خوش آمدید!');
+  });
+
+  it('admin /start is unchanged', async () => {
+    const t = makeTestEnv({ monshi: false });
+    await t.send('store', textUpdate({ id: 1001, first_name: 'Admin' }, '/start'));
+    const p = t.tg.of('sendMessage', 1001).at(-1)!.payload;
+    expect(p.text).toContain('سلام مدیر!');
+    expect(p.reply_markup.keyboard).toBeTruthy();
+  });
+});

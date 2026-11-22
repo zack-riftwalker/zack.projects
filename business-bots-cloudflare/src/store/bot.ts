@@ -8,7 +8,8 @@ import { registerAdminPanelHandler, adminPanelKeyboard, ADMIN_PANEL_LABELS } fro
 import { announceWizard } from './handlers/announceWizard';
 import { customerProductsWizard, customerProductsDeactivateWizard } from './handlers/customerProducts';
 import { customerProductsEditWizard } from './handlers/customerProductsEdit';
-import { registerStorefrontHandler, customerKeyboard } from './handlers/storefront';
+import { registerStorefrontHandler } from './handlers/storefront';
+import { ensureUiV2, showMainMenu } from './ui';
 import { registerSalesReportHandler } from './handlers/salesReport';
 import {
   discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, discountCodeStartWizard, registerDiscountCodeHandler,
@@ -138,12 +139,8 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
 
       if (await handleManualPurchaseStart(ctx, payload)) return;
 
-      await ctx.reply(
-        '👋 *سلام!*\n\n' +
-        'به ربات فروشگاه خوش آمدید. 🎓\n\n' +
-        'برای مشاهده محصولات و خرید، دکمه زیر را بزنید:',
-        { parse_mode: 'Markdown', ...(await customerKeyboard(ctx.app)) },
-      );
+      await ensureUiV2(ctx);
+      await showMainMenu(ctx);
     } catch (err: any) {
       console.error('❌ [Bot] /start handler error:', err.message);
     }
@@ -159,7 +156,8 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
       await ctx.reply('🎛 پنل مدیریت:', adminPanelKeyboard());
       return;
     }
-    await ctx.reply('🛍 فروشگاه:', await customerKeyboard(ctx.app));
+    await ensureUiV2(ctx);
+    await showMainMenu(ctx);
   });
 
   registerAdminPanelHandler(bot, isAdmin);
