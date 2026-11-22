@@ -14,6 +14,8 @@ import {
   discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard, registerDiscountCodeHandler,
 } from './handlers/discountCodes';
 import { storeSettingsWizard } from './handlers/storeSettings';
+import { sourceLinkWizard } from './handlers/sourceLink';
+import { parseSourcePayload } from './source';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
@@ -78,7 +80,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
     announceWizard, customerProductsWizard, customerProductsDeactivateWizard, customerProductsEditWizard,
     discountCodeAddWizard, discountCodeEditWizard, discountCodeRenewWizard,
     storeSettingsWizard,
-    manualPurchaseWizard,
+    manualPurchaseWizard, sourceLinkWizard,
   ], {
     // receipt decisions / manual delivery must work even while the admin is half-way through a wizard
     bypass: (ctx) => STAGE_BYPASS_RE.test(ctx.callbackQuery?.data ?? ''),
@@ -120,6 +122,16 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
           await handleRefStart(ctx.app, ctx.from!.id, refMatch[1], upserted.changes === 1);
         } catch (err: any) {
           console.error('❌ [Bot] referral attribution failed:', err.message);
+        }
+      }
+
+      // /start src_<name>: first touch only — a brand-new customer gets the source, an existing one never changes; never blocks the welcome
+      const source = parseSourcePayload(payload);
+      if (source && upserted.changes === 1) {
+        try {
+          await ctx.app.db.setCustomerSource(ctx.from!.id, source);
+        } catch (err: any) {
+          console.error('❌ [Bot] source attribution failed:', err.message);
         }
       }
 

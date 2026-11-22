@@ -44,12 +44,22 @@ export const PROFIT_SQL = {
   spend: "SELECT COALESCE(SUM(-amount_usd), 0) AS usd FROM wallet_ledger WHERE kind = 'spend' AND created_at >= ? AND created_at < ?",
 };
 
+/** Round 4 (CAMPAIGN_PLAN.md §3, §8): per-source and per-code sections; exported so the index test EXPLAINs the real SQL. */
+export const CAMPAIGN_SQL = {
+  /** new customers of the period by first-touch source, with their paid orders decided in the same period (args: range ×3) */
+  sources: `SELECT COALESCE(c.source, '') AS src, COUNT(*) AS n,
+      SUM(CASE WHEN EXISTS (SELECT 1 FROM orders o WHERE o.customer_telegram_id = c.telegram_id AND o.status IN ('confirmed', 'delivered') AND o.price > 0 AND o.decided_at >= ? AND o.decided_at < ?) THEN 1 ELSE 0 END) AS buyers,
+      COALESCE(SUM((SELECT SUM(o.price) FROM orders o WHERE o.customer_telegram_id = c.telegram_id AND o.status IN ('confirmed', 'delivered') AND o.price > 0 AND o.decided_at >= ? AND o.decided_at < ?)), 0) AS revenue
+    FROM customers c WHERE c.created_at >= ? AND c.created_at < ?
+    GROUP BY COALESCE(c.source, '') ORDER BY n DESC LIMIT 11`,
+};
+
 /** One batch of index-backed statements → the report text. */
 export async function buildSalesReport(app: StoreApp, period: ReportPeriod): Promise<string> {
   const { from, to, fromDay, toDay } = reportRange(period, app.apps.now());
   const q = (sql: string, ...args: unknown[]) => app.raw.prepare(sql).bind(...args);
   const range = [from, to];
-  const [bySource, rejected, withCode, top, newCustomers, current, costed, missing, cancelled, refundPending, outside, reported, bought, available, spend] = await app.raw.batch([
+  const [bySource, rejected, withCode, top, newCustomers, current, costed, missing, cancelled, refundPending, outside, reported, bought, available, spend, sources] = await app.raw.batch([
     q("SELECT purchase_source, COUNT(*) AS n, COALESCE(SUM(price), 0) AS s FROM orders WHERE status IN ('confirmed', 'delivered') AND decided_at >= ? AND decided_at < ? GROUP BY purchase_source", ...range),
     q("SELECT COUNT(*) AS n FROM orders WHERE status = 'rejected' AND decided_at >= ? AND decided_at < ?", ...range),
     q("SELECT COUNT(*) AS n FROM orders WHERE status IN ('confirmed', 'delivered') AND discount_code_id IS NOT NULL AND decided_at >= ? AND decided_at < ?", ...range),
@@ -65,6 +75,7 @@ export async function buildSalesReport(app: StoreApp, period: ReportPeriod): Pro
     q(PROFIT_SQL.bought, ...range),
     q(PROFIT_SQL.available),
     q(PROFIT_SQL.spend, ...range),
+    q(CAMPAIGN_SQL.sources, ...range, ...range, ...range),
   ]);
 
   const src = new Map<string, { n: number; s: number }>(bySource.results.map((r: any) => [r.purchase_source, { n: r.n, s: r.s }]));
@@ -112,6 +123,16 @@ export async function buildSalesReport(app: StoreApp, period: ReportPeriod): Pro
   }
   const usdSpent = (spend.results[0] as any).usd as number;
   if (usdSpent > 0) lines.push('💳 خرج کیف پول: $' + (Math.round(usdSpent * 100) / 100).toFixed(2));
+  // round 4 (§3): where the period's new customers came from (omitted when there are none)
+  const srcRows = sources.results as { src: string; n: number; buyers: number; revenue: number }[];
+  if (srcRows.length) {
+    const named = srcRows.filter((r) => r.src !== '').slice(0, 10);
+    const none = srcRows.find((r) => r.src === '');
+    lines.push('', '🔗 منبع مشتری‌های جدید');
+    for (const r of none ? [...named, none] : named) {
+      lines.push('• ' + (r.src === '' ? '(بدون منبع)' : r.src) + ': ' + fa(r.n) + ' مشتری جدید، ' + fa(r.buyers) + ' خریدار، ' + formatPrice(r.revenue) + ' ت');
+    }
+  }
   lines.push('', '🏆 پرفروش‌ها:');
   if (top.results.length === 0) lines.push('—');
   top.results.forEach((r: any, i: number) => lines.push(fa(i + 1) + '. ' + r.name + ' — ' + fa(r.n) + ' سفارش (' + formatPrice(r.s) + ' تومان)'));

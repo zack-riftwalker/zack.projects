@@ -643,6 +643,11 @@ export class StoreDb {
     return r.meta.changes === 1;
   }
 
+  /** round 4 (§3): first touch only */
+  async setCustomerSource(telegramId: number, source: string): Promise<void> {
+    await this.q('UPDATE customers SET source = ? WHERE telegram_id = ? AND source IS NULL', source, telegramId).run();
+  }
+
   // ─── Referrals ───────────────────────────────────────────────────────────
   async getRefCode(telegramId: number): Promise<string | null> {
     return (await this.q('SELECT ref_code FROM customers WHERE telegram_id = ?', telegramId).first<{ ref_code: string | null }>())?.ref_code ?? null;

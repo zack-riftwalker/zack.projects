@@ -8,7 +8,7 @@ import { APPLY_DEFAULTS_SQL, NEEDS_ACTION_COUNT_SQL, NEEDS_ACTION_LIST_SQL } fro
 import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
 import { BALANCE_SQL, HISTORY_SQL } from '../src/store/suppliers/wallet';
 import { BATCH_ACCOUNTS_SQL, BATCH_LIST_SQL } from '../src/store/suppliers/stockCards';
-import { PROFIT_SQL } from '../src/store/handlers/salesReport';
+import { CAMPAIGN_SQL, PROFIT_SQL } from '../src/store/handlers/salesReport';
 import { CUSTOMER_BY_ID_SQL, CUSTOMER_BY_NAME_SQL, MATCHING_PRODUCTS_SQL, RELEASE_LINK_SQL } from '../src/store/handlers/stockAdmin';
 import {
   DEADLINE_SQL, LIVE_SUPPLIER_ORDER_SQL, PENDING_MANUAL_SQL, PLACED_DUE_SQL, QUEUED_DUE_SQL, SOURCE_SELECT, STALE_LEASE_SQL, STRANDED_SQL, UNDELIVERED_SQL,
@@ -65,6 +65,7 @@ describe('store hot queries use indexes', () => {
     ['my orders in progress', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status IN ('pending', 'confirmed') ORDER BY id DESC LIMIT 10", [1]],
     ['my recent rejections', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'rejected' AND decided_at >= datetime('now', '+03:30', '-7 days') ORDER BY id DESC LIMIT 5", [1]],
     ['receipt duplicate lookup', 'SELECT id, status, customer_telegram_id FROM orders WHERE receipt_unique_id = ? ORDER BY id DESC LIMIT 1', ['x']],
+    ['report sources', CAMPAIGN_SQL.sources, ['a', 'b', 'a', 'b', 'a', 'b']],
     ['waitlist count', 'SELECT COUNT(*) AS n FROM product_waitlist WHERE product_id = ?', [1]],
     ['waitlist clear', 'DELETE FROM product_waitlist WHERE product_id = ? AND created_at <= ?', [1, 'x']],
   ];

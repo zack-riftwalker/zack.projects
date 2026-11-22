@@ -1,6 +1,7 @@
 import type { Bot } from 'grammy';
 import { Markup } from '../../lib/markup';
 import { MANUAL_PURCHASE_LABEL, REFERRAL_LABEL, REPORT_LABEL, SUPPLIER_LABEL } from '../labels';
+import { SOURCE_LINK_LABEL } from './sourceLink';
 import type { StoreContext } from '../types';
 
 const LABEL = {
@@ -14,6 +15,7 @@ const LABEL = {
   referral: REFERRAL_LABEL,
   manualPurchase: MANUAL_PURCHASE_LABEL,
   supplier: SUPPLIER_LABEL,
+  sourceLink: SOURCE_LINK_LABEL,
 };
 
 /** Pressing any of these leaves a half-finished wizard instead of becoming its input. */
@@ -25,7 +27,7 @@ export function adminPanelKeyboard() {
     [LABEL.addProduct, LABEL.editProduct],
     [LABEL.deactProduct, LABEL.discountCode],
     [LABEL.cardSettings, LABEL.referral],
-    [LABEL.manualPurchase],
+    [LABEL.manualPurchase, LABEL.sourceLink],
     [LABEL.supplier],
   ]).resize();
 }
@@ -77,6 +79,11 @@ export function registerAdminPanelHandler(bot: Bot<StoreContext>, isAdmin: (id: 
   bot.hears(LABEL.cardSettings, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.scene.enter('store-settings-wizard');
+  });
+
+  bot.hears(LABEL.sourceLink, async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    await ctx.scene.enter('source-link-wizard');
   });
 
   bot.hears(LABEL.manualPurchase, async (ctx) => {
