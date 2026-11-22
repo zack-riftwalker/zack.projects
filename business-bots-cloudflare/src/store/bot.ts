@@ -19,6 +19,7 @@ import { parseSourcePayload } from './source';
 import { manualPurchaseWizard, handleManualPurchaseStart } from './handlers/manualPurchases';
 import { registerBridgeHandler } from './bridgeHandlers';
 import { registerReferralHandler } from './handlers/referralPanel';
+import { registerAnnounceScheduleHandler } from './handlers/announceSchedule';
 import { registerSupplierPanel, supplierTextMiddleware } from './handlers/supplierPanel';
 import { registerFulfillmentAdmin } from './handlers/fulfillmentAdmin';
 import { registerStockAdmin } from './handlers/stockAdmin';
@@ -164,6 +165,7 @@ export function createStoreBot(app: StoreApp, botInfo: UserFromGetMe): Bot<Store
   registerAdminPanelHandler(bot, isAdmin);
   registerSalesReportHandler(bot, isAdmin);
   registerReferralHandler(bot, isAdmin);
+  registerAnnounceScheduleHandler(bot, isAdmin);
   registerSupplierPanel(bot, isAdmin);
   registerFulfillmentAdmin(bot, isAdmin);
   registerStockAdmin(bot, isAdmin);

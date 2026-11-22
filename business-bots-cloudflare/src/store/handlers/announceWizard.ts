@@ -2,6 +2,8 @@ import { WizardScene } from '../../lib/wizard';
 import { Markup } from '../../lib/markup';
 import { processBroadcastBatch } from '../broadcast';
 import { AUDIENCE_LABEL } from '../audience';
+import { formatJalaliDateTime, parseJalaliDateTime, tehranDateTime } from '../../lib/time';
+import { buildScheduledList } from './announceSchedule';
 import { CART_REMINDER_KEY } from '../scheduler';
 import { escapeMarkdown, productPickerKeyboard } from '../utils';
 import type { StoreContext } from '../types';
@@ -23,6 +25,7 @@ const audienceKb = (cartOn: boolean) => Markup.inlineKeyboard([
   [Markup.button.callback('⌛️ اشتراک تمام‌شده', 'ann_aud_expired')],
   [Markup.button.callback('🛍 خریداران یک محصول', 'ann_aud_buyers')],
   [Markup.button.callback('🆕 هنوز خرید نکرده‌اند', 'ann_aud_never')],
+  [Markup.button.callback('🗓 اطلاعیه‌های زمان‌بندی‌شده', 'ann_sched_list')],
   [Markup.button.callback(cartLabel(cartOn), 'ann_cart_toggle')],
   [Markup.button.callback('❌ انصراف', 'announce_cancel')],
 ]);
@@ -56,6 +59,13 @@ export const announceWizard = new WizardScene<StoreContext>(
     if (data === 'announce_cancel') {
       await ctx.answerCallbackQuery();
       await ctx.editMessageText('❌ ارسال اطلاعیه لغو شد.').catch(() => {});
+      return ctx.scene.leave();
+    }
+
+    if (data === 'ann_sched_list') {
+      await ctx.answerCallbackQuery();
+      const { text, kb } = await buildScheduledList(ctx.app);
+      await ctx.reply(text, kb);
       return ctx.scene.leave();
     }
 
@@ -169,6 +179,7 @@ export const announceWizard = new WizardScene<StoreContext>(
             Markup.button.callback('✅ بله، ارسال کن', 'announce_confirm'),
             Markup.button.callback('❌ خیر، انصراف', 'announce_abort'),
           ],
+          [Markup.button.callback('⏰ زمان‌بندی ارسال', 'announce_schedule')],
         ]),
       },
     );
@@ -191,6 +202,13 @@ export const announceWizard = new WizardScene<StoreContext>(
       return ctx.scene.leave();
     }
 
+    if (data === 'announce_schedule') {
+      await ctx.answerCallbackQuery();
+      await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([])).catch(() => {});
+      await ctx.reply('⏰ زمان ارسال را بنویسید (به وقت تهران)، مثلاً:\n۱۴۰۵/۰۹/۰۴ ۱۹:۴۵', CANCEL_KB);
+      return ctx.wizard.next();
+    }
+
     if (data !== 'announce_confirm') {
       await ctx.answerCallbackQuery('⚠️ انتخاب نامعتبر.');
       return;
@@ -203,6 +221,37 @@ export const announceWizard = new WizardScene<StoreContext>(
     await ctx.scene.leave();
     await ctx.app.db.enqueueBroadcast({ adminChatId: ctx.chat!.id, text, entities, audience });
     await processBroadcastBatch(ctx.app, { reserve: 8 });
+  },
+
+  // STEP 4 (round 4, §5): the send time of a scheduled announcement
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === 'announce_cancel') {
+      await ctx.answerCallbackQuery();
+      await ctx.editMessageText('❌ ارسال اطلاعیه لغو شد.').catch(() => {});
+      return ctx.scene.leave();
+    }
+    if (!ctx.message?.text) {
+      await ctx.reply('⚠️ لطفاً زمان را به صورت متن تایپ کنید.');
+      return;
+    }
+    const sendAfter = parseJalaliDateTime(ctx.message.text);
+    if (!sendAfter) {
+      await ctx.reply('⚠️ زمان نامعتبر است. مثال: ۱۴۰۵/۰۹/۰۴ ۱۹:۴۵');
+      return;
+    }
+    const now = ctx.app.apps.now();
+    if (sendAfter <= tehranDateTime(now)) {
+      await ctx.reply('⚠️ این زمان گذشته است.');
+      return;
+    }
+    if (sendAfter > tehranDateTime(new Date(now.getTime() + 14 * 86_400_000))) {
+      await ctx.reply('⚠️ حداکثر ۱۴ روز جلوتر.');
+      return;
+    }
+    const { text, entities, audience, label } = ctx.wizard.state.announce;
+    await ctx.scene.leave();
+    await ctx.app.db.enqueueBroadcast({ adminChatId: ctx.chat!.id, text, entities, audience, sendAfter });
+    await ctx.reply('✅ اطلاعیه برای ' + formatJalaliDateTime(sendAfter) + ' زمان‌بندی شد (' + label + ').');
   },
 );
 

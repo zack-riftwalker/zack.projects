@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeD1 } from './helpers/fakeD1';
-import { DUE_DRAFTS_SQL, PURGE_DRAFTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
+import { DUE_DRAFTS_SQL, PURGE_DRAFTS_SQL, RUNNING_BROADCAST_SQL, SCHEDULED_BROADCASTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
@@ -41,7 +41,8 @@ describe('store hot queries use indexes', () => {
     ['redemption count', 'SELECT COUNT(*) AS n FROM discount_code_redemptions WHERE discount_code_id = ?', [1]],
     ['active products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id ASC', []],
     ['customer batch', 'SELECT id, telegram_id FROM customers WHERE id > ? ORDER BY id LIMIT ?', [0, 40]],
-    ['running broadcast', "SELECT * FROM broadcast_jobs WHERE status = 'running' ORDER BY id LIMIT 1", []],
+    ['running broadcast', RUNNING_BROADCAST_SQL, ['2026-01-01 00:00:00']],
+    ['scheduled broadcasts', SCHEDULED_BROADCASTS_SQL, ['2026-01-01 00:00:00', 10]],
     ['session read', 'SELECT value FROM sessions WHERE key = ?', ['k']],
     ['customer lookup', 'SELECT * FROM customers WHERE telegram_id = ?', [1]],
     ['report revenue', "SELECT purchase_source, COUNT(*) AS n, COALESCE(SUM(price), 0) AS s FROM orders WHERE status IN ('confirmed', 'delivered') AND decided_at >= ? AND decided_at < ? GROUP BY purchase_source", ['a', 'b']],

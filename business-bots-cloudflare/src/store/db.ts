@@ -43,6 +43,8 @@ export interface CheckoutDraft { customer_telegram_id: number; product_id: numbe
 export const DUE_DRAFTS_SQL = 'SELECT * FROM checkout_drafts WHERE reminded = 0 AND created_at <= ? AND created_at >= ? ORDER BY created_at LIMIT ?';
 /** `reminded IN (0, 1)` lets the (reminded, created_at) index serve the range */
 export const PURGE_DRAFTS_SQL = 'DELETE FROM checkout_drafts WHERE reminded IN (0, 1) AND created_at < ?';
+export const RUNNING_BROADCAST_SQL = "SELECT * FROM broadcast_jobs WHERE status = 'running' AND cancelled = 0 AND (send_after IS NULL OR send_after <= ?) ORDER BY id LIMIT 1";
+export const SCHEDULED_BROADCASTS_SQL = "SELECT id, text, audience, send_after FROM broadcast_jobs WHERE status = 'running' AND cancelled = 0 AND send_after > ? ORDER BY send_after LIMIT ?";
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
 
 const REMINDER_QUERIES: Record<string, string> = {
@@ -876,19 +878,42 @@ export class StoreDb {
 
   async enqueueBroadcast(p: {
     adminChatId: number; text: string; entities: any[] | null; audience?: string; replyMarkup?: any | null;
+    /** round 4 (§5): local Tehran time; the job waits until then. null/undefined = send now */
+    sendAfter?: string | null;
   }): Promise<number> {
     const audience = p.audience ?? 'all';
     const total = await this.countAudience(audience);
     const r = await this.q(
-      'INSERT INTO broadcast_jobs (admin_chat_id, text, entities, total, audience, reply_markup) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO broadcast_jobs (admin_chat_id, text, entities, total, audience, reply_markup, send_after) VALUES (?, ?, ?, ?, ?, ?, ?)',
       p.adminChatId, p.text, p.entities?.length ? JSON.stringify(p.entities) : null, total, audience,
-      p.replyMarkup ? JSON.stringify(p.replyMarkup) : null,
+      p.replyMarkup ? JSON.stringify(p.replyMarkup) : null, p.sendAfter ?? null,
     ).run();
     return r.meta.last_row_id;
   }
 
-  async getRunningBroadcast(): Promise<BroadcastJob | undefined> {
-    const row: any = await this.q("SELECT * FROM broadcast_jobs WHERE status = 'running' ORDER BY id LIMIT 1").first();
+  /** A scheduled job's audience may have changed since it was queued: count it again when it starts. */
+  async recomputeBroadcastTotal(id: number, audience: string): Promise<number> {
+    const total = await this.countAudience(audience);
+    await this.q('UPDATE broadcast_jobs SET total = ? WHERE id = ?', total, id).run();
+    return total;
+  }
+
+  async getScheduledBroadcasts(nowLocal: string, limit: number): Promise<Pick<BroadcastJob, 'id' | 'text' | 'audience' | 'send_after'>[]> {
+    return (await this.q(SCHEDULED_BROADCASTS_SQL, nowLocal, limit).all<Pick<BroadcastJob, 'id' | 'text' | 'audience' | 'send_after'>>()).results;
+  }
+
+  /** true = cancelled; false = already started (or not a scheduled job) */
+  async cancelScheduledBroadcast(id: number): Promise<boolean> {
+    const r = await this.q(
+      "UPDATE broadcast_jobs SET cancelled = 1, status = 'done', finished_at = datetime('now', '+03:30') WHERE id = ? AND status = 'running' AND cursor_customer_id = 0 AND send_after IS NOT NULL",
+      id,
+    ).run();
+    return r.meta.changes === 1;
+  }
+
+  /** The oldest job that is due: immediate, or scheduled for a time that has come. Future jobs never block it. */
+  async getRunningBroadcast(nowLocal: string): Promise<BroadcastJob | undefined> {
+    const row: any = await this.q(RUNNING_BROADCAST_SQL, nowLocal).first();
     if (!row) return undefined;
     let entities = null;
     if (row.entities) {

@@ -2,6 +2,7 @@ import { GrammyError } from 'grammy';
 import type { StoreApp } from '../apps';
 import { BudgetExceededError } from '../lib/budget';
 import type { BroadcastJob } from './db';
+import { tehranDateTime } from '../lib/time';
 
 export { audienceFilter } from './audience';
 
@@ -18,15 +19,17 @@ export async function processBroadcastBatch(app: StoreApp, opts: { reserve: numb
   const budget = app.apps.budget;
   let job;
   try {
-    job = await app.db.getRunningBroadcast();
+    job = await app.db.getRunningBroadcast(tehranDateTime(app.apps.now()));
   } catch (err: any) {
     if (err instanceof BudgetExceededError) return;
     throw err;
   }
   if (!job) return;
 
-  // lease (1) + job re-read (1) + customer batch (1) + progress (1) + release (1) + summary (1) still needed
-  if (budget.remaining() - opts.reserve - 6 <= 0) return;
+  // lease (1) + job re-read (1) + customer batch (1) + progress (1) + release (1) + summary (1) still needed;
+  // a scheduled job's first batch also recounts its audience (2)
+  const firstScheduledBatch = !!job.send_after && job.cursor_customer_id === 0;
+  if (budget.remaining() - opts.reserve - 6 - (firstScheduledBatch ? 2 : 0) <= 0) return;
   const nowMs = app.apps.now().getTime();
   const token = nowMs + LEASE_MS;
   if (!(await app.db.acquireBroadcastLease(nowMs, token))) return; // another invocation is sending
@@ -35,8 +38,12 @@ export async function processBroadcastBatch(app: StoreApp, opts: { reserve: numb
   let failed: number;
   try {
     // re-read under the lease: the cursor may have moved while another invocation held it
-    job = await app.db.getRunningBroadcast();
+    job = await app.db.getRunningBroadcast(tehranDateTime(app.apps.now()));
     if (!job) return;
+    if (job.send_after && job.cursor_customer_id === 0) {
+      // the audience may have changed since it was scheduled
+      job.total = await app.db.recomputeBroadcastTotal(job.id, job.audience ?? 'all');
+    }
     const r = await sendBatch(app, job, opts);
     if (!r) return;
     ({ finished, sent, failed } = r);
