@@ -4,6 +4,8 @@ import { getReferralConfig } from '../referralConfig';
 import { onPurchaseConfirmed } from '../referrals';
 import { getCustomerSummary } from '../customerSummary';
 import { Markup } from '../../lib/markup';
+import { BudgetExceededError } from '../../lib/budget';
+import { tehranDateTime } from '../../lib/time';
 import { storeOrderPaid } from '../../bridge';
 import { isAdminId } from '../config';
 import {
@@ -32,14 +34,26 @@ const MS_PER_DAY = 86400000;
 export const RECEIPT_DRAFT_TTL_MS = MS_PER_DAY;
 
 /** The pending receipt draft, or null — an expired (or pre-TTL, undated) draft is cleared. */
-function receiptDraft(ctx: StoreContext) {
+async function receiptDraft(ctx: StoreContext) {
   const d = ctx.session?.awaitingReceiptFor;
   if (!d) return null;
   if (!d.createdAt || ctx.app.apps.now().getTime() - d.createdAt > RECEIPT_DRAFT_TTL_MS) {
     ctx.session.awaitingReceiptFor = null;
+    await dropCheckoutDraft(ctx, ctx.from?.id);
     return null;
   }
   return d;
+}
+
+/** Best-effort (§4.1): forgetting the abandoned-cart row must never break the main flow. */
+export async function dropCheckoutDraft(ctx: Pick<StoreContext, 'app'>, customerId: number | undefined): Promise<void> {
+  if (customerId === undefined) return;
+  try {
+    await ctx.app.db.deleteCheckoutDraft(customerId);
+  } catch (err: any) {
+    if (err instanceof BudgetExceededError) return;
+    console.warn('⚠️ [Storefront] checkout draft delete failed:', err.message);
+  }
 }
 
 /** The customer's reply keyboard; «🎁 دعوت دوستان» appears only while the referral program is on. */
@@ -482,6 +496,17 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     };
     ctx.session.pendingPurchase = null;
 
+    // abandoned-cart reminder (§4): remember the draft; a failure never blocks the card details
+    try {
+      await ctx.app.db.upsertCheckoutDraft({
+        customerId: ctx.from.id, productId: product.id, productName: product.name,
+        price: ctx.session.awaitingReceiptFor.price, createdAt: tehranDateTime(ctx.app.apps.now()),
+      });
+    } catch (err: any) {
+      if (err instanceof BudgetExceededError) throw err;
+      console.warn('⚠️ [Storefront] checkout draft upsert failed:', err.message);
+    }
+
     await ctx.answerCallbackQuery();
 
     const settings = await ctx.app.db.getStoreSettings();
@@ -499,20 +524,21 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   bot.callbackQuery(/^cust_decline_(\d+)$/, async (ctx) => {
     ctx.session.pendingPurchase = null;
     ctx.session.awaitingDiscountCodeFor = null;
+    await dropCheckoutDraft(ctx, ctx.from?.id);
     await ctx.answerCallbackQuery('خرید لغو شد.');
     await ctx.editMessageText('❌ خرید لغو شد.').catch(() => {});
   });
 
   // ── Receipt-step text nudge ─────────────────────────────────────────────────
   bot.on('message:text', async (ctx, next) => {
-    if (!receiptDraft(ctx)) return next();
+    if (!(await receiptDraft(ctx))) return next();
     await ctx.reply('⚠️ لطفاً عکس یا فایل رسید پرداخت را ارسال کنید، نه متن.');
   });
 
   // ── Receipt received → create order, forward to admins ─────────────────────
   bot.on(['message:photo', 'message:document'], async (ctx, next) => {
     const hadDraft = !!ctx.session?.awaitingReceiptFor;
-    const pending = receiptDraft(ctx);
+    const pending = await receiptDraft(ctx);
     if (!pending) {
       if (!hadDraft) return next();
       await ctx.reply('⌛️ مهلت ارسال رسید برای این خرید تمام شده است. لطفاً دوباره از «' + STOREFRONT_LABEL + '» محصول را انتخاب کنید.');
@@ -568,6 +594,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
         customerUsername: ctx.from.username ?? null,
       });
       orderId = result.lastInsertRowid;
+      await dropCheckoutDraft(ctx, ctx.from.id);
     } catch (err: any) {
       console.error('❌ [Storefront] createOrder failed:', err.message);
       await ctx.reply('❌ خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.');
@@ -637,7 +664,7 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
   bot.on('message', async (ctx, next) => {
     if (isAdmin(ctx)) return next();
 
-    if (receiptDraft(ctx)) {
+    if (await receiptDraft(ctx)) {
       await ctx.reply('⚠️ لطفاً عکس یا فایل رسید پرداخت را ارسال کنید (نه نوع دیگری از پیام).');
       return;
     }

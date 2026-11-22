@@ -2,6 +2,7 @@ import { WizardScene } from '../../lib/wizard';
 import { Markup } from '../../lib/markup';
 import { processBroadcastBatch } from '../broadcast';
 import { AUDIENCE_LABEL } from '../audience';
+import { CART_REMINDER_KEY } from '../scheduler';
 import { escapeMarkdown, productPickerKeyboard } from '../utils';
 import type { StoreContext } from '../types';
 
@@ -13,12 +14,16 @@ export const SENDING_TEXT =
   '⏳ در حال ارسال اطلاعیه...' +
   '\n\n📬 ارسال به‌صورت دسته‌ای (حدود ۴۰ نفر در دقیقه) انجام می‌شود و در پایان گزارش برایتان ارسال می‌شود.';
 
-const AUDIENCE_KB = Markup.inlineKeyboard([
+const cartLabel = (on: boolean) => '🛒 یادآوری سبد نیمه‌کاره: ' + (on ? '✅ روشن' : '⛔️ خاموش');
+
+/** The first keyboard doubles as the entry menu: the cart-reminder switch lives at the bottom (CAMPAIGN_PLAN.md §0.5). */
+const audienceKb = (cartOn: boolean) => Markup.inlineKeyboard([
   [Markup.button.callback('👥 همه مشتری‌ها', 'ann_aud_all')],
   [Markup.button.callback('✅ اشتراک فعال', 'ann_aud_active')],
   [Markup.button.callback('⌛️ اشتراک تمام‌شده', 'ann_aud_expired')],
   [Markup.button.callback('🛍 خریداران یک محصول', 'ann_aud_buyers')],
   [Markup.button.callback('🆕 هنوز خرید نکرده‌اند', 'ann_aud_never')],
+  [Markup.button.callback(cartLabel(cartOn), 'ann_cart_toggle')],
   [Markup.button.callback('❌ انصراف', 'announce_cancel')],
 ]);
 
@@ -35,7 +40,7 @@ export const announceWizard = new WizardScene<StoreContext>(
       '📢 *ارسال اطلاعیه به مشتریان*\n\n' +
       '〔 مرحله ۱ از ۳ 〕\n\n' +
       '👥 اطلاعیه برای چه کسانی ارسال شود؟',
-      { parse_mode: 'Markdown', ...AUDIENCE_KB },
+      { parse_mode: 'Markdown', ...audienceKb((await ctx.app.kv.get(CART_REMINDER_KEY)) === '1') },
     );
 
     return ctx.wizard.next();
@@ -52,6 +57,15 @@ export const announceWizard = new WizardScene<StoreContext>(
       await ctx.answerCallbackQuery();
       await ctx.editMessageText('❌ ارسال اطلاعیه لغو شد.').catch(() => {});
       return ctx.scene.leave();
+    }
+
+    // the switch flips in place; the admin can still pick an audience afterwards
+    if (data === 'ann_cart_toggle') {
+      const on = (await ctx.app.kv.get(CART_REMINDER_KEY)) !== '1';
+      await ctx.app.kv.set(CART_REMINDER_KEY, on ? '1' : '0');
+      await ctx.answerCallbackQuery(on ? '✅ روشن شد' : '⛔️ خاموش شد');
+      await ctx.editMessageReplyMarkup(audienceKb(on)).catch(() => {});
+      return;
     }
 
     let audience: string | null = null;

@@ -6,7 +6,7 @@ import { processBroadcastBatch } from './store/broadcast';
 import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
 import { pollEitaa } from './monshi/eitaa/poll';
-import { checkStalledOrders, sendReminders } from './store/scheduler';
+import { checkStalledOrders, sendCartReminders, sendReminders } from './store/scheduler';
 import { sweepReferralRewards } from './store/referrals';
 import { processSupplierSync } from './store/suppliers/sync';
 import { processSupplierWork } from './store/suppliers/engine';
@@ -51,6 +51,10 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
 
     if (t.minute % 10 === 5) {
       await guarded('referral-rewards', () => sweepReferralRewards(store));
+    }
+
+    if (t.minute % 10 === 7) {
+      await guarded('cart-reminders', () => sendCartReminders(store));
     }
 
     if (t.hour === REMINDER_HOUR_TEHRAN) {

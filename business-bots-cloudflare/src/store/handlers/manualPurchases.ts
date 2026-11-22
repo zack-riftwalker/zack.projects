@@ -4,7 +4,7 @@ import { formatPrice, productPickerKeyboard, formatJalaliDate, parseLocalDateTim
 import { isAdminId } from '../config';
 import { MANUAL_PURCHASE_LABEL } from '../labels';
 import { adminPanelKeyboard } from './adminPanel';
-import { customerKeyboard } from './storefront';
+import { customerKeyboard, dropCheckoutDraft } from './storefront';
 import { onPurchaseConfirmed } from '../referrals';
 import { tehranDateTime } from '../../lib/time';
 import { buildPagedKeyboard } from '../utils';
@@ -126,6 +126,7 @@ export async function handleManualPurchaseStart(ctx: StoreContext, payload: stri
   }
 
   if (result.outcome === 'claimed') {
+    await dropCheckoutDraft(ctx, ctx.from!.id); // §4.1: they have paid, no abandoned-cart reminder
     try {
       await onPurchaseConfirmed(ctx.app, result.order!);
     } catch (err: any) {

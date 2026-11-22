@@ -39,6 +39,10 @@ export interface BroadcastJob {
   /** round 4 (§5): local Tehran time; NULL = send now */
   send_after?: string | null; cancelled?: number;
 }
+export interface CheckoutDraft { customer_telegram_id: number; product_id: number; product_name: string; price: number; created_at: string; reminded: number }
+export const DUE_DRAFTS_SQL = 'SELECT * FROM checkout_drafts WHERE reminded = 0 AND created_at <= ? AND created_at >= ? ORDER BY created_at LIMIT ?';
+/** `reminded IN (0, 1)` lets the (reminded, created_at) index serve the range */
+export const PURGE_DRAFTS_SQL = 'DELETE FROM checkout_drafts WHERE reminded IN (0, 1) AND created_at < ?';
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
 
 const REMINDER_QUERIES: Record<string, string> = {
@@ -641,6 +645,41 @@ export class StoreDb {
       AND  (d.max_uses IS NULL OR (SELECT COUNT(*) FROM discount_code_redemptions r WHERE r.discount_code_id = d.id) < d.max_uses)
   `, customerTelegramId, orderId, discountCodeId, customerTelegramId).run();
     return r.meta.changes === 1;
+  }
+
+  // ─── Checkout drafts (round 4, §4) ───────────────────────────────────────
+  async upsertCheckoutDraft(p: { customerId: number; productId: number; productName: string; price: number; createdAt: string }): Promise<void> {
+    await this.q(
+      `INSERT INTO checkout_drafts (customer_telegram_id, product_id, product_name, price, created_at, reminded) VALUES (?, ?, ?, ?, ?, 0)
+       ON CONFLICT(customer_telegram_id) DO UPDATE SET product_id = excluded.product_id, product_name = excluded.product_name, price = excluded.price, created_at = excluded.created_at, reminded = 0`,
+      p.customerId, p.productId, p.productName, p.price, p.createdAt,
+    ).run();
+  }
+
+  async deleteCheckoutDraft(customerId: number): Promise<void> {
+    await this.q('DELETE FROM checkout_drafts WHERE customer_telegram_id = ?', customerId).run();
+  }
+
+  async getDueCheckoutDrafts(olderThan: string, notOlderThan: string, limit: number): Promise<CheckoutDraft[]> {
+    return (await this.q(DUE_DRAFTS_SQL, olderThan, notOlderThan, limit).all<CheckoutDraft>()).results;
+  }
+
+  async hasOrderSince(customerId: number, since: string): Promise<boolean> {
+    return !!(await this.q('SELECT 1 FROM orders WHERE customer_telegram_id = ? AND created_at >= ? LIMIT 1', customerId, since).first());
+  }
+
+  async markDraftsReminded(customerIds: number[]): Promise<void> {
+    if (!customerIds.length) return;
+    await this.q('UPDATE checkout_drafts SET reminded = 1 WHERE customer_telegram_id IN (' + customerIds.map(() => '?').join(',') + ')', ...customerIds).run();
+  }
+
+  async deleteCheckoutDrafts(customerIds: number[]): Promise<void> {
+    if (!customerIds.length) return;
+    await this.q('DELETE FROM checkout_drafts WHERE customer_telegram_id IN (' + customerIds.map(() => '?').join(',') + ')', ...customerIds).run();
+  }
+
+  async purgeCheckoutDraftsBefore(cutoff: string): Promise<void> {
+    await this.q(PURGE_DRAFTS_SQL, cutoff).run();
   }
 
   /** round 4 (§3): first touch only */

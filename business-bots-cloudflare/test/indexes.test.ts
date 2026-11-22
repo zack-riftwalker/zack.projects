@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeD1 } from './helpers/fakeD1';
-import { REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
+import { DUE_DRAFTS_SQL, PURGE_DRAFTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
@@ -15,7 +15,7 @@ import {
 } from '../src/store/suppliers/engine';
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
-const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'product_waitlist', 'notify_links',
+const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'checkout_drafts', 'product_waitlist', 'notify_links',
   'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger', 'manual_purchase_claims'];
 
 function plan(f: FakeD1, sql: string, ...args: unknown[]): string[] {
@@ -66,6 +66,9 @@ describe('store hot queries use indexes', () => {
     ['my recent rejections', "SELECT * FROM orders WHERE customer_telegram_id = ? AND status = 'rejected' AND decided_at >= datetime('now', '+03:30', '-7 days') ORDER BY id DESC LIMIT 5", [1]],
     ['receipt duplicate lookup', 'SELECT id, status, customer_telegram_id FROM orders WHERE receipt_unique_id = ? ORDER BY id DESC LIMIT 1', ['x']],
     ['report sources', CAMPAIGN_SQL.sources, ['a', 'b', 'a', 'b', 'a', 'b']],
+    ['cart reminder due', DUE_DRAFTS_SQL, ['a', 'b', 15]],
+    ['cart reminder order check', 'SELECT 1 FROM orders WHERE customer_telegram_id = ? AND created_at >= ? LIMIT 1', [1, 'a']],
+    ['cart reminder purge', PURGE_DRAFTS_SQL, ['a']],
     ['waitlist count', 'SELECT COUNT(*) AS n FROM product_waitlist WHERE product_id = ?', [1]],
     ['waitlist clear', 'DELETE FROM product_waitlist WHERE product_id = ? AND created_at <= ?', [1, 'x']],
   ];
