@@ -22,7 +22,7 @@ export function buildCatalogEntries(products: CustomerProduct[], groups: Product
   const entries: CatalogEntry[] = [];
   for (const p of products) {
     if (p.group_id == null) {
-      entries.push({ label: catalogLabel(p), callback: 'cust_prod_' + p.id, style: p.is_available === 0 ? 'danger' : 'success', sortOrder: p.sort_order ?? 0, minId: p.id });
+      entries.push({ label: catalogLabel(p) + (p.is_available !== 0 && hasCompareAt(p) ? ' 🔥' : ''), callback: 'cust_prod_' + p.id, style: p.is_available === 0 ? 'danger' : 'success', sortOrder: p.sort_order ?? 0, minId: p.id });
     }
   }
   for (const g of groups) {

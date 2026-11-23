@@ -38,8 +38,20 @@ describe('compare-at price: storefront', () => {
     const sale = t.tg.texts(CUST.id).at(-1)!;
     expect(sale).toContain('💰 قیمت عادی: ' + fa(1000000) + ' تومان');
     expect(sale).toContain('🔥 قیمت ویژه: ' + fa(800000) + ' تومان (' + fa(20) + '٪ تخفیف)');
+    // the normal price is struck through, exactly over «۱٬۰۰۰٬۰۰۰ تومان»
+    const call = t.tg.calls.filter((c) => ['sendMessage', 'editMessageText'].includes(c.method) && c.payload.chat_id === CUST.id).at(-1)!;
+    const strike = call.payload.entities.filter((e: any) => e.type === 'strikethrough');
+    expect(strike).toHaveLength(1);
+    expect(sale.slice(strike[0].offset, strike[0].offset + strike[0].length)).toBe(fa(1000000) + ' تومان');
+    // the catalog button of a standalone product gets 🔥 too
+    await t.send('store', textUpdate(CUST, '/start'));
+    await t.send('store', callbackUpdate(CUST, 'ui_menu_shop'));
+    const labels = t.tg.calls.filter((c) => c.payload?.reply_markup?.inline_keyboard).at(-1)!.payload.reply_markup.inline_keyboard.flat().map((b: any) => b.text);
+    expect(labels).toContain('GPT Plus  |  ' + fa(800000) + ' ت 🔥');
+    expect(labels).toContain('Plain  |  ' + fa(500000) + ' ت');
     await t.send('store', callbackUpdate(CUST, 'cust_prod_2'));
     expect(t.tg.texts(CUST.id).at(-1)).toContain('💰 قیمت: ' + fa(500000) + ' تومان');
+    expect(t.tg.calls.filter((c) => ['sendMessage', 'editMessageText'].includes(c.method)).at(-1)!.payload.entities.some((e: any) => e.type === 'strikethrough')).toBe(false);
   });
 
   it('group options get 🔥 on the button', async () => {

@@ -12,7 +12,7 @@ import {
   escapeMarkdown, escapeHtml, formatPrice, buildPagedKeyboard, formatJalaliDate, parseLocalDateTime,
 } from '../utils';
 import {
-  loadCatalogEntries, sortOptions, optionRowLabels, groupHeaderText, priceLines, type CatalogEntry,
+  loadCatalogEntries, sortOptions, optionRowLabels, groupHeaderText, priceLines, hasCompareAt, type CatalogEntry,
 } from '../catalog';
 import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
@@ -101,7 +101,14 @@ async function showProduct(ctx: StoreContext, product: CustomerProduct) {
   }
 
   const makeHead = () => {
-    const head = new RichText().add('📦 ').add(product.name, { bold: true }).add('\n' + priceLines(product));
+    const head = new RichText().add('📦 ').add(product.name, { bold: true }).add('\n');
+    const prices = priceLines(product);
+    if (hasCompareAt(product)) {
+      // the normal price is struck through (an entity, so no Markdown escaping is involved)
+      const old = formatPrice(product.compare_at_price!) + ' تومان';
+      head.entities.push({ type: 'strikethrough', offset: head.text.length + prices.indexOf(old), length: old.length });
+    }
+    head.add(prices);
     if (product.duration_days) head.add('\n⏱ مدت: ' + product.duration_days + ' روز');
     if (product.warranty_days) head.add('\n🛡 گارانتی: ' + product.warranty_days + ' روز');
     return head.add('\n\n');
