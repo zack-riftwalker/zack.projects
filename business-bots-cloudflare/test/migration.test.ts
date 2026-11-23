@@ -25,6 +25,21 @@ describe('sqlite_to_d1.py target columns', () => {
   });
 });
 
+describe('store migration 0007 (price schedules)', () => {
+  it('creates price_schedules with its defaults, status check and indexes', () => {
+    const f = new FakeD1().migrate('store');
+    expect(columns(f, 'price_schedules')).toEqual(['id', 'product_id', 'sale_price', 'normal_price', 'starts_at', 'ends_at', 'status', 'note', 'created_at']);
+    f.sqlite.prepare("INSERT INTO price_schedules (product_id, sale_price, starts_at, ends_at) VALUES (1, 100, '2026-11-26 20:00:00', '2026-11-27 20:00:00')").run();
+    const row = f.sqlite.prepare('SELECT * FROM price_schedules').get() as any;
+    expect(row.status).toBe('pending');
+    expect(row.normal_price).toBeNull();
+    expect(row.created_at).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+    expect(() => f.sqlite.prepare("UPDATE price_schedules SET status = 'bogus'").run()).toThrow();
+    const idx = (f.sqlite.prepare("PRAGMA index_list(price_schedules)").all() as any[]).map((r) => r.name);
+    expect(idx).toEqual(expect.arrayContaining(['idx_price_sched_start', 'idx_price_sched_end', 'idx_price_sched_prod']));
+  });
+});
+
 describe('store migration 0006 (product photo)', () => {
   it('adds a nullable photo_file_id to customer_products', () => {
     const f = new FakeD1().migrate('store');

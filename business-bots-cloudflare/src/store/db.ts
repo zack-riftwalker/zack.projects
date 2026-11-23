@@ -41,6 +41,11 @@ export interface BroadcastJob {
   /** round 4 (§5): local Tehran time; NULL = send now */
   send_after?: string | null; cancelled?: number;
 }
+/** round 6 (PRICE_SCHEDULE_PLAN.md): a scheduled sale price; times are local Tehran strings */
+export interface PriceSchedule {
+  id: number; product_id: number; sale_price: number; normal_price: number | null;
+  starts_at: string; ends_at: string; status: 'pending' | 'active' | 'done' | 'cancelled'; note: string | null; created_at: string;
+}
 export interface CheckoutDraft { customer_telegram_id: number; product_id: number; product_name: string; price: number; created_at: string; reminded: number }
 export const DUE_DRAFTS_SQL = 'SELECT * FROM checkout_drafts WHERE reminded = 0 AND created_at <= ? AND created_at >= ? ORDER BY created_at LIMIT ?';
 /** `reminded IN (0, 1)` lets the (reminded, created_at) index serve the range */
