@@ -207,9 +207,9 @@ describe('review M1/M3/M4/M6', () => {
     q(t.storeDb, 'UPDATE customer_products SET compare_at_price = 1000000');
     sched(t, 1, 800000, 'cancelled', 'normal_price=1000000');
     const app = t.apps().store!;
-    const [r] = await app.db.db.batch([app.db.q(
+    const r = await app.raw.prepare(
       "UPDATE customer_products SET price = ?, compare_at_price = ? WHERE id = ? AND price = ? AND compare_at_price = ? AND EXISTS (SELECT 1 FROM price_schedules WHERE id = ? AND status = 'active')",
-      1000000, null, 1, 800000, 1000000, 1)]);
+    ).bind(1000000, null, 1, 800000, 1000000, 1).run();
     expect(r.meta.changes).toBe(0);
     expect(await app.db.endSchedule({ id: 1, product_id: 1, sale_price: 800000, normal_price: 1000000, normal_compare_at: null })).toEqual({ reverted: 0, finished: 0 });
     expect(prod(t)).toEqual({ price: 800000, compare_at_price: 1000000 });
