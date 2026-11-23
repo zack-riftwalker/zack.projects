@@ -46,3 +46,8 @@ export const eMsg = (id: number, peer: any, text: string, out = false) =>
   ({ _: 'message', flags: out ? 2 : 0, id, peer_id: peer, date: 1794846000, message: text });
 export const difference = (pts: number, messages: any[], users: any[] = []) =>
   ({ _: 'updates.difference', new_messages: messages, new_encrypted_messages: [], other_updates: [], chats: [], users, state: state(pts) });
+
+/** The decoded parameters of a recorded call (e.g. messages.sendMessage → { peer, message, entities, flags }). */
+export function decodeCall(c: EitaaCall): any {
+  return new TLDeserialization(c.raw, { mtproto: true }).fetchObject('', 'INPUT');
+}

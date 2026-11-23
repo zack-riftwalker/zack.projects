@@ -34,6 +34,9 @@ export const OPEN_ORDERS_SQL = 'SELECT * FROM orders WHERE status IN (' + OPEN_S
 const FAQ_EDITABLE_FIELDS = new Set(['question', 'answer', 'keywords']);
 const FAQ_EMBEDDING_AFFECTING_FIELDS = new Set(['question', 'keywords']);
 
+export const OUT_COUNT_SQL = "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ? AND direction = 'out' AND received_at > ?";
+export const OUT_TEXT_SQL = "SELECT 1 FROM messages WHERE chat_id = ? AND direction = 'out' AND text = ? AND received_at > ? LIMIT 1";
+
 export class MonshiDb {
   constructor(readonly db: Db) {}
 
@@ -240,6 +243,16 @@ export class MonshiDb {
       chatId, telegramMessageId, direction, messageType, text ?? null, utcIsoNow(), bcid,
     ).run();
     return r.meta.changes === 1 ? r.meta.last_row_id : 0;
+  }
+
+  /** Eitaa auto-reply rate limit: our own replies to this chat since `sinceIso` (EITAA_MENU_PLAN.md §2.3). */
+  async countOutSince(chatId: number, sinceIso: string): Promise<number> {
+    return (await this.q(OUT_COUNT_SQL, chatId, sinceIso).first<{ n: number }>())?.n ?? 0;
+  }
+
+  /** Did we send exactly this text to the chat since `sinceIso`? (an Eitaa echo of our own reply whose id we never learned) */
+  async hasRecentOutText(chatId: number, text: string, sinceIso: string): Promise<boolean> {
+    return !!(await this.q(OUT_TEXT_SQL, chatId, text, sinceIso).first());
   }
 
   async markMessageAnswered(chatId: number, telegramMessageId: number, answeredBy: string, faqId: number | null = null): Promise<void> {

@@ -3,7 +3,7 @@ import { FakeD1 } from './helpers/fakeD1';
 import { CLAIM_DRAFTS_SQL_PREFIX, DISCOUNT_REVENUE_SQL, DUE_DRAFTS_SQL, HAS_ORDER_SINCE_SQL, LINK_GIFTS_SQL, PENDING_GIFTS_SQL, RESET_GIFTS_SQL, PURGE_DRAFTS_SQL, RUNNING_BROADCAST_SQL, SCHEDULED_BROADCASTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
 import { DUE_SCHEDULES_SQL, EITAA_KEYWORDS_SQL, EITAA_PRODUCTS_SQL } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
-import { OPEN_ORDERS_SQL } from '../src/monshi/db';
+import { OPEN_ORDERS_SQL, OUT_COUNT_SQL, OUT_TEXT_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
 import { APPLY_DEFAULTS_SQL, NEEDS_ACTION_COUNT_SQL, NEEDS_ACTION_LIST_SQL } from '../src/store/handlers/supplierPanel';
 import { CANCEL_SQL } from '../src/store/suppliers/fulfillmentActions';
@@ -179,6 +179,8 @@ describe('supplier hot queries use indexes', () => {
 describe('monshi hot queries use indexes', () => {
   const f = new FakeD1().migrate('monshi');
   const cases: [string, string, unknown[]][] = [
+    ['eitaa out count', OUT_COUNT_SQL, [1, 'x']],
+    ['eitaa out text', OUT_TEXT_SQL, [1, 'x', 'x']],
     ['recent messages', 'SELECT direction, text, message_type FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?', [1, 7]],
     ['messages today', "SELECT COUNT(*) AS n FROM messages WHERE direction = 'in' AND received_at >= ?", ['x']],
     ['stats by type since', "SELECT answered_by, COUNT(*) AS n FROM messages WHERE direction = 'in' AND received_at >= ? GROUP BY answered_by", ['x']],
