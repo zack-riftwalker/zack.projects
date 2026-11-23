@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMenu, buildPrices, buildProductReply, loadEitaaProducts, matchMessage, toEitaaEntities, type EitaaProduct } from '../../src/monshi/eitaa/menu';
+import { MAX_REPLY_UNITS, buildMenu, buildPrices, buildProductReply, loadEitaaProducts, matchMessage, toEitaaEntities, type EitaaProduct } from '../../src/monshi/eitaa/menu';
 import { makeTestEnv } from '../helpers/env';
 import { q } from '../helpers/seed';
 
@@ -154,5 +154,35 @@ describe('loadEitaaProducts', () => {
   it('no store → null', async () => {
     const t = makeTestEnv({ store: false });
     expect(await loadEitaaProducts(t.apps().monshi!)).toBeNull();
+  });
+});
+
+describe('length cap and cutting', () => {
+  const MANY = Array.from({ length: 200 }, (_, i) => P({ id: 100 + i, name: 'محصول شماره ' + i, eitaa_keyword: 'k' + i }));
+  it('200 products: the stock list stops with «…», the quick-reply section stays intact, the text stays under the cap', () => {
+    const m = buildMenu('سلام', MANY);
+    expect(m.text.length).toBeLessThanOrEqual(3500);
+    expect(m.text).toContain('\n…\n\n⚡️ جواب سریع');
+    expect(m.text.endsWith('یا سؤالتون رو بنویسید 🙂')).toBe(true);
+    const codes = m.entities.map((x) => slice(m.text, x));
+    expect(codes).toHaveLength(202);
+    expect(codes[0]).toBe('k0');
+    expect(codes.at(-3)).toBe('k199');
+    expect(codes.slice(-2)).toEqual(['قیمت', 'منو']);
+    const p = buildPrices(MANY);
+    expect(p.text.length).toBeLessThanOrEqual(3500);
+    expect(p.text).toContain('\n…\n\nمنو');
+  });
+  it('a short list has no «…»', () => {
+    expect(buildMenu('سلام', ALL).text).not.toContain('…');
+  });
+  it('a cut without a line break never splits a surrogate pair', () => {
+    for (const k of [0, 1]) { // one of the two puts the cut between the halves of an emoji
+      const terms = 'x'.repeat(k) + '😀'.repeat(2000); // no newline
+      const r = buildProductReply(P({ id: 9, terms_text: terms, terms_entities: [] }));
+      expect(r.text.length).toBeLessThanOrEqual(MAX_REPLY_UNITS);
+      expect(r.text).not.toMatch(/[\uD800-\uDBFF]…/);
+      expect(r.text).not.toMatch(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    }
   });
 });

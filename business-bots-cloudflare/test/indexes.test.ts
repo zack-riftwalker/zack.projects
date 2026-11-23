@@ -180,7 +180,7 @@ describe('monshi hot queries use indexes', () => {
   const f = new FakeD1().migrate('monshi');
   const cases: [string, string, unknown[]][] = [
     ['eitaa out count', OUT_COUNT_SQL, [1, 'x']],
-    ['eitaa out text', OUT_TEXT_SQL, [1, 'x', 'x']],
+    ['eitaa out text', OUT_TEXT_SQL, [1, 'x', 'x', 0]],
     ['recent messages', 'SELECT direction, text, message_type FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?', [1, 7]],
     ['messages today', "SELECT COUNT(*) AS n FROM messages WHERE direction = 'in' AND received_at >= ?", ['x']],
     ['stats by type since', "SELECT answered_by, COUNT(*) AS n FROM messages WHERE direction = 'in' AND received_at >= ? GROUP BY answered_by", ['x']],

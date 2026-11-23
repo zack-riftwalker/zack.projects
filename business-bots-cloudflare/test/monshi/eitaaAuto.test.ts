@@ -4,6 +4,8 @@ import { textUpdate } from '../helpers/updates';
 import { one, q } from '../helpers/seed';
 import { decodeCall, difference, fakeEitaa as eitaaFake, eMsg, eUser, peerUser, state } from '../helpers/fakeEitaa';
 
+import { CRON_RESERVE, pollEitaa } from '../../src/monshi/eitaa/poll';
+
 const NOTIFY = 6001;
 const CUSTOMER = 555;
 const ME = 69152770;
@@ -39,6 +41,8 @@ const incoming = (e: E, msgs: [number, string][], polls = 1, from = CUSTOMER) =>
 const run = async (t: TestEnv, n: number) => { for (let i = 0; i < n; i++) await t.cron(); };
 const sends = (e: E) => e.calls.filter((c) => c.method === 'messages.sendMessage').map(decodeCall);
 const ack = (e: E, ...ids: number[]) => e.respond('messages.sendMessage', ...ids.map((id) => ({ _: 'updateShortSentMessage', flags: 2, id, pts: 1, pts_count: 1, date: 1 })));
+/** one poll on a fresh budget; what is left the moment it returns is what the rest of the cron tick can use */
+const pollLeft = async (t: TestEnv): Promise<number> => { const m = t.apps().monshi!; await pollEitaa(m); return m.apps.budget.remaining(); };
 const notifs = (t: TestEnv) => t.tg.texts(OWNER.id).filter((x) => x.includes('📗'));
 const ownerPaused = (t: TestEnv) => one(t.monshiDb, 'SELECT automation_paused_until AS p FROM customers WHERE chat_id = ?', -CUSTOMER)?.p;
 
@@ -234,13 +238,54 @@ describe('Eitaa auto-reply: budget and failures', () => {
     incoming(e, [[1, 'جمینای'], [2, 'چت'], [3, 'قیمت'], [4, 'خرید چت']], 6);
     ack(e, 50, 51, 52, 53, 54, 55);
     const n = budgets.length;
-    await t.cron();
+    expect(await pollLeft(t)).toBeGreaterThanOrEqual(CRON_RESERVE);
     const used = Math.max(...budgets.slice(n).map((b) => b.used));
     expect(used).toBeLessThanOrEqual(50 - 15 + 12); // the poll stops while 15 units stay free (+ the cursor write and a few sends in flight)
     expect(notifs(t).length).toBeGreaterThanOrEqual(1);
     expect(notifs(t).length).toBeLessThan(4); // not everything fits in one minute
     await run(t, 5);
     expect(notifs(t)).toHaveLength(4); // each exactly once
+  });
+
+  it('a NEW customer whose first message is a keyword (menu + product) in a multi-message tick keeps the reserve', async () => {
+    const { t, e } = await setup();
+    const OTHER = 777;
+    const d = difference(++pts, [eMsg(1, peerUser(OTHER), 'جمینای'), eMsg(2, peerUser(CUSTOMER), 'چت'), eMsg(3, peerUser(OTHER), 'قیمت')],
+      [eUser(OTHER, 'رضا', 'reza_e'), eUser(CUSTOMER, 'علی', 'ali_e')]);
+    e.respond('updates.getDifference', d, d, d, d);
+    ack(e, 50, 51, 52, 53, 54, 55, 56);
+    expect(await pollLeft(t)).toBeGreaterThanOrEqual(CRON_RESERVE);
+    expect(sends(e)[0].message).toContain('📦 موجودی امروز:'); // the new customer's menu …
+    expect(sends(e)[1].message).toContain('📦 جمینای'); // … then the product reply
+    await run(t, 4);
+    expect(notifs(t)).toHaveLength(3);
+  });
+
+  it('a store failure does not stop forwarding: the message reaches the owner, no auto-reply', async () => {
+    const { t, e } = await setup();
+    q(t.storeDb, 'DROP TABLE customer_products');
+    incoming(e, [[1, 'جمینای']]);
+    await t.cron();
+    expect(sends(e)).toHaveLength(0);
+    expect(notifs(t)).toHaveLength(1);
+    expect(notifs(t)[0]).toContain('پیام جدید');
+  });
+
+  it('the echo of a bridge reply (unknown sent id) does not pause the chat when reply_bridge_pause is off', async () => {
+    const { t, e } = await setup({ auto: false });
+    q(t.monshiDb, "INSERT OR REPLACE INTO settings (key, value) VALUES ('reply_bridge_pause', '0')");
+    incoming(e, [[1, 'سلام']]);
+    await t.cron();
+    const notif = one(t.monshiDb, 'SELECT message_id FROM notify_links WHERE recipient_chat_id = ?', OWNER.id).message_id;
+    e.respond('messages.sendMessage', { _: 'updates', updates: [], users: [], chats: [], date: 1, seq: 0 }); // no id → fallback id
+    const upd = textUpdate(OWNER, 'جواب من');
+    upd.message.reply_to_message = { message_id: notif, date: 0, chat: { id: OWNER.id, type: 'private' } };
+    await t.send('monshi', upd);
+    expect(sends(e)).toHaveLength(1);
+    e.respond('updates.getDifference', difference(++pts, [eMsg(88, peerUser(CUSTOMER), 'جواب من', true)]));
+    await t.cron();
+    expect(ownerPaused(t)).toBeNull();
+    expect(q(t.monshiDb, "SELECT id FROM messages WHERE direction = 'owner'")).toHaveLength(1);
   });
 
   it('a failed send still notifies, and releases the claim so a retry can send', async () => {

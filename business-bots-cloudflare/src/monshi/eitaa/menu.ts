@@ -9,7 +9,7 @@ import type { CustomerProduct } from '../../store/db';
 import { buildCatalogEntries, hasCompareAt, priceLines, priceStrikeEntity, sortOptions } from '../../store/catalog';
 import { RichText, withHeader } from '../../store/ui';
 import { formatPrice } from '../../lib/time';
-import { normalizeKeyword } from '../../lib/keyword';
+import { normalizeKeyword, PRICE_WORDS } from '../../lib/keyword';
 
 export { normalizeKeyword };
 
@@ -40,8 +40,6 @@ export async function loadEitaaProducts(app: MonshiApp): Promise<EitaaProduct[] 
 }
 
 // ─── matching ────────────────────────────────────────────────────────────────
-
-const PRICE_WORDS = new Set(['قیمت', 'قیمتها', 'قیمت ها', 'لیست قیمت', 'لیست قیمتها', 'لیست قیمت ها']);
 
 export function matchMessage(text: string | null | undefined, products: EitaaProduct[]): Match {
   const t = normalizeKeyword(text ?? '');
@@ -81,19 +79,28 @@ class Out {
   done(): Built { return { text: this.text, entities: this.entities }; }
 }
 
-function addStock(o: Out, products: EitaaProduct[]): void {
+/** the stock list stops (with a «…» line) before the whole text passes this many UTF-16 units */
+const STOCK_TEXT_LIMIT = 3500;
+
+/** `tail` = units the rest of the message needs after the stock list, so the quick-reply section always fits */
+function addStock(o: Out, products: EitaaProduct[], tail: number): void {
   const avail = products.filter(isAvailable);
   if (!avail.length) { o.add('📦 فعلاً محصولی موجود نیست.'); return; }
   o.add('📦 موجودی امروز:');
-  for (const p of avail) o.add('\n• ' + cleanName(p.name) + ' — ' + formatPrice(p.price) + ' ت' + (hasCompareAt(p) ? ' 🔥' : ''));
+  const limit = STOCK_TEXT_LIMIT - tail - 2;
+  for (const p of avail) {
+    const line = '\n• ' + cleanName(p.name) + ' — ' + formatPrice(p.price) + ' ت' + (hasCompareAt(p) ? ' 🔥' : '');
+    if (o.text.length + line.length > limit) { o.add('\n…'); break; }
+    o.add(line);
+  }
 }
 
 export function buildMenu(greeting: string, products: EitaaProduct[]): Built {
   const o = new Out();
   o.add(greeting + '\n\n');
-  addStock(o, products);
-  o.add('\n\n⚡️ جواب سریع (کپی کنید و بفرستید):\n');
   const keywords = products.filter((p) => isAvailable(p) && p.eitaa_keyword?.trim()).map((p) => p.eitaa_keyword!.trim());
+  addStock(o, products, 120 + keywords.reduce((n, k) => n + k.length + 5, 0));
+  o.add('\n\n⚡️ جواب سریع (کپی کنید و بفرستید):\n');
   if (keywords.length) {
     keywords.forEach((k, i) => { if (i) o.add('  ·  '); o.code(k); });
     o.add('\n');
@@ -105,7 +112,7 @@ export function buildMenu(greeting: string, products: EitaaProduct[]): Built {
 
 export function buildPrices(products: EitaaProduct[]): Built {
   const o = new Out();
-  addStock(o, products);
+  addStock(o, products, 30);
   o.add('\n\n').code('منو').add(' ← منوی کامل');
   return o.done();
 }
@@ -116,6 +123,7 @@ function cutAtLine(text: string, entities: MessageEntity[], max: number): { text
   let cut = text.slice(0, Math.max(0, max));
   const nl = cut.lastIndexOf('\n');
   if (nl > 0) cut = cut.slice(0, nl);
+  else if (/[\uD800-\uDBFF]/.test(cut.slice(-1))) cut = cut.slice(0, -1); // never split a surrogate pair
   const kept = entities
     .filter((e) => e.offset < cut.length)
     .map((e) => ({ ...e, length: Math.min(e.length, cut.length - e.offset) }));

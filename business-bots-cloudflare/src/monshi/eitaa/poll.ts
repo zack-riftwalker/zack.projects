@@ -22,13 +22,14 @@ function perMessageBudget(app: MonshiApp, topics: boolean, auto: boolean): numbe
 }
 
 /**
- * Extra worst case of the auto-reply for one message: rate-limit count, then up to 2 replies (new customer: menu + product)
- * of claim + send + save each. The one product read per poll is taken before the loop. (The plan said 6; this is 7.)
+ * Extra worst case of the auto-reply for one message: rate-limit count (1) + up to 2 replies (new customer: menu + product)
+ * of claim 2 (getAutoReplySentAt + claimAutoReply) + send 2 (getEitaaAccessHash + Eitaa call) + save 1 = 11, plus 3
+ * when the Eitaa token refreshes mid-send. The one product read per poll is taken before the loop.
  */
-const AUTO_REPLY_UNITS = 7;
+const AUTO_REPLY_UNITS = 14;
 
 // subrequests left for the jobs that run after this poll in the same cron tick
-const CRON_RESERVE = 15;
+export const CRON_RESERVE = 15;
 
 // Eitaa's own service account (Telegram's id; Eitaa is a fork — unverified): its «your login code is …» must never be
 // shown to staff or stored. The flags and the text check below catch it if the id differs.
@@ -77,7 +78,12 @@ export async function pollEitaa(app: MonshiApp): Promise<void> {
     // without re-reading the handled ones, and the cursor moves once all of them are through
     const todo = (diff.new_messages ?? []).filter((m: any) => m.id > (s.lastId ?? 0)).sort((a: any, b: any) => a.id - b.id);
     // one store read per poll, and only when there is something to answer; null = the feature is off
-    const auto = autoOn && todo.some((m: any) => m._ === 'message' && !m.pFlags?.out) ? await loadAutoState(app) : null;
+    const auto = autoOn && todo.some((m: any) => m._ === 'message' && !m.pFlags?.out) ? await loadAutoState(app).catch((err) => {
+      // a store (D1) error must not stop customer messages from reaching the owner: carry on with auto-replies off
+      console.error('❌ [Eitaa] auto-reply state failed:', err instanceof Error ? err.message : err);
+      return null;
+    })
+    : null;
     for (const m of todo) {
       // +1: the cursor write after the loop; the rest of the cron (store jobs, broadcast) keeps its share
       if (app.apps.budget.remaining() < need + 1 + CRON_RESERVE) return void (await updateSession(app, s, { lastId: s.lastId }));
@@ -120,7 +126,7 @@ async function handleMessage(app: MonshiApp, meId: string, m: any, users: Map<st
     if (ownRow) {
       // an echo of an auto-reply whose id we never learned looks new: same text sent by us in the last 10 minutes
       const since = utcIsoNow(new Date(app.apps.now().getTime() - 10 * 60 * 1000));
-      if (text && (await app.db.hasRecentOutText(chatId, text, since))) {
+      if (text && (await app.db.hasRecentOutText(chatId, text, since, ownRow))) {
         await app.db.deleteMessageRow(ownRow);
       } else {
         await app.db.markChatAnsweredByHuman(chatId);

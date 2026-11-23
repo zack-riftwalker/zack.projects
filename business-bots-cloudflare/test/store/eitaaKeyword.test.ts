@@ -49,7 +49,7 @@ describe('eitaa keyword: admin button', () => {
     const RESERVED = '⚠️ این کلمه رزرو شده است؛ کلمه‌ی دیگری انتخاب کنید.';
     for (const [text, msg] of [
       ['آ', SHAPE], ['یک دو سه', SHAPE], ['ا'.repeat(21), SHAPE],
-      ['منو', RESERVED], ['قیمت‌ها', RESERVED], ['خرید', RESERVED], ['شرایط', RESERVED], ['خرید جمینای', RESERVED], ['قیمت چت', RESERVED],
+      ['منو', RESERVED], ['قیمت‌ها', RESERVED], ['خرید', RESERVED], ['شرایط', RESERVED], ['خرید جمینای', RESERVED], ['قیمت چت', RESERVED], ['لیست قیمت', RESERVED], ['لیست قیمتها', RESERVED],
     ]) {
       await t.send('store', textUpdate(ADMIN, text));
       expect(last(t), text).toBe(msg);

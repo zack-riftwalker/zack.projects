@@ -35,7 +35,7 @@ const FAQ_EDITABLE_FIELDS = new Set(['question', 'answer', 'keywords']);
 const FAQ_EMBEDDING_AFFECTING_FIELDS = new Set(['question', 'keywords']);
 
 export const OUT_COUNT_SQL = "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ? AND direction = 'out' AND received_at > ?";
-export const OUT_TEXT_SQL = "SELECT 1 FROM messages WHERE chat_id = ? AND direction = 'out' AND text = ? AND received_at > ? LIMIT 1";
+export const OUT_TEXT_SQL = "SELECT 1 FROM messages WHERE chat_id = ? AND direction IN ('out', 'owner') AND text = ? AND received_at > ? AND id <> ? LIMIT 1";
 
 export class MonshiDb {
   constructor(readonly db: Db) {}
@@ -251,8 +251,8 @@ export class MonshiDb {
   }
 
   /** Did we send exactly this text to the chat since `sinceIso`? (an Eitaa echo of our own reply whose id we never learned) */
-  async hasRecentOutText(chatId: number, text: string, sinceIso: string): Promise<boolean> {
-    return !!(await this.q(OUT_TEXT_SQL, chatId, text, sinceIso).first());
+  async hasRecentOutText(chatId: number, text: string, sinceIso: string, exceptRowId = 0): Promise<boolean> {
+    return !!(await this.q(OUT_TEXT_SQL, chatId, text, sinceIso, exceptRowId).first());
   }
 
   async markMessageAnswered(chatId: number, telegramMessageId: number, answeredBy: string, faqId: number | null = null): Promise<void> {
