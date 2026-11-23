@@ -75,7 +75,7 @@ describe('S2: one delivery at a time (the delivery claim)', () => {
 
   it('the completion batch leaves the retry for 5 minutes later, not "now"', async () => {
     const { t, orderId } = await racingSetup();
-    t.deps.onBudget = (b) => { budgets.push(b); b.used = 34; };
+    t.deps.onBudget = (b) => { budgets.push(b); b.used = 33; };
     await at(t, iso('09:52'));
     t.deps.onBudget = (b) => { budgets.push(b); };
     expect(orderRow(t, orderId).status).toBe('confirmed');

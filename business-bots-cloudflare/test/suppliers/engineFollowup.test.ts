@@ -227,7 +227,7 @@ describe('delivery (§7.5)', () => {
     await confirm(t, orderId);
     completedOrder(fake);
     // this one cron invocation starts with most of its budget already spent
-    t.deps.onBudget = (b) => { budgets.push(b); b.used = 34; };
+    t.deps.onBudget = (b) => { budgets.push(b); b.used = 33; };
     await at(t, iso('09:52'));
     expect(soRow(t)).toMatchObject({ status: 'completed' });
     expect(soRow(t).next_check_at).toBeTruthy();

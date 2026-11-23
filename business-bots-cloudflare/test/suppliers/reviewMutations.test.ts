@@ -22,7 +22,7 @@ describe('M3: the delivery re-checks the order and the divert flag before it sen
     await confirm(t, orderId);
     completedOrder(fake);
     const { budgets } = await import('../helpers/env');
-    t.deps.onBudget = (b) => { budgets.push(b); b.used = 34; }; // the first delivery attempt is deferred
+    t.deps.onBudget = (b) => { budgets.push(b); b.used = 33; }; // the first delivery attempt is deferred
     await at(t, iso('09:52'));
     t.deps.onBudget = (b) => { budgets.push(b); };
     expect(soRow(t).status).toBe('completed');
@@ -39,7 +39,7 @@ describe('M3: the delivery re-checks the order and the divert flag before it sen
     await confirm(t, orderId);
     completedOrder(fake);
     const { budgets } = await import('../helpers/env');
-    t.deps.onBudget = (b) => { budgets.push(b); b.used = 34; };
+    t.deps.onBudget = (b) => { budgets.push(b); b.used = 33; };
     await at(t, iso('09:52'));
     t.deps.onBudget = (b) => { budgets.push(b); };
     q(t.storeDb, "UPDATE orders SET status = 'cancelled' WHERE id = ?", orderId); // however it happened

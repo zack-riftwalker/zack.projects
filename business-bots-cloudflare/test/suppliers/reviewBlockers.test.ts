@@ -17,7 +17,7 @@ async function deferredDelivery() {
   const orderId = await buy(s.t, s.m1);
   await confirm(s.t, orderId);
   completedOrder(s.fake);
-  s.t.deps.onBudget = (b) => { budgets.push(b); b.used = 34; };
+  s.t.deps.onBudget = (b) => { budgets.push(b); b.used = 33; };
   await at(s.t, iso('09:52'));
   s.t.deps.onBudget = (b) => { budgets.push(b); };
   expect(soRow(s.t).status).toBe('completed');
