@@ -11,6 +11,8 @@ export interface CustomerProduct {
   compare_at_price?: number | null;
   // round 5 (UI_PLAN.md §7): Telegram file_id of the product photo (store bot); null = none
   photo_file_id?: string | null;
+  // round 7 (EITAA_MENU_PLAN.md §1): the word an Eitaa customer types to get this product's details
+  eitaa_keyword?: string | null;
 }
 export interface Order {
   id: number; customer_telegram_id: number; customer_product_id: number; product_name: string; price: number;
@@ -183,7 +185,7 @@ export class StoreDb {
       const row = await this.q(`
       SELECT id, name, price, terms_text, terms_entities, duration_days, warranty_days, is_active, is_available,
              group_id, option_label, sort_order, cost_toman, stock_mode, pricing_mode, markup_percent, markup_fixed, compare_at_price,
-             photo_file_id
+             photo_file_id, eitaa_keyword
       FROM   customer_products
       WHERE  id = ?
     `, id).first();
@@ -210,7 +212,7 @@ export class StoreDb {
   async updateCustomerProduct(id: number, patch: Partial<{
     name: string; price: number; termsText: string | null; termsEntities: any[] | null;
     durationDays: number | null; warrantyDays: number | null; isAvailable: boolean; stockMode: 'auto' | 'manual'; pricingMode: 'auto' | 'manual';
-    compareAtPrice: number | null; photoFileId: string | null;
+    compareAtPrice: number | null; photoFileId: string | null; eitaaKeyword: string | null;
   }>) {
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -226,9 +228,15 @@ export class StoreDb {
     if (patch.pricingMode !== undefined) add('pricing_mode', patch.pricingMode);
     if (patch.compareAtPrice !== undefined) add('compare_at_price', patch.compareAtPrice);
     if (patch.photoFileId !== undefined) add('photo_file_id', patch.photoFileId);
+    if (patch.eitaaKeyword !== undefined) add('eitaa_keyword', patch.eitaaKeyword);
     if (!sets.length) return { changes: 0 };
     const r = await this.q('UPDATE customer_products SET ' + sets.join(', ') + ' WHERE id = ? AND is_active = 1', ...args, id).run();
     return { changes: r.meta.changes };
+  }
+
+  /** Active products that have an Eitaa keyword (the duplicate check of the keyword button). */
+  async listEitaaKeywords(): Promise<{ id: number; name: string; eitaa_keyword: string }[]> {
+    return (await this.q('SELECT id, name, eitaa_keyword FROM customer_products WHERE is_active = 1 AND eitaa_keyword IS NOT NULL').all<{ id: number; name: string; eitaa_keyword: string }>()).results;
   }
 
   /** Active fixed-amount codes that would make `price` free (value ≥ price), including group codes of `groupId`. */

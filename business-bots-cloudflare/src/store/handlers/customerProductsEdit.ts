@@ -8,6 +8,7 @@ import { jalaliFa, scheduleSummary } from './priceScheduleAdmin';
 import { parseJalaliDateTime, tehranDateTime } from '../../lib/time';
 import { recomputeOption } from '../suppliers/recompute';
 import type { StoreContext } from '../types';
+import { keywordShapeError, normalizeKeyword } from '../../lib/keyword';
 
 const CANCEL_BTN = Markup.button.callback('❌ انصراف', 'cprod_edit_cancel');
 
@@ -15,6 +16,7 @@ const FIELD_PROMPTS: Record<string, string> = {
   name: '✏️ نام جدید محصول را وارد کنید:',
   price: '💰 قیمت جدید را به تومان وارد کنید:\n\nمثال: 1200000',
   compare: '🏷 قیمت قبل از تخفیف را به تومان وارد کنید (یا بنویسید «حذف» تا برداشته شود):',
+  eitaa: '🔑 کلمه‌ای که مشتری در ایتا می‌فرستد تا شرایط و قیمت این محصول را بگیرد (مثلاً: جمینای).\nبرای حذف بنویسید: حذف',
   photo: '🖼 عکس محصول را بفرستید (یا «حذف»).',
   terms: '📜 متن جدید شرایط و قوانین را وارد کنید:',
   duration: '⏱ مدت اشتراک را به روز وارد کنید (مثال: 30):',
@@ -57,6 +59,7 @@ export function productCardText(p: CustomerProduct, sched?: PriceSchedule | null
     '📦 وضعیت: ' + (p.is_available === 0 ? '⛔️ ناموجود' : '✅ موجود') + '\n' +
     (p.group_id != null ? '🏷 عنوان گزینه: ' + (p.option_label ?? '') + '\n' : '') +
     '⏰ قیمت زمان‌دار: ' + scheduleSummary(sched) + '\n' +
+    '🔑 کلمه‌ی ایتا: ' + (p.eitaa_keyword ?? '—') + '\n' +
     (sched?.status === 'active' ? '⚠️ جشنواره‌ی این محصول فعال است؛ با تغییر دستی قیمت، برگشت خودکار انجام نمی‌شود.\n' : '') +
     '\nکدام مورد را می‌خواهید تغییر دهید؟'
   );
@@ -70,6 +73,7 @@ function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callb
       : [Markup.button.callback('✏️ نام', 'cprod_edit_f_name'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')],
     [Markup.button.callback('🏷 قیمت قبل از تخفیف', 'cprod_edit_f_compare')],
     [Markup.button.callback('⏰ قیمت زمان‌دار', 'cprod_edit_f_sale')],
+    [Markup.button.callback('🔑 کلمه‌ی ایتا', 'cprod_edit_f_eitaa')],
     [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms'), Markup.button.callback('🖼 عکس محصول', 'cprod_edit_f_photo')],
     [Markup.button.callback('⏱ مدت اشتراک', 'cprod_edit_f_duration'), Markup.button.callback('🛡 گارانتی', 'cprod_edit_f_warranty')],
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
@@ -397,7 +401,7 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
         return;
       }
 
-      const fieldMatch = data.match(/^cprod_edit_f_(name|price|compare|photo|terms|duration|warranty|label|grpname|grpsort|sort)$/);
+      const fieldMatch = data.match(/^cprod_edit_f_(name|price|compare|eitaa|photo|terms|duration|warranty|label|grpname|grpsort|sort)$/);
       if (fieldMatch) {
         edit.field = fieldMatch[1];
         edit.termsAll = false;
@@ -601,6 +605,18 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
       } else {
         await ctx.reply('⚠️ قیمت قبل از تخفیف باید بیشتر از قیمت فعلی باشد.');
         return;
+      }
+    } else if (field === 'eitaa') {
+      const raw = text.trim();
+      if (normalizeKeyword(raw) === 'حذف') {
+        patch = { eitaaKeyword: null };
+      } else {
+        const norm = normalizeKeyword(raw);
+        const bad = keywordShapeError(norm);
+        if (bad) { await ctx.reply(bad); return; }
+        const other = (await ctx.app.db.listEitaaKeywords()).find((o) => o.id !== p.id && normalizeKeyword(o.eitaa_keyword) === norm);
+        if (other) { await ctx.reply('⚠️ محصول «' + other.name + '» همین کلمه را دارد.'); return; }
+        patch = { eitaaKeyword: raw };
       }
     } else if (field === 'name') {
       const name = text.trim();

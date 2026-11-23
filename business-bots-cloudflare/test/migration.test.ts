@@ -25,6 +25,15 @@ describe('sqlite_to_d1.py target columns', () => {
   });
 });
 
+describe('store migration 0008 (eitaa keyword)', () => {
+  it('adds a nullable eitaa_keyword to customer_products', () => {
+    const f = new FakeD1().migrate('store');
+    expect(columns(f, 'customer_products')).toContain('eitaa_keyword');
+    f.sqlite.prepare("INSERT INTO customer_products (name, price) VALUES ('p', 1)").run();
+    expect((f.sqlite.prepare('SELECT eitaa_keyword FROM customer_products').get() as any).eitaa_keyword).toBeNull();
+  });
+});
+
 describe('store migration 0007 (price schedules)', () => {
   it('creates price_schedules with its defaults, status check and indexes', () => {
     const f = new FakeD1().migrate('store');
