@@ -1000,6 +1000,46 @@ export class StoreDb {
     return { reverted: a.meta.changes, finished: b.meta.changes };
   }
 
+  /** the product's pending or active schedule (at most one: creation is guarded) */
+  async getOpenSchedule(productId: number): Promise<PriceSchedule | null> {
+    return (await this.q("SELECT * FROM price_schedules WHERE product_id = ? AND status IN ('pending', 'active') LIMIT 1", productId).first<PriceSchedule>()) ?? null;
+  }
+
+  async getScheduleById(id: number): Promise<(PriceSchedule & { product_name: string | null; current_price: number | null }) | null> {
+    return (await this.q(`SELECT s.*, (SELECT name FROM customer_products WHERE id = s.product_id) AS product_name,
+      (SELECT price FROM customer_products WHERE id = s.product_id) AS current_price FROM price_schedules s WHERE s.id = ?`, id).first<any>()) ?? null;
+  }
+
+  /** Inserts a pending schedule unless the product already has a pending/active one. true = inserted. */
+  async createSchedule(p: { productId: number; salePrice: number; startsAt: string; endsAt: string }): Promise<boolean> {
+    const r = await this.q(
+      `INSERT INTO price_schedules (product_id, sale_price, starts_at, ends_at) SELECT ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM price_schedules WHERE product_id = ? AND status IN ('pending', 'active'))`,
+      p.productId, p.salePrice, p.startsAt, p.endsAt, p.productId).run();
+    return r.meta.changes === 1;
+  }
+
+  /**
+   * The admin's cancel. pending → cancelled. active → the guarded revert + cancelled in ONE batch.
+   * 'gone' = the schedule is no longer pending/active (the cron or someone else got there first).
+   */
+  async cancelSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price' | 'status'>): Promise<'cancelled' | 'reverted' | 'not_reverted' | 'gone'> {
+    if (sch.status === 'pending') {
+      const r = await this.q("UPDATE price_schedules SET status = 'cancelled' WHERE id = ? AND status = 'pending'", sch.id).run();
+      return r.meta.changes === 1 ? 'cancelled' : 'gone';
+    }
+    const [a, b] = await this.db.batch([
+      this.q(REVERT_SALE_SQL, sch.normal_price, sch.product_id, sch.sale_price, sch.normal_price),
+      this.q("UPDATE price_schedules SET status = 'cancelled' WHERE id = ? AND status = 'active'", sch.id),
+    ]);
+    if (b.meta.changes !== 1) return 'gone';
+    if (a.meta.changes !== 1) {
+      await this.setScheduleNote(sch.id, 'price changed by hand; not reverted');
+      return 'not_reverted';
+    }
+    return 'reverted';
+  }
+
   async setScheduleNote(id: number, note: string): Promise<void> {
     await this.q('UPDATE price_schedules SET note = ? WHERE id = ?', note, id).run();
   }

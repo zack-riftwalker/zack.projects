@@ -3,7 +3,9 @@ import { Markup } from '../../lib/markup';
 import { processBroadcastBatch } from '../broadcast';
 import { adminProductLabel, buildPagedKeyboard, formatPrice, parsePrice, productPickerKeyboard } from '../utils';
 import { parseDays, productNameError } from './customerProducts';
-import type { CustomerProduct } from '../db';
+import type { CustomerProduct, PriceSchedule } from '../db';
+import { jalaliFa, scheduleSummary } from './priceScheduleAdmin';
+import { parseJalaliDateTime, tehranDateTime } from '../../lib/time';
 import { recomputeOption } from '../suppliers/recompute';
 import type { StoreContext } from '../types';
 
@@ -42,7 +44,7 @@ function groupPickerKb(groups: { id: number; name: string }[], page: number) {
   return kb;
 }
 
-export function productCardText(p: CustomerProduct): string {
+export function productCardText(p: CustomerProduct, sched?: PriceSchedule | null): string {
   return (
     '✏️ ویرایش محصول\n\n' +
     '📦 نام: ' + p.name + '\n' +
@@ -54,6 +56,8 @@ export function productCardText(p: CustomerProduct): string {
     '🛡 گارانتی: ' + (p.warranty_days ? p.warranty_days + ' روز' : 'ندارد') + '\n' +
     '📦 وضعیت: ' + (p.is_available === 0 ? '⛔️ ناموجود' : '✅ موجود') + '\n' +
     (p.group_id != null ? '🏷 عنوان گزینه: ' + (p.option_label ?? '') + '\n' : '') +
+    '⏰ قیمت زمان‌دار: ' + scheduleSummary(sched) + '\n' +
+    (sched?.status === 'active' ? '⚠️ جشنواره‌ی این محصول فعال است؛ با تغییر دستی قیمت، برگشت خودکار انجام نمی‌شود.\n' : '') +
     '\nکدام مورد را می‌خواهید تغییر دهید؟'
   );
 }
@@ -65,6 +69,7 @@ function cardKb(p: CustomerProduct, extra: ReturnType<typeof Markup.button.callb
       ? [Markup.button.callback('🏷 عنوان گزینه', 'cprod_edit_f_label'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')]
       : [Markup.button.callback('✏️ نام', 'cprod_edit_f_name'), Markup.button.callback('💰 قیمت', 'cprod_edit_f_price')],
     [Markup.button.callback('🏷 قیمت قبل از تخفیف', 'cprod_edit_f_compare')],
+    [Markup.button.callback('⏰ قیمت زمان‌دار', 'cprod_edit_f_sale')],
     [Markup.button.callback('📜 شرایط', 'cprod_edit_f_terms'), Markup.button.callback('🖼 عکس محصول', 'cprod_edit_f_photo')],
     [Markup.button.callback('⏱ مدت اشتراک', 'cprod_edit_f_duration'), Markup.button.callback('🛡 گارانتی', 'cprod_edit_f_warranty')],
     [Markup.button.callback(p.is_available === 0 ? '✅ موجود کن' : '⛔️ ناموجود کن', 'cprod_edit_toggle_stock')],
@@ -116,7 +121,7 @@ async function productGone(ctx: StoreContext) {
 
 /** Shows the card as a new message (after text input) or edits the current one (after a button). */
 async function showCard(ctx: StoreContext, p: CustomerProduct, opts: { prefix?: string; edit?: boolean; extra?: any[][] } = {}) {
-  const text = (opts.prefix ? opts.prefix + '\n\n' : '') + productCardText(p);
+  const text = (opts.prefix ? opts.prefix + '\n\n' : '') + productCardText(p, await ctx.app.db.getOpenSchedule(p.id));
   // a manual stock setting on an option with supplier sources can be handed back to the supplier
   const canAutoStock = p.stock_mode === 'manual' && (await ctx.app.raw.prepare(
     'SELECT 1 AS x FROM product_sources WHERE customer_product_id = ? LIMIT 1').bind(p.id).first()) !== null;
@@ -150,6 +155,84 @@ function parseSortOrder(text: string): number | null {
   if (!/^\d{1,3}$/.test(normalised)) return null;
   const n = Number(normalised);
   return n <= 999 ? n : null;
+}
+
+const SALE_BACK_KB = Markup.inlineKeyboard([[Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')]]);
+const SALE_MAX_AHEAD_MS = 30 * 86_400_000;
+const SALE_PAST_GRACE_MS = 5 * 60_000;
+const localMs = (s: string) => Date.parse(s.replace(' ', 'T') + 'Z'); // both sides are Tehran wall-clock strings
+
+/** The three text steps of «⏰ قیمت زمان‌دار»: price → start → end → insert. */
+async function handleSaleStep(ctx: StoreContext, p: CustomerProduct, field: string, text: string) {
+  const edit = ctx.wizard.state.edit;
+  const nowLocal = tehranDateTime(ctx.app.apps.now());
+  if (field === 'salePrice') {
+    const price = parsePrice(text.replace(/٬/g, ''));
+    if (!Number.isInteger(price) || price <= 0 || price >= p.price) {
+      await ctx.reply('⚠️ قیمت جشنواره باید کمتر از قیمت فعلی باشد.', SALE_BACK_KB);
+      return;
+    }
+    edit.salePrice = price;
+    edit.field = 'saleStart';
+    await ctx.reply('⏰ زمان شروع را بنویسید (به وقت تهران)، مثلاً:\n۱۴۰۵/۰۹/۰۵ ۲۰:۰۰', SALE_BACK_KB);
+    return;
+  }
+  const parsed = parseJalaliDateTime(text);
+  if (field === 'saleStart') {
+    if (!parsed) {
+      await ctx.reply('⚠️ زمان نامعتبر است. مثال: ۱۴۰۵/۰۹/۰۵ ۲۰:۰۰', SALE_BACK_KB);
+      return;
+    }
+    const diff = localMs(parsed) - localMs(nowLocal);
+    if (diff < -SALE_PAST_GRACE_MS) {
+      await ctx.reply('⚠️ زمان شروع گذشته است.', SALE_BACK_KB);
+      return;
+    }
+    if (diff > SALE_MAX_AHEAD_MS) {
+      await ctx.reply('⚠️ زمان شروع نباید بیشتر از ۳۰ روز آینده باشد.', SALE_BACK_KB);
+      return;
+    }
+    edit.saleStart = diff < 0 ? nowLocal : parsed; // up to 5 minutes back means «now»
+    edit.field = 'saleEnd';
+    await ctx.reply('⏰ زمان پایان را بنویسید (به وقت تهران)، مثلاً:\n۱۴۰۵/۰۹/۰۷ ۲۳:۵۹', SALE_BACK_KB);
+    return;
+  }
+  // saleEnd
+  if (!parsed) {
+    await ctx.reply('⚠️ زمان نامعتبر است. مثال: ۱۴۰۵/۰۹/۰۷ ۲۳:۵۹', SALE_BACK_KB);
+    return;
+  }
+  const start: string | undefined = edit.saleStart;
+  const sale: number | undefined = edit.salePrice;
+  if (!start || !sale) {
+    edit.field = null;
+    await ctx.reply('⚠️ ابتدا دکمه‌ی «⏰ قیمت زمان‌دار» را بزنید.');
+    return;
+  }
+  if (localMs(parsed) <= localMs(start)) {
+    await ctx.reply('⚠️ زمان پایان باید بعد از زمان شروع باشد.', SALE_BACK_KB);
+    return;
+  }
+  if (localMs(parsed) - localMs(start) > SALE_MAX_AHEAD_MS) {
+    await ctx.reply('⚠️ مدت جشنواره نباید بیشتر از ۳۰ روز باشد.', SALE_BACK_KB);
+    return;
+  }
+  if (p.pricing_mode === 'auto' || sale >= p.price) {
+    edit.field = null;
+    await ctx.reply('⚠️ قیمت محصول در این بین عوض شده است؛ دوباره از اول شروع کنید.');
+    return;
+  }
+  const created = await ctx.app.db.createSchedule({ productId: p.id, salePrice: sale, startsAt: start, endsAt: parsed });
+  edit.field = null;
+  edit.salePrice = null;
+  edit.saleStart = null;
+  if (!created) {
+    await ctx.reply('⚠️ این محصول از قبل یک قیمت زمان‌دار (در انتظار یا فعال) دارد.');
+    return;
+  }
+  await showCard(ctx, (await loadProduct(ctx))!, {
+    prefix: '✅ ثبت شد: «' + p.name + '» از ' + jalaliFa(start) + ' تا ' + jalaliFa(parsed) + ' با قیمت ' + formatPrice(sale) + ' تومان.',
+  });
 }
 
 export const customerProductsEditWizard = new WizardScene<StoreContext>(
@@ -285,6 +368,28 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
           FIELD_PROMPTS.terms + '\n\nاین شرایط برای همه‌ی گزینه‌های «' + (group?.name ?? '') + '» ذخیره می‌شود.',
           Markup.inlineKeyboard([[Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')]]),
         );
+        return;
+      }
+
+      if (data === 'cprod_edit_f_sale') {
+        edit.termsAll = false;
+        await ctx.answerCallbackQuery();
+        const open = await ctx.app.db.getOpenSchedule(p.id);
+        if (open) {
+          edit.field = null;
+          await ctx.reply('⏰ قیمت زمان‌دار «' + p.name + '»:\n' + scheduleSummary(open), Markup.inlineKeyboard([
+            [Markup.button.callback('🗑 لغو', 'psched_cancel_' + open.id)],
+            [Markup.button.callback('🔙 بازگشت', 'cprod_edit_menu')],
+          ]));
+          return;
+        }
+        if (p.pricing_mode === 'auto') {
+          edit.field = null;
+          await ctx.reply('⚠️ قیمت این محصول خودکار (از تأمین‌کننده) است؛ قیمت زمان‌دار برایش ممکن نیست.');
+          return;
+        }
+        edit.field = 'salePrice';
+        await ctx.reply('💰 قیمت جشنواره را بنویسید (تومان):', SALE_BACK_KB);
         return;
       }
 
@@ -473,6 +578,11 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
       edit.field = null;
       await showCard(ctx, (await loadProduct(ctx))!, { prefix: '✅ ذخیره شد.' });
       return;
+    }
+
+    // ── scheduled sale price (PRICE_SCHEDULE_PLAN.md §3) ─────────────────────
+    if (field === 'salePrice' || field === 'saleStart' || field === 'saleEnd') {
+      return handleSaleStep(ctx, p, field, text);
     }
 
     let patch: Parameters<typeof applyPatch>[1];

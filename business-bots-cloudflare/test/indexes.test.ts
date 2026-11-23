@@ -43,6 +43,7 @@ describe('store hot queries use indexes', () => {
     ['active products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id ASC', []],
     ['customer batch', 'SELECT id, telegram_id FROM customers WHERE id > ? ORDER BY id LIMIT ?', [0, 40]],
     ['due price schedules', DUE_SCHEDULES_SQL, ['2026-01-01 00:00:00', '2026-01-01 00:00:00']],
+    ['open schedule of a product', "SELECT * FROM price_schedules WHERE product_id = ? AND status IN ('pending', 'active') LIMIT 1", [1]],
     ['running broadcast', RUNNING_BROADCAST_SQL, ['2026-01-01 00:00:00']],
     ['scheduled broadcasts', SCHEDULED_BROADCASTS_SQL, ['2026-01-01 00:00:00', 10]],
     ['session read', 'SELECT value FROM sessions WHERE key = ?', ['k']],

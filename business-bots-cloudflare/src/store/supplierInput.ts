@@ -9,7 +9,7 @@ export type SupplierInputKind = NonNullable<StoreSession['awaitingSupplierInput'
 export const KEY_INPUT_KINDS: readonly string[] = ['sup_key', 'sup_key_edit'];
 
 /** Callbacks that work while an admin is mid-wizard; every other callback belongs to the wizard (or ends a supplier prompt). */
-export const STAGE_BYPASS_RE = /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+|fo_\w+|sup_\w+|stk_\w+|acct_show_\d+|ann_sched_cancel_\d+)$/;
+export const STAGE_BYPASS_RE = /^(order_(confirm|reject|deliver)_\d+|order_rejr_\d+_[a-z]+|rpt_\w+|ref_adm_\w+|fo_\w+|sup_\w+|stk_\w+|acct_show_\d+|ann_sched_cancel_\d+|psched_\w+)$/;
 
 /**
  * Opens a supplier text prompt. The prompt leaves any active scene: the supplier text handler runs before the
