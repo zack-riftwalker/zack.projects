@@ -75,6 +75,13 @@ export const DUE_SCHEDULES_SQL = `SELECT s.*, (SELECT name FROM customer_product
   (SELECT price FROM customer_products WHERE id = s.product_id) AS current_price
   FROM price_schedules s WHERE (s.status = 'pending' AND s.starts_at <= ?) OR (s.status = 'active' AND s.ends_at <= ?) ORDER BY s.id LIMIT 4`;
 /** claims a pending schedule and remembers the product's price AND compare_at_price; RETURNING gives the claimed normal price */
+/** the Eitaa auto-reply's product read (EITAA_MENU_PLAN.md §2.2) */
+export const EITAA_PRODUCTS_SQL = `SELECT p.id, p.name, p.price, p.compare_at_price, p.is_available, p.terms_text, p.terms_entities, p.eitaa_keyword,
+       p.group_id, p.sort_order, p.duration_days, g.sort_order AS group_sort
+FROM customer_products p LEFT JOIN product_groups g ON g.id = p.group_id
+WHERE p.is_active = 1`;
+export const EITAA_KEYWORDS_SQL = 'SELECT id, name, eitaa_keyword FROM customer_products WHERE is_active = 1 AND eitaa_keyword IS NOT NULL';
+
 export const CLAIM_SCHEDULE_SQL = "UPDATE price_schedules SET status = 'active', normal_price = (SELECT price FROM customer_products WHERE id = ?), normal_compare_at = (SELECT compare_at_price FROM customer_products WHERE id = ?) WHERE id = ? AND status = 'pending' RETURNING normal_price";
 export const APPLY_SALE_SQL = "UPDATE customer_products SET compare_at_price = price, price = ? WHERE id = ? AND is_active = 1 AND pricing_mode = 'manual' AND price > ? AND EXISTS (SELECT 1 FROM price_schedules WHERE id = ? AND status = 'active')";
 /** claimed but the sale is not on the product (nothing applied): close it in the same batch, so an `active` row never exists without its sale */
@@ -234,9 +241,15 @@ export class StoreDb {
     return { changes: r.meta.changes };
   }
 
+  /** Active products for the Eitaa auto-reply, with their group's sort order (one statement; ordered in code like the catalog). */
+  async getEitaaProducts(): Promise<(CustomerProduct & { group_sort: number | null })[]> {
+    const r = await this.q(EITAA_PRODUCTS_SQL).all();
+    return r.results.map((x) => this.parseProductRow(x)!) as (CustomerProduct & { group_sort: number | null })[];
+  }
+
   /** Active products that have an Eitaa keyword (the duplicate check of the keyword button). */
   async listEitaaKeywords(): Promise<{ id: number; name: string; eitaa_keyword: string }[]> {
-    return (await this.q('SELECT id, name, eitaa_keyword FROM customer_products WHERE is_active = 1 AND eitaa_keyword IS NOT NULL').all<{ id: number; name: string; eitaa_keyword: string }>()).results;
+    return (await this.q(EITAA_KEYWORDS_SQL).all<{ id: number; name: string; eitaa_keyword: string }>()).results;
   }
 
   /** Active fixed-amount codes that would make `price` free (value ≥ price), including group codes of `groupId`. */

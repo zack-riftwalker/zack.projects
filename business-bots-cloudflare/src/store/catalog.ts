@@ -1,5 +1,6 @@
 import type { StoreApp } from '../apps';
 import type { CustomerProduct, ProductGroup } from './db';
+import type { MessageEntity } from 'grammy/types';
 import type { ButtonStyle } from '../lib/markup';
 import { catalogLabel, escapeMarkdown, formatPrice } from './utils';
 
@@ -61,6 +62,13 @@ export function priceLines(p: Pick<CustomerProduct, 'price' | 'compare_at_price'
   const percent = Math.round((1 - p.price / p.compare_at_price!) * 100);
   return '💰 قیمت عادی: ' + formatPrice(p.compare_at_price!) + ' تومان\n' +
     '🔥 قیمت ویژه: ' + formatPrice(p.price) + ' تومان (' + percent.toLocaleString('fa-IR') + '٪ تخفیف)';
+}
+
+/** The strikethrough entity over the old price inside `prices` (the priceLines text placed at `base`), or null when no compare-at price applies. */
+export function priceStrikeEntity(p: Pick<CustomerProduct, 'price' | 'compare_at_price'>, prices: string, base: number): MessageEntity | null {
+  if (!hasCompareAt(p)) return null;
+  const old = formatPrice(p.compare_at_price!) + ' تومان';
+  return { type: 'strikethrough', offset: base + prices.indexOf(old), length: old.length };
 }
 
 export function optionButtonLabel(p: CustomerProduct): string {

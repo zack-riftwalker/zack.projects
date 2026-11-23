@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FakeD1 } from './helpers/fakeD1';
 import { CLAIM_DRAFTS_SQL_PREFIX, DISCOUNT_REVENUE_SQL, DUE_DRAFTS_SQL, HAS_ORDER_SINCE_SQL, LINK_GIFTS_SQL, PENDING_GIFTS_SQL, RESET_GIFTS_SQL, PURGE_DRAFTS_SQL, RUNNING_BROADCAST_SQL, SCHEDULED_BROADCASTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
-import { DUE_SCHEDULES_SQL } from '../src/store/db';
+import { DUE_SCHEDULES_SQL, EITAA_KEYWORDS_SQL, EITAA_PRODUCTS_SQL } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
@@ -100,6 +100,8 @@ describe('supplier hot queries use indexes', () => {
       WHERE s.customer_product_id = ? ORDER BY s.priority, s.id`, [1]],
     ['sources of a supplier (apply)', 'SELECT s.id FROM product_sources s WHERE s.supplier_id = ? ORDER BY s.id', [1]],
     ['options of a group', 'SELECT id FROM customer_products WHERE group_id = ? AND is_active = 1', [1]],
+    ['eitaa products', EITAA_PRODUCTS_SQL, []],
+    ['eitaa keywords', EITAA_KEYWORDS_SQL, []],
     ['catalog products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id', []],
     // the real queries of the code, not copies of them
     ['supplier fetch due', SUPPLIERS_DUE_SQL, [1, 'x']],
