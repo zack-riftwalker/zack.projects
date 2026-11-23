@@ -14,6 +14,8 @@ import type { MonshiCtx } from '../types';
 import { adminGuard, cancelButton, clearWizardStates, commandArgs, commandRest, safeEdit } from './common';
 import * as faqAdmin from './faqAdmin';
 import * as orderAdmin from './orderAdmin';
+import { buildMenu, buildProductReply, DEFAULT_GREETING, loadEitaaProducts } from '../eitaa/menu';
+import { sendEitaaToSelf } from '../eitaa/poll';
 
 export const DAY_ALIASES: Record<string, string> = {
   sat: 'sat', 'شنبه': 'sat',
@@ -472,6 +474,7 @@ async function settingsHubView(app: MonshiApp) {
       [Markup.button.callback('✉️ پیام غیرکاری', 'st_after_hours')],
       [Markup.button.callback('👋 پیام خوش‌آمد', 'st_greeting')],
       [Markup.button.callback('⏱ فاصله «دریافت شد»', 'st_cooldown')],
+      [Markup.button.callback('📗 منوی ایتا', 'st_eitaa_menu')],
       [Markup.button.callback('🧠 Gemini', 'st_gemini')],
       [Markup.button.callback(`🗂 دسته‌بندی پیام‌ها (${topicsOn ? 'فعال ✅' : 'خاموش 🚫'})`, 'st_toggle_topics')],
       [Markup.button.callback(`👁 خوانده‌شدن خودکار (${markReadOn ? 'فعال ✅' : 'خاموش 🚫'})`, 'st_toggle_markread')],
@@ -501,6 +504,40 @@ async function greetingView(app: MonshiApp) {
       [Markup.button.callback('🔙 بازگشت به تنظیمات', 'st_back')],
     ]),
   };
+}
+
+async function eitaaMenuView(app: MonshiApp) {
+  const on = (await app.ctx.getSetting('eitaa_auto_enabled')) === '1';
+  const greeting = (await app.ctx.getSetting('eitaa_menu_greeting')) || DEFAULT_GREETING;
+  return {
+    text: '📗 جواب خودکار ایتا (' + (on ? 'روشن ✅' : 'خاموش 🚫') + ')\n\nخط اول منو:\n' + greeting
+      + '\n\nکلمه‌ی هر محصول را در ربات استور ← ویرایش محصول ← «🔑 کلمه‌ی ایتا» تنظیم کنید.',
+    markup: Markup.inlineKeyboard([
+      [Markup.button.callback(on ? '🚫 خاموش کردن' : '✅ روشن کردن', 'st_toggle_eitaa_auto')],
+      [Markup.button.callback('✏️ ویرایش خط اول', 'st_edit:eitaa_menu_greeting')],
+      [Markup.button.callback('🧪 پیش‌نمایش در ایتا', 'st_eitaa_preview')],
+      [Markup.button.callback('🔙 بازگشت به تنظیمات', 'st_back')],
+    ]),
+  };
+}
+
+/** Sends the menu and the first keyword product's reply to the owner's Eitaa Saved Messages; returns the callback answer. */
+async function eitaaPreview(app: MonshiApp): Promise<{ text: string; alert: boolean }> {
+  try {
+    const products = await loadEitaaProducts(app);
+    if (!products) return { text: '❌ ربات استور تنظیم نشده است.', alert: true };
+    const greeting = (await app.ctx.getSetting('eitaa_menu_greeting')) || DEFAULT_GREETING;
+    const menu = buildMenu(greeting, products);
+    await sendEitaaToSelf(app, menu.text, menu.entities);
+    const first = products.find((p) => p.eitaa_keyword?.trim());
+    if (first) {
+      const reply = buildProductReply(first);
+      await sendEitaaToSelf(app, reply.text, reply.entities);
+    }
+    return { text: '✅ در Saved Messages ایتا ببینید', alert: false };
+  } catch (err: any) {
+    return { text: ('❌ ' + (err?.message ?? 'خطا')).slice(0, 190), alert: true };
+  }
 }
 
 async function cooldownView(app: MonshiApp) {
@@ -550,7 +587,7 @@ export const onSettingsCallback = adminGuard(async (ctx) => {
   const noKeyAlert = data === 'st_toggle_gemini' && !app.cfg.geminiKey;
   // turning topics ON answers itself (success toast or the BotFather alert)
   const topicsTurningOn = data === 'st_toggle_topics' && (await app.ctx.getSetting('topics_enabled')) !== '1';
-  if (!noKeyAlert && !topicsTurningOn) await ctx.answerCallbackQuery();
+  if (!noKeyAlert && !topicsTurningOn && data !== 'st_eitaa_preview') await ctx.answerCallbackQuery();
 
   const show = async (v: { text: string; markup: { reply_markup: any } }) => safeEdit(ctx, v.text, v.markup);
 
@@ -565,6 +602,17 @@ export const onSettingsCallback = adminGuard(async (ctx) => {
   }
   if (data === 'st_after_hours') return show(await afterHoursView(app));
   if (data === 'st_greeting') return show(await greetingView(app));
+  if (data === 'st_eitaa_menu') return show(await eitaaMenuView(app));
+  if (data === 'st_toggle_eitaa_auto') {
+    const on = (await app.ctx.getSetting('eitaa_auto_enabled')) === '1';
+    await app.ctx.setSetting('eitaa_auto_enabled', on ? '0' : '1');
+    return show(await eitaaMenuView(app));
+  }
+  if (data === 'st_eitaa_preview') {
+    const r = await eitaaPreview(app);
+    await ctx.answerCallbackQuery({ text: r.text, show_alert: r.alert });
+    return;
+  }
   if (data === 'st_toggle_greeting') {
     const enabled = (await app.ctx.getSetting('greeting_enabled')) === '1';
     await app.ctx.setSetting('greeting_enabled', enabled ? '0' : '1');
@@ -626,6 +674,7 @@ export const onSettingsCallback = adminGuard(async (ctx) => {
     const key = data.split(':', 2)[1];
     clearWizardStates(ctx.session);
     ctx.session.settings_edit = { key };
+    if (key === 'eitaa_menu_greeting') return safeEdit(ctx, '✏️ خط اول منوی ایتا را بفرست (مثلاً: سلام 👋 خوش اومدید):', cancelButton());
     const label = key === 'after_hours_message' ? 'پیام غیرکاری' : 'پیام خوش‌آمد';
     return safeEdit(ctx, `✏️ متن جدید «${label}» را بفرست:\n(عبارت {sales_bot} خودکار جایگزین می‌شود)`, cancelButton());
   }
@@ -636,6 +685,12 @@ export async function onSettingsEditText(ctx: MonshiCtx): Promise<boolean> {
   const state = ctx.session.settings_edit;
   if (!state) return false;
   const text = ctx.message?.text ?? '';
+  if (state.key === 'eitaa_menu_greeting') {
+    await ctx.app.ctx.setSetting(state.key, text.trim().slice(0, 200) || DEFAULT_GREETING);
+    delete ctx.session.settings_edit;
+    await ctx.reply('✅ خط اول منوی ایتا به‌روز شد.');
+    return true;
+  }
   await ctx.app.ctx.setSetting(state.key, text);
   if (state.key === 'greeting_message') await ctx.app.ctx.setSetting('greeting_enabled', '1');
   delete ctx.session.settings_edit;

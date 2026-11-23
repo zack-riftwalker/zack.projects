@@ -161,3 +161,14 @@ export async function sendEitaaText(app: MonshiApp, chatId: number, text: string
   // unknown id: store under a unique negative one so the row can't collide with a real message
   return typeof id === 'number' ? id : -Date.now();
 }
+
+/** Preview: the same message sent to the owner's own Eitaa «Saved Messages» (inputPeerSelf). Throws EitaaError. */
+export async function sendEitaaToSelf(app: MonshiApp, text: string, entities?: MessageEntity[]): Promise<void> {
+  const s = await loadSession(app);
+  if (!s) throw new EitaaError('ایتا وصل نیست (/eitaa)');
+  const ents = toEitaaEntities(entities);
+  await call(app, s, 'messages.sendMessage', {
+    flags: ents.length ? 8 : 0, peer: { _: 'inputPeerSelf' }, message: text, random_id: randomLong(),
+    ...(ents.length ? { entities: ents } : {}),
+  });
+}
