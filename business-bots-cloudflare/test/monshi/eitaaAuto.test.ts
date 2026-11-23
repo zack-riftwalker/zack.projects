@@ -46,6 +46,10 @@ const pollLeft = async (t: TestEnv): Promise<number> => { const m = t.apps().mon
 const notifs = (t: TestEnv) => t.tg.texts(OWNER.id).filter((x) => x.includes('📗'));
 const ownerPaused = (t: TestEnv) => one(t.monshiDb, 'SELECT automation_paused_until AS p FROM customers WHERE chat_id = ?', -CUSTOMER)?.p;
 
+// a known customer who already got the automatic menu within the last 24 h
+const menuSentRecently = (t: TestEnv, at = '2999-01-01T00:00:00.000Z') =>
+  q(t.monshiDb, "INSERT INTO reply_log (chat_id, reply_key, sent_at) VALUES (?, 'eitaa_menu_auto', ?)", -CUSTOMER, at);
+
 describe('Eitaa auto-reply: switches', () => {
   it('feature off → nothing sent, normal notification', async () => {
     const { t, e } = await setup({ auto: false });
@@ -113,7 +117,7 @@ describe('Eitaa auto-reply: matching', () => {
 
   it('«شرایط جمینای» → the product reply with the terms entities converted', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'شرایط جمینای']]);
     ack(e, 50);
     await t.cron();
@@ -128,7 +132,7 @@ describe('Eitaa auto-reply: matching', () => {
 
   it('«خرید جمینای» → confirmation + a purchase notification; unavailable → the other text', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'خرید جمینای'], [2, 'خرید کلود']], 3);
     ack(e, 50, 51);
     await run(t, 3);
@@ -141,7 +145,7 @@ describe('Eitaa auto-reply: matching', () => {
 
   it('prices and menu on request', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'قیمت'], [2, 'منو']], 3);
     ack(e, 50, 51);
     await run(t, 3);
@@ -161,18 +165,34 @@ describe('Eitaa auto-reply: matching', () => {
 
   it('an unrelated short message from a known customer → nothing', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'ممنون']]);
     await t.cron();
     expect(sends(e)).toHaveLength(0);
     expect(notifs(t)[0]).toContain('پیام جدید');
+  });
+
+  it('a known customer whose last menu was over 24 h ago gets it again, once', async () => {
+    const { t, e } = await setup();
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    menuSentRecently(t, '2000-01-01T00:00:00.000Z');
+    incoming(e, [[1, 'سلام گل']]);
+    ack(e, 50);
+    await t.cron();
+    expect(sends(e)).toHaveLength(1);
+    expect(sends(e)[0].message).toContain('📦 موجودی امروز');
+    expect(notifs(t)[0]).toContain('🤖 جواب خودکار رفت: منو');
+    // asking for «منو» right after doesn't resend it inside the same hour, and a plain message stays quiet
+    incoming(e, [[2, 'ممنون']]);
+    await t.cron();
+    expect(sends(e)).toHaveLength(1);
   });
 });
 
 describe('Eitaa auto-reply: limits', () => {
   it('the same keyword twice within an hour → one reply', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'جمینای'], [2, 'جمینای']], 3);
     ack(e, 50, 51);
     await run(t, 3);
@@ -182,7 +202,7 @@ describe('Eitaa auto-reply: limits', () => {
 
   it('6 different keywords within an hour → 5 replies', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     for (const [a, b] of [['جمینای'], ['چت'], ['کلود'], ['قیمت'], ['منو'], ['خرید چت']].map((x, i) => [i + 1, x[0]] as [number, string])) {
       incoming(e, [[a, b]]);
       ack(e, 60 + a);
@@ -196,7 +216,7 @@ describe('Eitaa auto-reply: limits', () => {
 describe('Eitaa auto-reply: the owner steps in', () => {
   it('the owner typing in Eitaa pauses the chat; the next keyword gets no reply', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'سلام']]);
     await t.cron();
     e.respond('updates.getDifference', difference(++pts, [eMsg(2, peerUser(CUSTOMER), 'سلام، در خدمتم', true)]));
@@ -290,13 +310,13 @@ describe('Eitaa auto-reply: budget and failures', () => {
 
   it('a failed send still notifies, and releases the claim so a retry can send', async () => {
     const { t, e } = await setup();
-    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER);
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
     incoming(e, [[1, 'جمینای']]);
     e.respond('messages.sendMessage', { _: 'rpc_error', error_code: 500, error_message: 'INTERNAL' });
     await t.cron();
     expect(notifs(t)).toHaveLength(1);
     expect(notifs(t)[0]).toContain('پیام جدید');
-    expect(q(t.monshiDb, "SELECT 1 FROM reply_log WHERE reply_key LIKE 'eitaa_%'")).toHaveLength(0);
+    expect(q(t.monshiDb, "SELECT 1 FROM reply_log WHERE reply_key LIKE 'eitaa_%' AND reply_key != 'eitaa_menu_auto'")).toHaveLength(0);
     expect(q(t.monshiDb, "SELECT 1 FROM messages WHERE direction = 'out'")).toHaveLength(0);
   });
 });

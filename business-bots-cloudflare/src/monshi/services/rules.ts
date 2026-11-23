@@ -68,9 +68,9 @@ export async function autoReplyRecentlySent(app: MonshiApp, chatId: number, repl
  * Claims the right to send this auto-reply (same cooldown as autoReplyRecentlySent, but race-free).
  * null = it went out recently, stay quiet; otherwise send it and call `release` if the send fails.
  */
-export async function claimAutoReply(app: MonshiApp, chatId: number, replyKey: string): Promise<{ release: () => Promise<void> } | null> {
+export async function claimAutoReply(app: MonshiApp, chatId: number, replyKey: string, cooldownHours?: number): Promise<{ release: () => Promise<void> } | null> {
   const previous = await app.db.getAutoReplySentAt(chatId, replyKey);
-  const cooldown = parseFloat((await app.ctx.getSetting('faq_repeat_cooldown_hours')) || '1');
+  const cooldown = cooldownHours ?? parseFloat((await app.ctx.getSetting('faq_repeat_cooldown_hours')) || '1');
   const cutoff = utcIsoNow(new Date(app.apps.now().getTime() - cooldown * 3600 * 1000));
   if (!(await app.db.claimAutoReply(chatId, replyKey, cutoff))) return null;
   return { release: () => app.db.restoreAutoReply(chatId, replyKey, previous) };

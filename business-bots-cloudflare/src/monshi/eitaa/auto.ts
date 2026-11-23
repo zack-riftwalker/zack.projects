@@ -26,7 +26,7 @@ export async function loadAutoState(app: MonshiApp): Promise<AutoState | null> {
   return { products, greeting: (await app.ctx.getSetting('eitaa_menu_greeting')) || DEFAULT_GREETING };
 }
 
-interface Planned { key: string; label: string; built: Built }
+interface Planned { key: string; label: string; built: Built; cooldownHours?: number }
 
 const plain = (text: string): Built => ({ text, entities: [] as MessageEntity[] });
 const cleanName = (n: string) => n.replace(/^[‏‎]+/, '');
@@ -47,8 +47,9 @@ export async function autoReply(
     const m = matchMessage(msg.text, state.products);
     const plan: Planned[] = [];
     const menu = (): Planned => ({ key: 'eitaa_menu', label: 'منو', built: buildMenu(state.greeting, state.products) });
-    if (msg.isNew) plan.push(menu());
-    if (m?.kind === 'menu' && !msg.isNew) plan.push(menu());
+    // every chat gets the menu with its first message, then again only after 24 h of quiet (owner's request)
+    plan.push({ ...menu(), key: 'eitaa_menu_auto', cooldownHours: 24 });
+    if (m?.kind === 'menu') plan.push(menu());
     else if (m?.kind === 'prices') plan.push({ key: 'eitaa_prices', label: 'قیمت‌ها', built: buildPrices(state.products) });
     else if (m?.kind === 'product') plan.push({ key: 'eitaa_p_' + m.product.id, label: cleanName(m.product.name), built: buildProductReply(m.product) });
     else if (m?.kind === 'buy') {
@@ -69,7 +70,8 @@ export async function autoReply(
     const sent: string[] = [];
     for (const item of plan) {
       if (room <= 0) break;
-      const claim = await rules.claimAutoReply(app, msg.chatId, item.key);
+      if (item.key === 'eitaa_menu' && sent.includes('منو')) continue; // the 24 h menu just went out
+      const claim = await rules.claimAutoReply(app, msg.chatId, item.key, item.cooldownHours);
       if (!claim) continue; // the same reply went out within the cooldown
       let id: number;
       try {
