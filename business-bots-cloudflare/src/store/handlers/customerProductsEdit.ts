@@ -172,6 +172,10 @@ async function handleSaleStep(ctx: StoreContext, p: CustomerProduct, field: stri
       await ctx.reply('⚠️ قیمت جشنواره باید کمتر از قیمت فعلی باشد.', SALE_BACK_KB);
       return;
     }
+    if (p.cost_toman != null && price < p.cost_toman) {
+      await ctx.reply('⚠️ قیمت جشنواره از قیمت خرید کمتر است.', SALE_BACK_KB);
+      return;
+    }
     edit.salePrice = price;
     edit.field = 'saleStart';
     await ctx.reply('⏰ زمان شروع را بنویسید (به وقت تهران)، مثلاً:\n۱۴۰۵/۰۹/۰۵ ۲۰:۰۰', SALE_BACK_KB);
@@ -385,7 +389,7 @@ export const customerProductsEditWizard = new WizardScene<StoreContext>(
         }
         if (p.pricing_mode === 'auto') {
           edit.field = null;
-          await ctx.reply('⚠️ قیمت این محصول خودکار (از تأمین‌کننده) است؛ قیمت زمان‌دار برایش ممکن نیست.');
+          await ctx.reply('⚠️ قیمت این محصول خودکار (از تأمین‌کننده) است؛ قیمت زمان‌دار برایش ممکن نیست.', SALE_BACK_KB);
           return;
         }
         edit.field = 'salePrice';

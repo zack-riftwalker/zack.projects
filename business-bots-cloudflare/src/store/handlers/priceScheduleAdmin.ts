@@ -19,12 +19,20 @@ export function scheduleSummary(s: Pick<PriceSchedule, 'sale_price' | 'starts_at
 export function registerPriceScheduleAdmin(bot: Bot<StoreContext>, isAdmin: (id: number | undefined) => boolean) {
   bot.callbackQuery(/^psched_cancel_(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return ctx.answerCallbackQuery('⛔️ دسترسی ندارید.');
-    const sch = await ctx.app.db.getScheduleById(parseInt(ctx.match![1], 10));
+    let sch = await ctx.app.db.getScheduleById(parseInt(ctx.match![1], 10));
     if (!sch || (sch.status !== 'pending' && sch.status !== 'active')) {
       await ctx.answerCallbackQuery({ text: '⚠️ این قیمت زمان‌دار دیگر فعال یا در انتظار نیست.', show_alert: true });
       return;
     }
-    const result = await ctx.app.db.cancelSchedule(sch);
+    let result = await ctx.app.db.cancelSchedule(sch);
+    if (result === 'gone') {
+      // the start may have raced the cancel (pending → active in between): re-read and take the active path
+      const fresh = await ctx.app.db.getScheduleById(sch.id);
+      if (fresh?.status === 'active') {
+        sch = fresh;
+        result = await ctx.app.db.cancelSchedule(fresh);
+      }
+    }
     if (result === 'gone') {
       await ctx.answerCallbackQuery({ text: '⚠️ این قیمت زمان‌دار دیگر فعال یا در انتظار نیست.', show_alert: true });
       return;

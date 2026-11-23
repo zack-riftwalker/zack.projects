@@ -83,14 +83,14 @@ async function productBackTarget(ctx: StoreContext, product: CustomerProduct): P
   return 'cust_catalog_page_0';
 }
 
-async function showProduct(ctx: StoreContext, product: CustomerProduct) {
+async function showProduct(ctx: StoreContext, product: CustomerProduct, prefix = '') {
   // A fresh product selection supersedes any half-finished discount-code entry.
   ctx.session.awaitingDiscountCodeFor = null;
   const back = Markup.button.callback('🔙 بازگشت', await productBackTarget(ctx, product));
 
   if (product.is_available === 0) {
     await showScreen(ctx,
-      '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
+      prefix + '⛔️ «' + product.name + '» فعلاً ناموجود است.\n\n' +
       'می‌توانید عضو لیست انتظار شوید تا به‌محض موجود شدن خبرتان کنیم.',
       Markup.inlineKeyboard([
         [Markup.button.callback('🔔 موجود شد خبرم کن', 'waitlist_join_' + product.id, 'primary')],
@@ -101,7 +101,9 @@ async function showProduct(ctx: StoreContext, product: CustomerProduct) {
   }
 
   const makeHead = () => {
-    const head = new RichText().add('📦 ').add(product.name, { bold: true }).add('\n');
+    const head = new RichText();
+    if (prefix) head.add(prefix);
+    head.add('📦 ').add(product.name, { bold: true }).add('\n');
     const prices = priceLines(product);
     if (hasCompareAt(product)) {
       // the normal price is struck through (an entity, so no Markdown escaping is involved)
@@ -190,6 +192,7 @@ async function showAgreeScreen(ctx: StoreContext, product: CustomerProduct, fina
     productName: product.name,
     price: finalPrice,
     discountCodeId,
+    basePrice: product.price,
   };
 
   const head = new RichText();
@@ -571,6 +574,13 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
 
     const pending = ctx.session?.pendingPurchase;
     const usePending = pending && pending.productId === product.id;
+    // a scheduled sale started or ended since the agree screen: never lock in the stale price
+    if (usePending && pending.basePrice !== product.price) {
+      ctx.session.pendingPurchase = null;
+      await ctx.answerCallbackQuery();
+      await showProduct(ctx, product, '⚠️ قیمت این محصول تغییر کرده است؛ لطفاً دوباره بررسی کنید.\n\n');
+      return;
+    }
 
     ctx.session.awaitingReceiptFor = {
       productId: product.id,

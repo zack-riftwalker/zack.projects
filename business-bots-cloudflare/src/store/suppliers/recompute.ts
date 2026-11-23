@@ -77,7 +77,9 @@ export async function recomputeOption(app: StoreApp, productId: number, env?: Re
 
   if (change.priceChanged || change.availChanged || cost !== row.cost_toman) {
     await app.raw.prepare(
-      'UPDATE customer_products SET price = ?, is_available = ?, cost_toman = ?, price_updated_at = CASE WHEN ? = 1 THEN ? ELSE price_updated_at END WHERE id = ?',
+      // a manual product's price is never rewritten here: a scheduled sale (or the admin) may have changed it since the read above
+      `UPDATE customer_products SET price = CASE WHEN pricing_mode = 'auto' THEN ? ELSE price END, is_available = ?, cost_toman = ?,
+        price_updated_at = CASE WHEN ? = 1 THEN ? ELSE price_updated_at END WHERE id = ?`,
     ).bind(newPrice, newAvail, cost, change.priceChanged ? 1 : 0, now, productId).run();
   }
   return change;

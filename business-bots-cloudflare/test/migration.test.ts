@@ -28,7 +28,7 @@ describe('sqlite_to_d1.py target columns', () => {
 describe('store migration 0007 (price schedules)', () => {
   it('creates price_schedules with its defaults, status check and indexes', () => {
     const f = new FakeD1().migrate('store');
-    expect(columns(f, 'price_schedules')).toEqual(['id', 'product_id', 'sale_price', 'normal_price', 'starts_at', 'ends_at', 'status', 'note', 'created_at']);
+    expect(columns(f, 'price_schedules')).toEqual(['id', 'product_id', 'sale_price', 'normal_price', 'normal_compare_at', 'starts_at', 'ends_at', 'status', 'note', 'created_at']);
     f.sqlite.prepare("INSERT INTO price_schedules (product_id, sale_price, starts_at, ends_at) VALUES (1, 100, '2026-11-26 20:00:00', '2026-11-27 20:00:00')").run();
     const row = f.sqlite.prepare('SELECT * FROM price_schedules').get() as any;
     expect(row.status).toBe('pending');

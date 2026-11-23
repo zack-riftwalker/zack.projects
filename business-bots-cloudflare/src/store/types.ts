@@ -8,6 +8,8 @@ export interface PurchaseDraft {
   productName: string;
   price: number;
   discountCodeId: number | null;
+  /** the product's own price when the agree screen was built (a scheduled sale may change it before «موافقم») */
+  basePrice?: number;
   /** epoch ms when the customer agreed to the terms (receipt drafts expire, see RECEIPT_DRAFT_TTL_MS) */
   createdAt?: number;
 }

@@ -30,6 +30,7 @@ export const DISCOUNT_ERROR_LABEL: Record<string, string> = {
   already_used: 'ℹ️ شما قبلاً از این کد تخفیف استفاده کرده‌اید.',
   check_failed: '❌ خطا در بررسی کد تخفیف. لطفاً دوباره تلاش کنید.',
   below_cost: '❌ این کد برای این محصول قابل استفاده نیست.',
+  too_big: '⚠️ این کد تخفیف برای این محصول قابل استفاده نیست.',
 };
 
 export type DiscountValidation = { ok: true; discountCode: DiscountCode } | { ok: false; reason: string; startsAt?: string };
@@ -75,6 +76,9 @@ async function validateDiscountCodeRecord(
     console.error('❌ [DiscountCodes] Usage check failed — rejecting code to fail closed:', err.message);
     return { ok: false, reason: 'check_failed' };
   }
+
+  // a code stacked on a (sale) price must never make the order free
+  if (atEntry && product && applyDiscount(product.price, discountCode) <= 0) return { ok: false, reason: 'too_big' };
 
   // never below the supplier cost (SUPPLIER_PLAN.md §5.4), checked last, at code entry only
   if (atEntry && product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {

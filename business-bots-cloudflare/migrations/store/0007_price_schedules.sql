@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS price_schedules (
   product_id   INTEGER NOT NULL,
   sale_price   INTEGER NOT NULL,              -- Toman
   normal_price INTEGER,                       -- the price it replaced; set when it starts
+  normal_compare_at INTEGER,                  -- the product's compare_at_price at the start (NULL = none); restored at the end
   starts_at    TEXT    NOT NULL,              -- local Tehran
   ends_at      TEXT    NOT NULL,              -- local Tehran
   status       TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'done', 'cancelled')),

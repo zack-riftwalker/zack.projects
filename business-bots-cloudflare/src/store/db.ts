@@ -43,7 +43,7 @@ export interface BroadcastJob {
 }
 /** round 6 (PRICE_SCHEDULE_PLAN.md): a scheduled sale price; times are local Tehran strings */
 export interface PriceSchedule {
-  id: number; product_id: number; sale_price: number; normal_price: number | null;
+  id: number; product_id: number; sale_price: number; normal_price: number | null; normal_compare_at: number | null;
   starts_at: string; ends_at: string; status: 'pending' | 'active' | 'done' | 'cancelled'; note: string | null; created_at: string;
 }
 export interface CheckoutDraft { customer_telegram_id: number; product_id: number; product_name: string; price: number; created_at: string; reminded: number }
@@ -72,9 +72,13 @@ export const SCHEDULED_BROADCASTS_SQL = "SELECT id, text, audience, send_after F
 export const DUE_SCHEDULES_SQL = `SELECT s.*, (SELECT name FROM customer_products WHERE id = s.product_id) AS product_name,
   (SELECT price FROM customer_products WHERE id = s.product_id) AS current_price
   FROM price_schedules s WHERE (s.status = 'pending' AND s.starts_at <= ?) OR (s.status = 'active' AND s.ends_at <= ?) ORDER BY s.id LIMIT 4`;
-export const CLAIM_SCHEDULE_SQL = "UPDATE price_schedules SET status = 'active', normal_price = (SELECT price FROM customer_products WHERE id = ?) WHERE id = ? AND status = 'pending'";
+/** claims a pending schedule and remembers the product's price AND compare_at_price; RETURNING gives the claimed normal price */
+export const CLAIM_SCHEDULE_SQL = "UPDATE price_schedules SET status = 'active', normal_price = (SELECT price FROM customer_products WHERE id = ?), normal_compare_at = (SELECT compare_at_price FROM customer_products WHERE id = ?) WHERE id = ? AND status = 'pending' RETURNING normal_price";
 export const APPLY_SALE_SQL = "UPDATE customer_products SET compare_at_price = price, price = ? WHERE id = ? AND is_active = 1 AND pricing_mode = 'manual' AND price > ? AND EXISTS (SELECT 1 FROM price_schedules WHERE id = ? AND status = 'active')";
-export const REVERT_SALE_SQL = 'UPDATE customer_products SET price = ?, compare_at_price = NULL WHERE id = ? AND price = ? AND compare_at_price = ?';
+/** claimed but the sale is not on the product (nothing applied): close it in the same batch, so an `active` row never exists without its sale */
+export const CLOSE_UNAPPLIED_SQL = "UPDATE price_schedules SET status = 'done', note = ? WHERE id = ? AND status = 'active' AND NOT EXISTS (SELECT 1 FROM customer_products WHERE id = ? AND price = ?)";
+/** args: normal_price, normal_compare_at, product_id, sale_price, normal_price, schedule_id. Only while the sale is untouched AND the schedule is still active. */
+export const REVERT_SALE_SQL = "UPDATE customer_products SET price = ?, compare_at_price = ? WHERE id = ? AND price = ? AND compare_at_price = ? AND EXISTS (SELECT 1 FROM price_schedules WHERE id = ? AND status = 'active')";
 export const FINISH_SCHEDULE_SQL = "UPDATE price_schedules SET status = 'done' WHERE id = ? AND status = 'active'";
 export type DueSchedule = PriceSchedule & { product_name: string | null; current_price: number | null };
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
@@ -977,13 +981,21 @@ export class StoreDb {
     return (await this.q("UPDATE price_schedules SET status = 'done', note = 'expired before start' WHERE id = ? AND status = 'pending'", id).run()).meta.changes === 1;
   }
 
-  /** claim + apply in ONE batch (one transaction). Returns the `changes` of both statements. */
-  async startSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price'>): Promise<{ claimed: number; applied: number }> {
-    const [a, b] = await this.db.batch([
-      this.q(CLAIM_SCHEDULE_SQL, sch.product_id, sch.id),
+  /**
+   * claim + apply + close-if-unapplied in ONE batch (one transaction). Returns the `changes` of the first two, whether the third
+   * closed the schedule, and the normal price the claim saw.
+   */
+  async startSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price'>): Promise<{ claimed: number; applied: number; closed: number; normalPrice: number | null }> {
+    const [a, b, c] = await this.db.batch([
+      this.q(CLAIM_SCHEDULE_SQL, sch.product_id, sch.product_id, sch.id),
       this.q(APPLY_SALE_SQL, sch.sale_price, sch.product_id, sch.sale_price, sch.id),
+      this.q(CLOSE_UNAPPLIED_SQL, 'not applied: product inactive, auto-priced or already at or below the sale price', sch.id, sch.product_id, sch.sale_price),
     ]);
-    return { claimed: a.meta.changes, applied: b.meta.changes };
+    return { claimed: a.results.length, applied: b.meta.changes, closed: c.meta.changes, normalPrice: (a.results[0] as any)?.normal_price ?? null };
+  }
+
+  private revertStmt(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price' | 'normal_compare_at'>) {
+    return this.q(REVERT_SALE_SQL, sch.normal_price, sch.normal_compare_at ?? null, sch.product_id, sch.sale_price, sch.normal_price, sch.id);
   }
 
   /** the claimed schedule's sale could not be applied: close it with a reason (status-guarded) */
@@ -992,9 +1004,9 @@ export class StoreDb {
   }
 
   /** guarded revert + finish in ONE batch. `reverted` = the product was still untouched and went back to the normal price. `finished` = this call ended the schedule. */
-  async endSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price'>): Promise<{ reverted: number; finished: number }> {
+  async endSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price' | 'normal_compare_at'>): Promise<{ reverted: number; finished: number }> {
     const [a, b] = await this.db.batch([
-      this.q(REVERT_SALE_SQL, sch.normal_price, sch.product_id, sch.sale_price, sch.normal_price),
+      this.revertStmt(sch),
       this.q(FINISH_SCHEDULE_SQL, sch.id),
     ]);
     return { reverted: a.meta.changes, finished: b.meta.changes };
@@ -1023,13 +1035,13 @@ export class StoreDb {
    * The admin's cancel. pending → cancelled. active → the guarded revert + cancelled in ONE batch.
    * 'gone' = the schedule is no longer pending/active (the cron or someone else got there first).
    */
-  async cancelSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price' | 'status'>): Promise<'cancelled' | 'reverted' | 'not_reverted' | 'gone'> {
+  async cancelSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price' | 'normal_compare_at' | 'status'>): Promise<'cancelled' | 'reverted' | 'not_reverted' | 'gone'> {
     if (sch.status === 'pending') {
       const r = await this.q("UPDATE price_schedules SET status = 'cancelled' WHERE id = ? AND status = 'pending'", sch.id).run();
       return r.meta.changes === 1 ? 'cancelled' : 'gone';
     }
     const [a, b] = await this.db.batch([
-      this.q(REVERT_SALE_SQL, sch.normal_price, sch.product_id, sch.sale_price, sch.normal_price),
+      this.revertStmt(sch),
       this.q("UPDATE price_schedules SET status = 'cancelled' WHERE id = ? AND status = 'active'", sch.id),
     ]);
     if (b.meta.changes !== 1) return 'gone';
