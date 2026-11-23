@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FakeD1 } from './helpers/fakeD1';
 import { CLAIM_DRAFTS_SQL_PREFIX, DISCOUNT_REVENUE_SQL, DUE_DRAFTS_SQL, HAS_ORDER_SINCE_SQL, LINK_GIFTS_SQL, PENDING_GIFTS_SQL, RESET_GIFTS_SQL, PURGE_DRAFTS_SQL, RUNNING_BROADCAST_SQL, SCHEDULED_BROADCASTS_SQL, REMINDER_SQL, STALLED_QUERY } from '../src/store/db';
+import { DUE_SCHEDULES_SQL } from '../src/store/db';
 import { audienceFilter } from '../src/store/audience';
 import { OPEN_ORDERS_SQL } from '../src/monshi/db';
 import { CATALOG_PENDING_SQL, SUPPLIERS_DUE_SQL } from '../src/store/suppliers/sync';
@@ -16,7 +17,7 @@ import {
 
 // faqs is deliberately absent: the FAQ store is tiny (dozens of rows) and its sub-queries are indexed
 const BIG = ['orders', 'messages', 'customers', 'unanswered', 'customer_products', 'discount_code_redemptions', 'reply_log', 'sessions', 'referrals', 'referral_rewards', 'checkout_drafts', 'product_waitlist', 'notify_links',
-  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger', 'manual_purchase_claims'];
+  'product_sources', 'supplier_orders', 'fulfillment_events', 'order_deliveries', 'stock_accounts', 'stock_batches', 'wallet_ledger', 'manual_purchase_claims', 'price_schedules'];
 
 function plan(f: FakeD1, sql: string, ...args: unknown[]): string[] {
   return (f.sqlite.prepare('EXPLAIN QUERY PLAN ' + sql).all(...(args as any[])) as any[]).map((r) => String(r.detail));
@@ -41,6 +42,7 @@ describe('store hot queries use indexes', () => {
     ['redemption count', 'SELECT COUNT(*) AS n FROM discount_code_redemptions WHERE discount_code_id = ?', [1]],
     ['active products', 'SELECT id FROM customer_products WHERE is_active = 1 ORDER BY id ASC', []],
     ['customer batch', 'SELECT id, telegram_id FROM customers WHERE id > ? ORDER BY id LIMIT ?', [0, 40]],
+    ['due price schedules', DUE_SCHEDULES_SQL, ['2026-01-01 00:00:00', '2026-01-01 00:00:00']],
     ['running broadcast', RUNNING_BROADCAST_SQL, ['2026-01-01 00:00:00']],
     ['scheduled broadcasts', SCHEDULED_BROADCASTS_SQL, ['2026-01-01 00:00:00', 10]],
     ['session read', 'SELECT value FROM sessions WHERE key = ?', ['k']],

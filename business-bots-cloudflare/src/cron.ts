@@ -7,6 +7,7 @@ import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
 import { pollEitaa } from './monshi/eitaa/poll';
 import { checkStalledOrders, sendCartReminders, sendReminders } from './store/scheduler';
+import { applyPriceSchedules } from './store/priceSchedule';
 import { sweepReferralRewards } from './store/referrals';
 import { processSupplierSync } from './store/suppliers/sync';
 import { processSupplierWork } from './store/suppliers/engine';
@@ -44,6 +45,9 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
 
   if (apps.store) {
     const store = apps.store;
+
+    // first, every minute: sale prices must flip on time (PRICE_SCHEDULE_PLAN.md §2)
+    await guarded('price-schedules', () => applyPriceSchedules(store));
 
     if (t.minute % 10 === 0) {
       await guarded('stalled-orders', () => checkStalledOrders(store));

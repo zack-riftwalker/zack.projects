@@ -68,6 +68,15 @@ export const LINK_GIFTS_SQL = `UPDATE referrals SET invitee_reward_order_id = ($
 export const DISCOUNT_REVENUE_SQL = "SELECT COUNT(*) AS n, COALESCE(SUM(price), 0) AS sum FROM orders WHERE discount_code_id = ? AND status IN ('confirmed', 'delivered')";
 export const RUNNING_BROADCAST_SQL = "SELECT * FROM broadcast_jobs WHERE status = 'running' AND cancelled = 0 AND (send_after IS NULL OR send_after <= ?) ORDER BY id LIMIT 1";
 export const SCHEDULED_BROADCASTS_SQL = "SELECT id, text, audience, send_after FROM broadcast_jobs WHERE status = 'running' AND cancelled = 0 AND send_after > ? ORDER BY send_after LIMIT ?";
+/** round 6: due schedules (to start or to end) with the product's name and current price; the OR is served by the two (status, time) indexes */
+export const DUE_SCHEDULES_SQL = `SELECT s.*, (SELECT name FROM customer_products WHERE id = s.product_id) AS product_name,
+  (SELECT price FROM customer_products WHERE id = s.product_id) AS current_price
+  FROM price_schedules s WHERE (s.status = 'pending' AND s.starts_at <= ?) OR (s.status = 'active' AND s.ends_at <= ?) ORDER BY s.id LIMIT 4`;
+export const CLAIM_SCHEDULE_SQL = "UPDATE price_schedules SET status = 'active', normal_price = (SELECT price FROM customer_products WHERE id = ?) WHERE id = ? AND status = 'pending'";
+export const APPLY_SALE_SQL = "UPDATE customer_products SET compare_at_price = price, price = ? WHERE id = ? AND is_active = 1 AND pricing_mode = 'manual' AND price > ? AND EXISTS (SELECT 1 FROM price_schedules WHERE id = ? AND status = 'active')";
+export const REVERT_SALE_SQL = 'UPDATE customer_products SET price = ?, compare_at_price = NULL WHERE id = ? AND price = ? AND compare_at_price = ?';
+export const FINISH_SCHEDULE_SQL = "UPDATE price_schedules SET status = 'done' WHERE id = ? AND status = 'active'";
+export type DueSchedule = PriceSchedule & { product_name: string | null; current_price: number | null };
 export type ClaimOutcome = 'claimed' | 'already_claimed' | 'claimed_by_other' | 'invalid';
 
 const REMINDER_QUERIES: Record<string, string> = {
@@ -957,6 +966,42 @@ export class StoreDb {
     const total = await this.countAudience(audience);
     await this.q('UPDATE broadcast_jobs SET total = ? WHERE id = ?', total, id).run();
     return total;
+  }
+
+  async getDueSchedules(nowLocal: string): Promise<DueSchedule[]> {
+    return (await this.q(DUE_SCHEDULES_SQL, nowLocal, nowLocal).all<DueSchedule>()).results;
+  }
+
+  /** a pending schedule whose window passed before it could start (status-guarded: true = this call closed it) */
+  async expireSchedule(id: number): Promise<boolean> {
+    return (await this.q("UPDATE price_schedules SET status = 'done', note = 'expired before start' WHERE id = ? AND status = 'pending'", id).run()).meta.changes === 1;
+  }
+
+  /** claim + apply in ONE batch (one transaction). Returns the `changes` of both statements. */
+  async startSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price'>): Promise<{ claimed: number; applied: number }> {
+    const [a, b] = await this.db.batch([
+      this.q(CLAIM_SCHEDULE_SQL, sch.product_id, sch.id),
+      this.q(APPLY_SALE_SQL, sch.sale_price, sch.product_id, sch.sale_price, sch.id),
+    ]);
+    return { claimed: a.meta.changes, applied: b.meta.changes };
+  }
+
+  /** the claimed schedule's sale could not be applied: close it with a reason (status-guarded) */
+  async closeSchedule(id: number, note: string): Promise<void> {
+    await this.q("UPDATE price_schedules SET status = 'done', note = ? WHERE id = ? AND status IN ('active', 'pending')", note, id).run();
+  }
+
+  /** guarded revert + finish in ONE batch. `reverted` = the product was still untouched and went back to the normal price. `finished` = this call ended the schedule. */
+  async endSchedule(sch: Pick<PriceSchedule, 'id' | 'product_id' | 'sale_price' | 'normal_price'>): Promise<{ reverted: number; finished: number }> {
+    const [a, b] = await this.db.batch([
+      this.q(REVERT_SALE_SQL, sch.normal_price, sch.product_id, sch.sale_price, sch.normal_price),
+      this.q(FINISH_SCHEDULE_SQL, sch.id),
+    ]);
+    return { reverted: a.meta.changes, finished: b.meta.changes };
+  }
+
+  async setScheduleNote(id: number, note: string): Promise<void> {
+    await this.q('UPDATE price_schedules SET note = ? WHERE id = ?', note, id).run();
   }
 
   async getScheduledBroadcasts(nowLocal: string, limit: number): Promise<Pick<BroadcastJob, 'id' | 'text' | 'audience' | 'send_after'>[]> {
