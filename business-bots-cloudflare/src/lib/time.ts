@@ -34,8 +34,10 @@ export function utcIsoNow(date: Date = new Date()): string {
 }
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
+// Persian (۰-۹) and Arabic (٠-٩) digits: phone keyboards type either
 const persianToAscii = (s: string) =>
-  s.replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 0x30));
+  s.replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 0x30))
+    .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x0660 + 0x30));
 
 /** 'YYYY-MM-DD HH:MM:SS' Tehran wall clock (SQLite datetime('now','+03:30') format). */
 export function tehranDateTimeString(date: Date = new Date()): string {
@@ -50,10 +52,17 @@ export function tehranDateTime(date: Date): string {
 }
 
 export function parseJalaliDateTime(text: string): string | null {
-  const normalised = persianToAscii(String(text)).trim();
-  const match = normalised.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s+(\d{1,2}):(\d{1,2})$/);
-  if (!match) return null;
-  const [, jy, jm, jd, hh, mm] = match.map(Number);
+  // forgiving: invisible direction marks (copy-paste), «ساعت», a dash or comma between date and time, «۱۰.۳۰» or «۱۰»
+  const normalised = persianToAscii(String(text))
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\u061c\ufeff]/g, '')
+    .replace(/ساعت|[,،]/g, ' ')
+    .trim();
+  const date = /(\d{4})\s*[/\-.٫]\s*(\d{1,2})\s*[/\-.٫]\s*(\d{1,2})/;
+  const time = /(\d{1,2})(?:\s*[:.٫]\s*(\d{1,2}))?/;
+  const m1 = normalised.match(new RegExp('^' + date.source + '(?:\\s*-\\s*|\\s+)' + time.source + '$'));
+  const m2 = m1 ? null : normalised.match(new RegExp('^' + time.source + '(?:\\s*-\\s*|\\s+)' + date.source + '$'));
+  if (!m1 && !m2) return null;
+  const [jy, jm, jd, hh, mm] = (m1 ? [m1[1], m1[2], m1[3], m1[4], m1[5]] : [m2![3], m2![4], m2![5], m2![1], m2![2]]).map((x) => Number(x ?? 0));
   if (!isValidJalaaliDate(jy, jm, jd)) return null;
   if (hh > 23 || mm > 59) return null;
   const { gy, gm, gd } = toGregorian(jy, jm, jd);

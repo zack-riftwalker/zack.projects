@@ -117,6 +117,14 @@ describe('time helpers', () => {
     expect(formatJalaliDate(g!)).toBe('1405/07/14');
     expect(parseJalaliDateTime('1405/13/01 10:00')).toBeNull();
     expect(parseJalaliDateTime('garbage')).toBeNull();
+    // what phones actually send
+    for (const v of ['\u200f۱۴۰۵/۰۹/۰۵ ۱۰:۰۰', '١٤٠٥/٠٩/٠٥ ١٠:٠٠', '۱۴۰۵/۹/۵ ۱۰', '۱۴۰۵٫۰۹٫۰۵ ۱۰:۰۰', '۱۴۰۵/۰۹/۰۵ ساعت ۱۰:۰۰',
+      '۱۴۰۵/۰۹/۰۵ ۱۰.۰۰', '۱۴۰۵/۰۹/۰۵ - ۱۰:۰۰', '۱۰:۰۰ ۱۴۰۵/۰۹/۰۵', '1405-09-05 10:00', '۱۴۰۵/۰۹/۰۵، ۱۰:۰۰']) {
+      expect(parseJalaliDateTime(v), v).toBe('2026-11-26 10:00:00');
+    }
+    expect(parseJalaliDateTime('۱۴۰۵/۰۹/۰۵ ۱۹:۴۵')).toBe('2026-11-26 19:45:00');
+    expect(parseJalaliDateTime('۱۴۰۵/۰۹/۰۵')).toBeNull(); // a time is required
+    expect(parseJalaliDateTime('۱۴۰۵/۰۹/۰۵ ۱۰:۷۵')).toBeNull();
     expect(parseJalaliDateTime('1405/07/14 25:00')).toBeNull();
   });
   it('parseLocalDateTime reads Tehran wall-clock regardless of host tz', () => {
