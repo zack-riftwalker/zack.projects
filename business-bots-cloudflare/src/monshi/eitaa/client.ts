@@ -53,14 +53,19 @@ export function decodeResponse(buf: Uint8Array): any {
 async function rawCall(app: MonshiApp, cred: Credentials, method: string, params: Record<string, unknown>): Promise<any> {
   app.apps.budget.take();
   let out;
+  // cleared once the call is done: a timer left pending can keep the fast poller's Durable Object active (billed time)
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(new DOMException('The operation timed out.', 'TimeoutError')), 15000);
   try {
-    const res = await app.apps.fetch(ENDPOINT, { method: 'POST', body: encodeCall(cred, method, params), signal: AbortSignal.timeout(15000) });
+    const res = await app.apps.fetch(ENDPOINT, { method: 'POST', body: encodeCall(cred, method, params), signal: abort.signal });
     if (!res.ok) throw new EitaaError('HTTP ' + res.status);
     out = decodeResponse(new Uint8Array(await res.arrayBuffer()));
   } catch (err) {
     // network, timeout, a blocked IP or an undecodable reply: all must reach the owner's alert, not just the log
     if (err instanceof EitaaError) throw err;
     throw new EitaaError((err instanceof Error ? err.name + ': ' + err.message : String(err)).slice(0, 150));
+  } finally {
+    clearTimeout(timer);
   }
   if (out?._ === 'rpc_error' || out?._ === 'error') throw new EitaaError(String(out.error_message ?? out.text ?? 'rpc_error'));
   return out;
