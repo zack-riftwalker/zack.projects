@@ -151,3 +151,35 @@ describe('scheduled announcements: list and cancel', () => {
     expect(t.tg.texts(ADMIN.id).at(-1)).toContain('وجود ندارد');
   });
 });
+
+describe('announcements: «🛍 خرید» button', () => {
+  it('toggled on → the scheduled message carries the button, and a tap opens the product list', async () => {
+    const { t, clock } = setup(2);
+    await t.send('store', textUpdate(ADMIN, '📢 اطلاعیه‌ها'));
+    await t.send('store', callbackUpdate(ADMIN, 'ann_aud_all', { chatId: ADMIN.id }));
+    await t.send('store', textUpdate(ADMIN, 'VIP SALE'));
+    await t.send('store', callbackUpdate(ADMIN, 'announce_shop', { chatId: ADMIN.id }));
+    await t.send('store', callbackUpdate(ADMIN, 'announce_schedule', { chatId: ADMIN.id }));
+    await t.send('store', textUpdate(ADMIN, jal(min(5))));
+    clock.now = min(6);
+    await t.cron(clock.now);
+    const sent = t.tg.of('sendMessage').filter((c) => c.payload.text === 'VIP SALE');
+    expect(sent).toHaveLength(2);
+    expect(JSON.stringify(sent[0].payload.reply_markup)).toContain('ui_menu_shop');
+
+    t.tg.reset();
+    await t.send('store', callbackUpdate({ id: 100, first_name: 'c0' }, 'ui_menu_shop', { chatId: 100 }));
+    expect(t.tg.calls.some((c) => c.payload.chat_id === 100 && /sendMessage|editMessageText/.test(c.method))).toBe(true);
+  });
+
+  it('not toggled → no button (as before)', async () => {
+    const { t, clock } = setup(1);
+    await schedule(t, jal(min(5)), 'PLAIN');
+    clock.now = min(6);
+    await t.cron(clock.now);
+    const sent = t.tg.of('sendMessage').filter((c) => c.payload.text === 'PLAIN');
+    expect(sent).toHaveLength(1);
+    expect(sent[0].payload.reply_markup).toBeUndefined();
+  });
+});
+

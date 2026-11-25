@@ -33,6 +33,18 @@ const audienceKb = (cartOn: boolean) => Markup.inlineKeyboard([
 
 const CANCEL_BTN = Markup.button.callback('❌ انصراف', 'announce_cancel');
 
+// the customer's tap opens the product list (storefront's ui_menu_shop)
+const SHOP_MARKUP = { inline_keyboard: [[{ text: '🛍 خرید', callback_data: 'ui_menu_shop' }]] };
+
+const confirmKb = (shop: boolean) => Markup.inlineKeyboard([
+  [
+    Markup.button.callback('✅ بله، ارسال کن', 'announce_confirm'),
+    Markup.button.callback('❌ خیر، انصراف', 'announce_abort'),
+  ],
+  [Markup.button.callback('⏰ زمان‌بندی ارسال', 'announce_schedule')],
+  [Markup.button.callback(shop ? '✅ دکمه‌ی «🛍 خرید» زیر پیام هست (برداشتن)' : '➕ دکمه‌ی «🛍 خرید» زیر پیام', 'announce_shop')],
+]);
+
 export const announceWizard = new WizardScene<StoreContext>(
   'announce-wizard',
 
@@ -175,13 +187,7 @@ export const announceWizard = new WizardScene<StoreContext>(
       text + '\n\nآیا از ارسال آن مطمئن هستید؟',
       {
         entities: entities || undefined,
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ بله، ارسال کن', 'announce_confirm'),
-            Markup.button.callback('❌ خیر، انصراف', 'announce_abort'),
-          ],
-          [Markup.button.callback('⏰ زمان‌بندی ارسال', 'announce_schedule')],
-        ]),
+        ...confirmKb(false),
       },
     );
 
@@ -210,17 +216,24 @@ export const announceWizard = new WizardScene<StoreContext>(
       return ctx.wizard.next();
     }
 
+    if (data === 'announce_shop') {
+      ctx.wizard.state.announce.shop = !ctx.wizard.state.announce.shop;
+      await ctx.answerCallbackQuery(ctx.wizard.state.announce.shop ? '🛍 دکمه‌ی خرید اضافه شد' : 'دکمه‌ی خرید برداشته شد');
+      await ctx.editMessageReplyMarkup(confirmKb(ctx.wizard.state.announce.shop)).catch(() => {});
+      return;
+    }
+
     if (data !== 'announce_confirm') {
       await ctx.answerCallbackQuery('⚠️ انتخاب نامعتبر.');
       return;
     }
 
-    const { text, entities, audience } = ctx.wizard.state.announce;
+    const { text, entities, audience, shop } = ctx.wizard.state.announce;
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(SENDING_TEXT).catch(() => {});
 
     await ctx.scene.leave();
-    await ctx.app.db.enqueueBroadcast({ adminChatId: ctx.chat!.id, text, entities, audience });
+    await ctx.app.db.enqueueBroadcast({ adminChatId: ctx.chat!.id, text, entities, audience, replyMarkup: shop ? SHOP_MARKUP : null });
     await processBroadcastBatch(ctx.app, { reserve: 8 });
   },
 
@@ -249,9 +262,9 @@ export const announceWizard = new WizardScene<StoreContext>(
       await ctx.reply('⚠️ حداکثر ۱۴ روز جلوتر.');
       return;
     }
-    const { text, entities, audience, label } = ctx.wizard.state.announce;
+    const { text, entities, audience, label, shop } = ctx.wizard.state.announce;
     await ctx.scene.leave();
-    await ctx.app.db.enqueueBroadcast({ adminChatId: ctx.chat!.id, text, entities, audience, sendAfter });
+    await ctx.app.db.enqueueBroadcast({ adminChatId: ctx.chat!.id, text, entities, audience, sendAfter, replyMarkup: shop ? SHOP_MARKUP : null });
     await ctx.reply('✅ اطلاعیه برای ' + formatJalaliDateTime(sendAfter) + ' زمان‌بندی شد (' + label + ').');
   },
 );
