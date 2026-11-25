@@ -91,6 +91,8 @@ export async function pollEitaa(app: MonshiApp, reserve = CRON_RESERVE): Promise
     for (const m of todo) {
       // +1: the cursor write after the loop; the rest of the cron (store jobs, broadcast) keeps its share
       if (app.apps.budget.remaining() < need + 1 + reserve) return void (await updateSession(app, s, { lastId: s.lastId }));
+      // Eitaa's own send time vs now: shows how much of a slow reply is Eitaa's delay and how much is ours
+      if (m._ === 'message' && !m.pFlags?.out && m.date) console.log('📥 [Eitaa] message seen ' + Math.round(app.apps.now().getTime() / 1000 - m.date) + 's after it was sent');
       // not delivered to anyone: keep it for the next minute
       if (!(await handleMessage(app, s.me.id, m, users, auto))) return void (await updateSession(app, s, { lastId: s.lastId }));
       s.lastId = m.id;
