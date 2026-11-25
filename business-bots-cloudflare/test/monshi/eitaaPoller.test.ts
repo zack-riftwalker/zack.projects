@@ -31,11 +31,10 @@ function fakeState() {
   return { storage, data, alarm: () => alarm } as any;
 }
 
-const PROBE = 'unknown:-1835453025'; // http_wait (MTProto schema; the fake only names API methods)
 const inMessages = (t: TestEnv) => one(t.monshiDb, "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ? AND direction = 'in'", -CUSTOMER).n;
 
 describe('Eitaa fast poller (Durable Object alarm)', () => {
-  it('polls on each alarm, chains the next one 5 s later, and runs the long-poll probe only once', async () => {
+  it('polls on each alarm, chains the next one 5 s later', async () => {
     const { t, e } = await setup();
     const st = fakeState();
     const p = new EitaaPoller(st, t.env, t.deps);
@@ -49,14 +48,12 @@ describe('Eitaa fast poller (Durable Object alarm)', () => {
 
     e.respond('updates.getDifference', { _: 'updates.differenceEmpty', date: 1, seq: 0 });
     await p.alarm();
-    expect(e.methods().filter((m) => m === PROBE)).toHaveLength(1);
     expect(e.methods().filter((m) => m === 'updates.getDifference')).toHaveLength(2);
   });
 
   it('FLOOD_WAIT → the next alarm waits that long and the cron still counts it alive', async () => {
     const { t, e } = await setup();
     const st = fakeState();
-    st.data.set('lp_probe_done', 1);
     e.respond('updates.getDifference', { _: 'rpc_error', error_code: 420, error_message: 'FLOOD_WAIT_120' });
     const before = Date.now();
     await new EitaaPoller(st, t.env, t.deps).alarm();

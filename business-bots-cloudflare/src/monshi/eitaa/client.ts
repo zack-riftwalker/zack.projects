@@ -8,7 +8,7 @@ import { updateSession, type EitaaSession } from './session';
 import { TLDeserialization, TLSerialization } from './tl/tl_utils.js';
 
 export const EITAA_BCID = 'eitaa';
-export const ENDPOINT = 'https://hasan.eitaa.ir/eitaa/';
+const ENDPOINT = 'https://hasan.eitaa.ir/eitaa/';
 const LAYER = 133;
 // public web-client identity (the same one EitaaBun uses)
 export const API_ID = 1025907;
@@ -36,8 +36,8 @@ export function newImei(): string {
 
 export const randomLong = (): string => String(Date.now()) + String(Math.floor(Math.random() * 1e6)).padStart(6, '0');
 
-export function encodeCall(cred: Credentials, method: string, params: Record<string, unknown>, mtproto = false): Uint8Array {
-  const inner = new TLSerialization({ mtproto });
+export function encodeCall(cred: Credentials, method: string, params: Record<string, unknown>): Uint8Array {
+  const inner = new TLSerialization({ mtproto: false });
   inner.storeMethod(method, params);
   const outer = new TLSerialization({ mtproto: false });
   outer.storeMethod('eitaaObject', { token: cred.token, imei: cred.imei, packed_data: inner.getBytes(true), layer: LAYER });
