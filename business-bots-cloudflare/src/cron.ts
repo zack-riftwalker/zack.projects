@@ -6,6 +6,7 @@ import { processBroadcastBatch } from './store/broadcast';
 import { notifyAll } from './monshi/handlers/common';
 import { buildDigest } from './monshi/services/digest';
 import { pollEitaa } from './monshi/eitaa/poll';
+import { fastPollerAlive } from './monshi/eitaa/poller';
 import { checkStalledOrders, sendCartReminders, sendReminders } from './store/scheduler';
 import { applyPriceSchedules } from './store/priceSchedule';
 import { sweepReferralRewards } from './store/referrals';
@@ -27,10 +28,12 @@ export async function runCron(env: Env, now: Date = new Date(), deps: Deps = {})
   const apps = createApps(env, deps);
   const t = tehranParts(now);
 
-  // Monshi on Eitaa: pull new private messages first (it shares this tick's budget)
+  // Monshi on Eitaa: the fast poller (every few seconds) does it; this tick polls only when that one is down
   if (apps.monshi) {
     const monshi = apps.monshi;
-    await guarded('eitaa-poll', () => pollEitaa(monshi));
+    await guarded('eitaa-poll', async () => {
+      if (!(await fastPollerAlive(env, apps))) await pollEitaa(monshi);
+    });
   }
 
   // Monshi: forget old «reply to a notification» links once a day (04:xx Tehran)

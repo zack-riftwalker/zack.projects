@@ -73,3 +73,4 @@ export function makeWorker(deps: Deps = {}): Worker {
 }
 
 export default makeWorker();
+export { EitaaPoller } from './monshi/eitaa/poller';

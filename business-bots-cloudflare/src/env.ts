@@ -8,6 +8,8 @@ export interface Env {
   MONSHI_NOTIFY_USER_IDS?: string;
   GEMINI_API_KEY?: string;
   WEBHOOK_SECRET?: string;
+  /** polls Eitaa every few seconds (EITAA_FAST_POLL); absent → the every-minute cron polls */
+  EITAA_POLLER?: DurableObjectNamespace;
 }
 
 export function parseIdList(raw: string | undefined): number[] {

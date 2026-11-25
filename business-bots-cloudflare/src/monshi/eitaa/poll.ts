@@ -45,7 +45,11 @@ async function alertOnce(app: MonshiApp, err: unknown): Promise<void> {
   if (sent.length) await app.ctx.setState('eitaa_alert_day', day); // nobody got it → try again next minute
 }
 
-export async function pollEitaa(app: MonshiApp): Promise<void> {
+/**
+ * One poll. `reserve` = subrequests kept for jobs after it in the same invocation (none in the fast poller).
+ * Returns the seconds Eitaa asked us to wait (FLOOD_WAIT), so the caller can back off.
+ */
+export async function pollEitaa(app: MonshiApp, reserve = CRON_RESERVE): Promise<number | void> {
   const s = await loadSession(app);
   if (!s) {
     // a stored session that can't be decrypted (WEBHOOK_SECRET changed) must not go quiet
@@ -86,7 +90,7 @@ export async function pollEitaa(app: MonshiApp): Promise<void> {
     : null;
     for (const m of todo) {
       // +1: the cursor write after the loop; the rest of the cron (store jobs, broadcast) keeps its share
-      if (app.apps.budget.remaining() < need + 1 + CRON_RESERVE) return void (await updateSession(app, s, { lastId: s.lastId }));
+      if (app.apps.budget.remaining() < need + 1 + reserve) return void (await updateSession(app, s, { lastId: s.lastId }));
       // not delivered to anyone: keep it for the next minute
       if (!(await handleMessage(app, s.me.id, m, users, auto))) return void (await updateSession(app, s, { lastId: s.lastId }));
       s.lastId = m.id;
@@ -94,8 +98,10 @@ export async function pollEitaa(app: MonshiApp): Promise<void> {
     await updateSession(app, s, { pts: next.pts, date: next.date, qts: next.qts, lastId: s.lastId });
   } catch (err) {
     console.error('❌ [Eitaa] poll failed:', err instanceof Error ? err.message : err);
-    if (err instanceof EitaaError) await alertOnce(app, err);
-    else throw err;
+    if (!(err instanceof EitaaError)) throw err;
+    await alertOnce(app, err);
+    const flood = /FLOOD_WAIT_(\d+)/.exec(err.message);
+    if (flood) return Number(flood[1]);
   }
 }
 

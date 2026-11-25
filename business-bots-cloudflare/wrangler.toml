@@ -25,3 +25,12 @@ binding = "MONSHI_DB"
 database_name = "monshi-bot-db"
 database_id = "00000000-0000-0000-0000-00000000bbbb"  # REPLACE with the id printed by: wrangler d1 create monshi-bot-db
 migrations_dir = "migrations/monshi"
+
+# Eitaa fast poller: a Durable Object whose alarm polls every 5 s (the cron above can't go below 1 minute)
+[[durable_objects.bindings]]
+name = "EITAA_POLLER"
+class_name = "EitaaPoller"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EitaaPoller"]
