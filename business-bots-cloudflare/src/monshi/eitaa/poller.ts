@@ -22,6 +22,7 @@ export class EitaaPoller {
     if ((await this.state.storage.getAlarm()) === null) {
       await this.state.storage.setAlarm(now);
       await this.state.storage.put(ALIVE_UNTIL, now + STALE_MS); // a fresh start counts as alive
+      console.log('⚡ [EitaaPoller] alarm chain started');
     }
     return Response.json({ aliveUntil: (await this.state.storage.get<number>(ALIVE_UNTIL)) ?? 0 });
   }
@@ -55,7 +56,9 @@ export async function fastPollerAlive(env: Env, apps: Apps): Promise<boolean> {
     const ns = env.EITAA_POLLER;
     const res = await ns.get(ns.idFromName('main')).fetch('https://eitaa-poller/');
     const { aliveUntil } = (await res.json()) as { aliveUntil: number };
-    return apps.now().getTime() < aliveUntil;
+    const alive = apps.now().getTime() < aliveUntil;
+    if (!alive) console.warn('⚠️ [EitaaPoller] quiet since ' + new Date(aliveUntil - STALE_MS).toISOString() + ', the cron polls');
+    return alive;
   } catch (err) {
     console.error('❌ [EitaaPoller] ping failed, the cron polls:', err instanceof Error ? err.message : err);
     return false;
