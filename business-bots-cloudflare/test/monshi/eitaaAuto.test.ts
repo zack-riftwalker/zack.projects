@@ -5,6 +5,7 @@ import { one, q } from '../helpers/seed';
 import { decodeCall, difference, fakeEitaa as eitaaFake, eMsg, eUser, peerUser, state } from '../helpers/fakeEitaa';
 
 import { CRON_RESERVE, pollEitaa } from '../../src/monshi/eitaa/poll';
+import { MAX_AUTO_REPLIES_PER_HOUR } from '../../src/monshi/eitaa/auto';
 
 const NOTIFY = 6001;
 const CUSTOMER = 555;
@@ -213,16 +214,18 @@ describe('Eitaa auto-reply: limits', () => {
     expect(sends(e)).toHaveLength(2);
   });
 
-  it('6 different keywords within an hour → 5 replies', async () => {
+  it('asking more than the hourly cap → the cap is the number of replies', async () => {
     const { t, e } = await setup();
     q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
-    for (const [a, b] of [['جمینای'], ['چت'], ['کلود'], ['قیمت'], ['منو'], ['خرید چت']].map((x, i) => [i + 1, x[0]] as [number, string])) {
-      incoming(e, [[a, b]]);
-      ack(e, 60 + a);
+    for (let i = 1; i <= MAX_AUTO_REPLIES_PER_HOUR + 1; i++) {
+      incoming(e, [[i, 'جمینای']]);
+      ack(e, 60 + i);
       await t.cron();
+      // past the 3-minute repeat window, so only the hourly cap can stop it
+      q(t.monshiDb, "UPDATE reply_log SET sent_at = ? WHERE reply_key = 'eitaa_p_1'", new Date(Date.now() - 10 * 60_000).toISOString());
     }
-    expect(sends(e)).toHaveLength(5);
-    expect(notifs(t)).toHaveLength(6);
+    expect(sends(e)).toHaveLength(MAX_AUTO_REPLIES_PER_HOUR);
+    expect(notifs(t)).toHaveLength(MAX_AUTO_REPLIES_PER_HOUR + 1);
   });
 });
 

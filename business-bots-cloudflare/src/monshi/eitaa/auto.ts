@@ -12,7 +12,7 @@ import {
 } from './menu';
 import { sendEitaaText } from './poll';
 
-export const MAX_AUTO_REPLIES_PER_HOUR = 5;
+export const MAX_AUTO_REPLIES_PER_HOUR = 10;
 const HOUR_MS = 3600 * 1000;
 
 /** What one poll needs to answer customers; null = the feature is off (switch, global automation, or no store). */
@@ -65,10 +65,10 @@ export async function autoReply(
       });
     }
     if (!plan.length) return reason;
-    // a keyword typed on purpose is answered again after a few minutes (not the 1 h FAQ cooldown); the 5/hour cap still holds
+    // a keyword typed on purpose is answered again after a few minutes (not the 1 h FAQ cooldown); the hourly cap still holds
     for (const item of plan) item.cooldownHours ??= ASKED_AGAIN_HOURS;
 
-    // at most 5 auto-replies per chat per rolling hour
+    // at most MAX_AUTO_REPLIES_PER_HOUR auto-replies per chat per rolling hour
     const since = utcIsoNow(new Date(app.apps.now().getTime() - HOUR_MS));
     let room = MAX_AUTO_REPLIES_PER_HOUR - (await app.db.countOutSince(msg.chatId, since));
     const sent: string[] = [];
