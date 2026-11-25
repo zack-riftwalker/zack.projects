@@ -200,6 +200,19 @@ describe('Eitaa auto-reply: limits', () => {
     expect(notifs(t)).toHaveLength(2);
   });
 
+  it('the same keyword asked again a few minutes later is answered again', async () => {
+    const { t, e } = await setup();
+    q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);
+    incoming(e, [[1, 'منو']]);
+    ack(e, 50);
+    await t.cron();
+    q(t.monshiDb, "UPDATE reply_log SET sent_at = ? WHERE reply_key = 'eitaa_menu'", new Date(Date.now() - 4 * 60_000).toISOString());
+    incoming(e, [[2, 'منو']]);
+    ack(e, 51);
+    await t.cron();
+    expect(sends(e)).toHaveLength(2);
+  });
+
   it('6 different keywords within an hour → 5 replies', async () => {
     const { t, e } = await setup();
     q(t.monshiDb, "INSERT INTO customers (chat_id, first_seen_at, last_message_at) VALUES (?, '2026-01-01', '2026-01-01')", -CUSTOMER); menuSentRecently(t);

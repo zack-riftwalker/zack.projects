@@ -26,6 +26,8 @@ export async function loadAutoState(app: MonshiApp): Promise<AutoState | null> {
   return { products, greeting: (await app.ctx.getSetting('eitaa_menu_greeting')) || DEFAULT_GREETING };
 }
 
+const ASKED_AGAIN_HOURS = 3 / 60;
+
 interface Planned { key: string; label: string; built: Built; cooldownHours?: number }
 
 const plain = (text: string): Built => ({ text, entities: [] as MessageEntity[] });
@@ -63,6 +65,8 @@ export async function autoReply(
       });
     }
     if (!plan.length) return reason;
+    // a keyword typed on purpose is answered again after a few minutes (not the 1 h FAQ cooldown); the 5/hour cap still holds
+    for (const item of plan) item.cooldownHours ??= ASKED_AGAIN_HOURS;
 
     // at most 5 auto-replies per chat per rolling hour
     const since = utcIsoNow(new Date(app.apps.now().getTime() - HOUR_MS));
