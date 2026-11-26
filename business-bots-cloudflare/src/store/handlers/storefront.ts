@@ -12,11 +12,11 @@ import {
   escapeMarkdown, escapeHtml, formatPrice, buildPagedKeyboard, formatJalaliDate, parseLocalDateTime,
 } from '../utils';
 import {
-  loadCatalogEntries, sortOptions, optionRowLabels, groupHeaderText, priceLines, priceStrikeEntity, type CatalogEntry,
+  loadCatalogEntries, sortOptions, optionRowLabels, groupHeaderText, priceLines, priceStrikeEntity, hasCompareAt, type CatalogEntry,
 } from '../catalog';
 import { customerContactRow, customerRefHtml, sendToAdmins } from '../customerRef';
 import {
-  validateDiscountCode, validateDiscountCodeForOrder, applyDiscount, discountErrorText,
+  validateDiscountCode, validateDiscountCodeForOrder, priceWithCode, discountErrorText,
 } from './discountCodes';
 import { formatCardNumber } from './storeSettings';
 import { buildReceiptCaption, deliverReceiptToAdmins } from '../services/receiptDelivery';
@@ -198,7 +198,7 @@ async function showAgreeScreen(ctx: StoreContext, product: CustomerProduct, fina
   head.add('📦 ').add(product.name, { bold: true }).add('\n');
   if (discountCodeId) {
     head.add('💰 قیمت با تخفیف: ').add(formatPrice(finalPrice) + ' تومان', { bold: true })
-      .add(' (قیمت اصلی: ' + formatPrice(product.price) + ' تومان)');
+      .add(' (قیمت اصلی: ' + formatPrice(hasCompareAt(product) ? product.compare_at_price! : product.price) + ' تومان)');
   } else {
     head.add('💰 قیمت: ' + formatPrice(finalPrice) + ' تومان');
   }
@@ -551,8 +551,13 @@ export function registerStorefrontHandler(bot: Bot<StoreContext>) {
     }
 
     ctx.session.awaitingDiscountCodeFor = null;
-    const finalPrice = applyDiscount(product.price, result.discountCode);
+    const finalPrice = priceWithCode(product, result.discountCode);
     await dropScreenKeyboard(ctx);
+    if (finalPrice >= product.price) {
+      // the sale already beats the code: go on without it, so the customer's one use is not spent
+      await showAgreeScreen(ctx, product, product.price, null, 'ℹ️ تخفیف جشنواره‌ی این محصول از کد شما بیشتر است؛ با قیمت جشنواره ادامه می‌دهیم و کدتان مصرف نمی‌شود.\n\n');
+      return;
+    }
     await showAgreeScreen(ctx, product, finalPrice, result.discountCode.id, '✅ کد تخفیف اعمال شد!\n\n');
   });
 

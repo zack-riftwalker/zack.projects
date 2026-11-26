@@ -9,6 +9,7 @@ import type { StoreContext } from '../types';
 import type { StoreApp } from '../../apps';
 import type { CustomerProduct, DiscountCode } from '../db';
 import { codeFloorViolation, floorMessage } from '../suppliers/floor';
+import { hasCompareAt } from '../catalog';
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -17,6 +18,11 @@ export function applyDiscount(price: number, discountCode: DiscountCode): number
     ? price * (discountCode.discount_value / 100)
     : discountCode.discount_value;
   return Math.max(0, Math.round(price - raw));
+}
+
+/** On a product already on sale the code counts from the normal price: the customer gets the better of the two, never both. */
+export function priceWithCode(p: Pick<CustomerProduct, 'price' | 'compare_at_price'>, discountCode: DiscountCode): number {
+  return hasCompareAt(p) ? Math.min(p.price, applyDiscount(p.compare_at_price!, discountCode)) : applyDiscount(p.price, discountCode);
 }
 
 export const DISCOUNT_ERROR_LABEL: Record<string, string> = {
@@ -78,10 +84,10 @@ async function validateDiscountCodeRecord(
   }
 
   // a code stacked on a (sale) price must never make the order free
-  if (atEntry && product && applyDiscount(product.price, discountCode) <= 0) return { ok: false, reason: 'too_big' };
+  if (atEntry && product && priceWithCode(product, discountCode) <= 0) return { ok: false, reason: 'too_big' };
 
   // never below the supplier cost (SUPPLIER_PLAN.md §5.4), checked last, at code entry only
-  if (atEntry && product && product.cost_toman != null && applyDiscount(product.price, discountCode) < product.cost_toman) {
+  if (atEntry && product && product.cost_toman != null && priceWithCode(product, discountCode) < product.cost_toman) {
     return { ok: false, reason: 'below_cost' };
   }
   return { ok: true, discountCode };

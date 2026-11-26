@@ -4,6 +4,7 @@ import { callbackUpdate, textUpdate } from '../helpers/updates';
 import { one, q, seedProduct } from '../helpers/seed';
 import { recomputeOption } from '../../src/store/suppliers/recompute';
 import type { Budget } from '../../src/lib/budget';
+import { formatPrice } from '../../src/lib/time';
 
 // regressions from the code review of the price-schedule feature
 const CUST = { id: 7001, first_name: 'C' };
@@ -237,5 +238,39 @@ describe('review M1/M3/M4/M6', () => {
     const m = t.tg.of('sendMessage', ADMIN.id).at(-1)!.payload;
     expect(m.text).toContain('خودکار');
     expect(m.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toContain('cprod_edit_menu');
+  });
+});
+
+describe('a code on a product already on sale: the better of the two, never both', () => {
+  const enter = async (t: TestEnv, code: string) => {
+    await t.send('store', textUpdate(CUST, '/start'));
+    await t.send('store', callbackUpdate(CUST, 'cust_prod_1'));
+    await t.send('store', callbackUpdate(CUST, 'cust_disc_enter_1'));
+    await t.send('store', textUpdate(CUST, code));
+    return t.tg.texts(CUST.id).at(-1)!;
+  };
+  const onSale = () => {
+    const t = makeTestEnv({ monshi: false });
+    seedProduct(t, { price: 750000 });
+    q(t.storeDb, 'UPDATE customer_products SET compare_at_price = 949000');
+    return t;
+  };
+
+  it('a 300k code counts from the normal price: 649,000, not 450,000', async () => {
+    const t = onSale();
+    q(t.storeDb, "INSERT INTO discount_codes (code, customer_product_id, discount_type, discount_value, expires_at) VALUES ('P300', 1, 'fixed', 300000, '2999-01-01 00:00:00')");
+    const msg = await enter(t, 'P300');
+    expect(msg).toContain('✅ کد تخفیف اعمال شد');
+    expect(msg).toContain('قیمت با تخفیف: ' + formatPrice(649000));
+    expect(msg).toContain('قیمت اصلی: ' + formatPrice(949000));
+  });
+
+  it('a code smaller than the sale: the sale price, and the code is not attached', async () => {
+    const t = onSale();
+    q(t.storeDb, "INSERT INTO discount_codes (code, customer_product_id, discount_type, discount_value, expires_at) VALUES ('P100', 1, 'fixed', 100000, '2999-01-01 00:00:00')");
+    const msg = await enter(t, 'P100');
+    expect(msg).toContain('تخفیف جشنواره‌ی این محصول از کد شما بیشتر است');
+    expect(msg).toContain('💰 قیمت: ' + formatPrice(750000));
+    expect(msg).not.toContain('قیمت با تخفیف');
   });
 });
